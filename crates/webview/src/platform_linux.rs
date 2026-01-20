@@ -2,20 +2,30 @@
 
 use crate::error::WebviewError;
 use pentimento_ipc::{KeyboardEvent, MouseEvent, UiToBevy};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use cairo::{Format, ImageSurface};
+use gio::prelude::*;
 use gtk::prelude::*;
+use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebView as WebKitWebView, WebViewExt};
 use wry::WebViewBuilderExtUnix;
 
 /// Linux webview implementation using GTK Fixed container
 pub struct LinuxWebview {
     webview: wry::WebView,
+    webkit_webview: WebKitWebView,
     #[allow(dead_code)]
     container: gtk::Fixed,
     size: (u32, u32),
     dirty: Arc<AtomicBool>,
+    /// Cached snapshot result from async capture
+    snapshot_cache: Rc<RefCell<Option<image::RgbaImage>>>,
+    /// Flag indicating snapshot is in progress
+    snapshot_pending: Rc<RefCell<bool>>,
 }
 
 impl LinuxWebview {
@@ -54,12 +64,40 @@ impl LinuxWebview {
             .build_gtk(&container)
             .map_err(|e| WebviewError::WebviewCreate(e.to_string()))?;
 
+        // Extract the WebKitWebView from the container for snapshot capture
+        // wry places the WebView as a child of the container
+        let webkit_webview = Self::find_webkit_webview(&container)
+            .ok_or_else(|| WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into()))?;
+
         Ok(Self {
             webview,
+            webkit_webview,
             container,
             size,
             dirty,
+            snapshot_cache: Rc::new(RefCell::new(None)),
+            snapshot_pending: Rc::new(RefCell::new(false)),
         })
+    }
+
+    /// Find the WebKitWebView widget within a GTK container
+    fn find_webkit_webview(container: &gtk::Fixed) -> Option<WebKitWebView> {
+        // Iterate through children to find the WebKitWebView
+        for child in container.children() {
+            // Try to downcast to WebKitWebView directly
+            if let Ok(wv) = child.clone().downcast::<WebKitWebView>() {
+                return Some(wv);
+            }
+            // Also check if it's wrapped in another container
+            if let Ok(bin) = child.downcast::<gtk::Bin>() {
+                if let Some(inner) = bin.child() {
+                    if let Ok(wv) = inner.downcast::<WebKitWebView>() {
+                        return Some(wv);
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn poll(&mut self) {
@@ -70,27 +108,128 @@ impl LinuxWebview {
     }
 
     pub fn capture(&self) -> Option<image::RgbaImage> {
-        // TODO: Implement webkit_web_view_get_snapshot via webkit2gtk bindings
-        // For now, return a placeholder
-        //
-        // The actual implementation would:
-        // 1. Call webkit_web_view_get_snapshot() async
-        // 2. Pump GTK events until complete
-        // 3. Convert Cairo surface to RGBA
-
-        tracing::warn!("Webview capture not yet implemented - returning placeholder");
-
-        // Create a semi-transparent placeholder image
-        let width = self.size.0;
-        let height = self.size.1;
-        let mut img = image::RgbaImage::new(width, height);
-
-        // Fill with semi-transparent dark background
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([30, 30, 30, 200]);
+        // Check if we have a cached snapshot ready
+        if let Some(img) = self.snapshot_cache.borrow_mut().take() {
+            return Some(img);
         }
 
-        Some(img)
+        // If a snapshot is already pending, don't start another one
+        if *self.snapshot_pending.borrow() {
+            return None;
+        }
+
+        // Start async snapshot capture
+        *self.snapshot_pending.borrow_mut() = true;
+
+        let cache = self.snapshot_cache.clone();
+        let pending = self.snapshot_pending.clone();
+        let size = self.size;
+
+        // Use webkit_web_view_snapshot with async callback
+        self.webkit_webview.snapshot(
+            SnapshotRegion::FullDocument,
+            SnapshotOptions::TRANSPARENT_BACKGROUND,
+            gio::Cancellable::NONE,
+            move |result| {
+                *pending.borrow_mut() = false;
+
+                match result {
+                    Ok(surface) => {
+                        match Self::cairo_surface_to_rgba(&surface, size) {
+                            Ok(img) => {
+                                *cache.borrow_mut() = Some(img);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to convert Cairo surface: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("WebKitGTK snapshot failed: {}", e);
+                    }
+                }
+            },
+        );
+
+        // Pump GTK events to allow the async operation to progress
+        // We do a limited number of iterations to avoid blocking indefinitely
+        for _ in 0..10 {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            } else {
+                break;
+            }
+        }
+
+        // Check if the snapshot completed during our event pumping
+        self.snapshot_cache.borrow_mut().take()
+    }
+
+    /// Convert a Cairo ImageSurface to an RGBA image
+    fn cairo_surface_to_rgba(
+        surface: &cairo::Surface,
+        target_size: (u32, u32),
+    ) -> Result<image::RgbaImage, String> {
+        // Create a new ImageSurface with ARGB32 format to render the snapshot
+        let width = target_size.0 as i32;
+        let height = target_size.1 as i32;
+
+        let mut img_surface = ImageSurface::create(Format::ARgb32, width, height)
+            .map_err(|e| format!("Failed to create image surface: {}", e))?;
+
+        // Create a context and draw the source surface
+        let ctx = cairo::Context::new(&img_surface)
+            .map_err(|e| format!("Failed to create context: {}", e))?;
+
+        // The webkit snapshot typically returns the surface at the correct size,
+        // so we just paint it directly. If scaling is needed, we can compute it
+        // from the extents.
+        ctx.set_source_surface(surface, 0.0, 0.0)
+            .map_err(|e| format!("Failed to set source surface: {}", e))?;
+
+        ctx.paint()
+            .map_err(|e| format!("Failed to paint: {}", e))?;
+
+        // Ensure all drawing is done
+        drop(ctx);
+        img_surface.flush();
+
+        // Get the raw pixel data
+        let data = img_surface
+            .data()
+            .map_err(|e| format!("Failed to get surface data: {}", e))?;
+
+        // Convert from Cairo's BGRA/ARGB format to RGBA
+        // Cairo uses pre-multiplied alpha in native byte order
+        let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+
+        for chunk in data.chunks_exact(4) {
+            // Cairo on Linux (little-endian) stores as BGRA
+            let b = chunk[0];
+            let g = chunk[1];
+            let r = chunk[2];
+            let a = chunk[3];
+
+            // Un-premultiply alpha if needed
+            let (r, g, b) = if a > 0 && a < 255 {
+                let alpha = a as f32 / 255.0;
+                (
+                    (r as f32 / alpha).min(255.0) as u8,
+                    (g as f32 / alpha).min(255.0) as u8,
+                    (b as f32 / alpha).min(255.0) as u8,
+                )
+            } else {
+                (r, g, b)
+            };
+
+            rgba_data.push(r);
+            rgba_data.push(g);
+            rgba_data.push(b);
+            rgba_data.push(a);
+        }
+
+        image::RgbaImage::from_raw(width as u32, height as u32, rgba_data)
+            .ok_or_else(|| "Failed to create image from raw data".to_string())
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

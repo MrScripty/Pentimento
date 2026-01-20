@@ -17,13 +17,22 @@ thiserror = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
-webkit2gtk = "2.0"
-cairo-rs = { version = "0.20", features = ["png"] }
-glib = "0.20"
-gio = "0.20"
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+cairo-rs = { version = "0.18", features = ["png", "use_glib"] }
+glib = "0.18"
+gio = "0.18"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi_Common",
 ] }
+
+[[example]]
+name = "capture_test"
+
+[dev-dependencies]
+image = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gtk = "0.18"
