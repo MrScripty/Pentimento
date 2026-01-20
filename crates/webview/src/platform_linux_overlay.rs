@@ -11,6 +11,7 @@ use std::rc::Rc;
 use tokio::sync::mpsc;
 
 use gdk::prelude::*;
+use gio::Cancellable;
 use gtk::prelude::*;
 use webkit2gtk::{LoadEvent, WebViewExt};
 use wry::WebViewBuilderExtUnix;
@@ -27,7 +28,9 @@ pub enum OverlayState {
 /// Linux overlay webview using transparent GTK window
 pub struct LinuxOverlayWebview {
     webview: wry::WebView,
+    webkit_webview: webkit2gtk::WebView,
     window: gtk::Window,
+    container: gtk::Fixed,
     size: (u32, u32),
     state: OverlayState,
     load_finished: Rc<RefCell<bool>>,
@@ -98,16 +101,21 @@ impl LinuxOverlayWebview {
             .build_gtk(&container)
             .map_err(|e| WebviewError::WebviewCreate(e.to_string()))?;
 
-        // Find the WebKitWebView to set up load detection
-        if let Some(webkit_webview) = Self::find_webkit_webview(&container) {
-            let load_finished_for_handler = load_finished_clone;
-            webkit_webview.connect_load_changed(move |_webview, load_event| {
-                if load_event == LoadEvent::Finished {
-                    *load_finished_for_handler.borrow_mut() = true;
-                    tracing::info!("Overlay WebView content loaded");
-                }
-            });
-        }
+        // Find the WebKitWebView to set up load detection and sizing
+        let webkit_webview = Self::find_webkit_webview(&container)
+            .ok_or_else(|| WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into()))?;
+
+        // Set the webkit_webview size to match the container
+        webkit_webview.set_size_request(size.0 as i32, size.1 as i32);
+
+        // Connect load detection handler
+        let load_finished_for_handler = load_finished_clone;
+        webkit_webview.connect_load_changed(move |_webview, load_event| {
+            if load_event == LoadEvent::Finished {
+                *load_finished_for_handler.borrow_mut() = true;
+                tracing::info!("Overlay WebView content loaded");
+            }
+        });
 
         // Position the overlay window based on parent handle
         Self::position_relative_to_parent(&window, parent_handle, size);
@@ -126,7 +134,9 @@ impl LinuxOverlayWebview {
 
         Ok(Self {
             webview,
+            webkit_webview,
             window,
+            container,
             size,
             state: OverlayState::Initializing,
             load_finished,
@@ -189,6 +199,20 @@ impl LinuxOverlayWebview {
 
         // Update state
         if self.state == OverlayState::Initializing && *self.load_finished.borrow() {
+            // Set viewport dimensions via JavaScript to ensure WebKit knows the size
+            let (width, height) = self.size;
+            self.webkit_webview.run_javascript(
+                &format!(
+                    "document.body.style.width = '{}px'; \
+                     document.body.style.height = '{}px'; \
+                     document.documentElement.style.width = '{}px'; \
+                     document.documentElement.style.height = '{}px';",
+                    width, height, width, height
+                ),
+                Cancellable::NONE,
+                |_| {},
+            );
+
             self.state = OverlayState::Ready;
             tracing::info!("Overlay webview ready");
         }
@@ -204,7 +228,32 @@ impl LinuxOverlayWebview {
         }
 
         self.size = (width, height);
+
+        // Resize all components: window, container, and webkit_webview
         self.window.resize(width as i32, height as i32);
+        self.container.set_size_request(width as i32, height as i32);
+        self.webkit_webview.set_size_request(width as i32, height as i32);
+
+        // Force WebKit to re-layout via JavaScript
+        self.webkit_webview.run_javascript(
+            &format!(
+                "window.dispatchEvent(new Event('resize')); \
+                 document.body.style.width = '{}px'; \
+                 document.body.style.height = '{}px'; \
+                 document.documentElement.style.width = '{}px'; \
+                 document.documentElement.style.height = '{}px';",
+                width, height, width, height
+            ),
+            Cancellable::NONE,
+            |_| {},
+        );
+
+        // Pump GTK events to help the resize propagate
+        for _ in 0..30 {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
 
         tracing::info!("Overlay webview resized to ({}, {})", width, height);
     }

@@ -37,11 +37,13 @@ impl Plugin for RenderPlugin {
             CompositeMode::Overlay => {
                 // New overlay mode setup
                 app.init_resource::<ui_overlay::OverlayStatus>()
-                    .init_resource::<ui_overlay::OverlayLastWindowSize>();
+                    .init_resource::<ui_overlay::OverlayLastWindowSize>()
+                    .init_resource::<ui_overlay::OverlayPosition>();
 
                 app.add_systems(Startup, ui_overlay::setup_ui_overlay)
                     .add_systems(Update, ui_overlay::update_overlay_webview)
-                    .add_systems(Update, ui_overlay::handle_overlay_resize);
+                    .add_systems(Update, ui_overlay::handle_overlay_resize)
+                    .add_systems(Update, ui_overlay::sync_overlay_position);
 
                 info!("Render plugin initialized with OVERLAY mode");
             }

@@ -4,7 +4,7 @@
 //! The desktop compositor handles blending, avoiding framebuffer capture overhead.
 
 use bevy::prelude::*;
-use bevy::window::RawHandleWrapper;
+use bevy::window::{RawHandleWrapper, WindowMoved};
 use pentimento_webview::OverlayWebview;
 
 use crate::embedded_ui::UiAssets;
@@ -25,6 +25,13 @@ pub struct OverlayStatus {
 pub struct OverlayLastWindowSize {
     pub width: u32,
     pub height: u32,
+}
+
+/// Track overlay window position for sync with Bevy window
+#[derive(Resource, Default)]
+pub struct OverlayPosition {
+    pub x: i32,
+    pub y: i32,
 }
 
 /// Initialize the overlay webview
@@ -76,6 +83,7 @@ pub fn setup_ui_overlay(world: &mut World) {
     // Initialize tracking resources
     world.insert_resource(OverlayStatus { initialized: false });
     world.insert_resource(OverlayLastWindowSize { width, height });
+    world.insert_resource(OverlayPosition::default());
 
     info!("UI overlay setup complete");
 }
@@ -145,4 +153,38 @@ pub fn handle_overlay_resize(
     last_size.height = height;
 
     overlay.webview.resize(width, height);
+}
+
+/// Sync overlay position when Bevy window moves
+pub fn sync_overlay_position(
+    mut moved_events: MessageReader<WindowMoved>,
+    overlay_res: Option<NonSendMut<OverlayWebviewResource>>,
+    mut position: ResMut<OverlayPosition>,
+    status: Res<OverlayStatus>,
+) {
+    // Don't process moves until overlay is ready
+    if !status.initialized {
+        // Still consume events to avoid backlog
+        moved_events.clear();
+        return;
+    }
+
+    let Some(mut overlay) = overlay_res else {
+        moved_events.clear();
+        return;
+    };
+
+    for event in moved_events.read() {
+        let new_x = event.position.x;
+        let new_y = event.position.y;
+
+        // Only update if position changed
+        if new_x != position.x || new_y != position.y {
+            position.x = new_x;
+            position.y = new_y;
+
+            overlay.webview.set_position(new_x, new_y);
+            info!("Overlay synced to position ({}, {})", new_x, new_y);
+        }
+    }
 }
