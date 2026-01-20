@@ -47,10 +47,14 @@ pub fn setup_ui_overlay(world: &mut World) {
         return;
     };
 
-    // Get window size
+    // Get window size - use PHYSICAL size for overlay since GTK operates in physical pixels
+    // The logical resolution may differ from physical size due to DPI scaling
     let (width, height) = {
         let window = world.get::<Window>(window_entity).unwrap();
-        (window.resolution.width() as u32, window.resolution.height() as u32)
+        (
+            window.resolution.physical_width(),
+            window.resolution.physical_height(),
+        )
     };
 
     info!("Setting up UI overlay system ({}x{})", width, height);
@@ -137,8 +141,9 @@ pub fn handle_overlay_resize(
         return;
     };
 
-    let width = window.resolution.width() as u32;
-    let height = window.resolution.height() as u32;
+    // Use PHYSICAL size for overlay since GTK operates in physical pixels
+    let width = window.resolution.physical_width();
+    let height = window.resolution.physical_height();
 
     if width == last_size.width && height == last_size.height {
         return;

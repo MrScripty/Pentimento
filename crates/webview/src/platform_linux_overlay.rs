@@ -87,11 +87,17 @@ impl LinuxOverlayWebview {
         // Set up load detection
         let load_finished = Rc::new(RefCell::new(false));
 
-        // Create the webview
+        // Create the webview with explicit bounds
+        // On Linux with gtk::Fixed, we must set bounds or the webview defaults to 200x200
+        // Use PhysicalSize since we receive physical pixels from Bevy
         let load_finished_clone = load_finished.clone();
         let webview = wry::WebViewBuilder::new()
             .with_html(html_content)
             .with_transparent(true)
+            .with_bounds(wry::Rect {
+                position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                size: wry::dpi::PhysicalSize::new(size.0, size.1).into(),
+            })
             .with_ipc_handler(move |msg: wry::http::Request<String>| {
                 let body = msg.body();
                 if let Ok(ui_msg) = serde_json::from_str::<UiToBevy>(body) {
@@ -229,10 +235,17 @@ impl LinuxOverlayWebview {
 
         self.size = (width, height);
 
-        // Resize all components: window, container, and webkit_webview
+        // Resize all components: window, container, webkit_webview, and wry webview bounds
         self.window.resize(width as i32, height as i32);
         self.container.set_size_request(width as i32, height as i32);
         self.webkit_webview.set_size_request(width as i32, height as i32);
+
+        // Update wry webview bounds (critical for Linux with gtk::Fixed)
+        // Use PhysicalSize since we receive physical pixels from Bevy
+        self.webview.set_bounds(wry::Rect {
+            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+            size: wry::dpi::PhysicalSize::new(width, height).into(),
+        }).ok();
 
         // Force WebKit to re-layout via JavaScript
         self.webkit_webview.run_javascript(
