@@ -24,6 +24,7 @@ tracing = "0.1"
 
 # Webview
 wry = "0.53"
+raw-window-handle = "0.6"
 
 # Image handling
 image = "0.25"

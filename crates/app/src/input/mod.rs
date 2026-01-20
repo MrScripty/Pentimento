@@ -1,0 +1,430 @@
+//! Input handling - forwards Bevy input events to the webview
+//!
+//! Supports both capture and overlay compositing modes.
+
+use bevy::input::keyboard::KeyboardInput;
+use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
+use bevy::prelude::*;
+use bevy::window::CursorMoved;
+use pentimento_ipc::{KeyboardEvent, Modifiers, MouseButton as IpcMouseButton, MouseEvent};
+use std::time::{Duration, Instant};
+
+use crate::config::{CompositeMode, PentimentoConfig};
+use crate::render::{OverlayWebviewResource, WebviewResource};
+
+/// WebKit render size (must match platform_linux.rs cairo_surface_to_rgba)
+const WEBVIEW_WIDTH: f32 = 1920.0;
+const WEBVIEW_HEIGHT: f32 = 1080.0;
+
+/// Minimum interval between mouse move events sent to webview (throttling)
+const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps max
+
+pub struct InputPlugin;
+
+impl Plugin for InputPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<MouseState>()
+            // Run in PreUpdate to get the freshest input state before other systems
+            .add_systems(PreUpdate, track_mouse_position)
+            .add_systems(
+                PreUpdate,
+                (forward_mouse_buttons, forward_mouse_scroll, forward_keyboard)
+                    .after(track_mouse_position),
+            );
+
+        info!("Input plugin initialized");
+    }
+}
+
+/// Track mouse position in both window and scaled webview coordinates
+#[derive(Resource)]
+pub struct MouseState {
+    /// Position in window coordinates
+    pub window_x: f32,
+    pub window_y: f32,
+    /// Position scaled to webview coordinates (1920x1080)
+    pub webview_x: f32,
+    pub webview_y: f32,
+    /// Last time we sent a mouse move event (for throttling)
+    pub last_move_sent: Instant,
+}
+
+impl Default for MouseState {
+    fn default() -> Self {
+        Self {
+            window_x: 0.0,
+            window_y: 0.0,
+            webview_x: 0.0,
+            webview_y: 0.0,
+            last_move_sent: Instant::now(),
+        }
+    }
+}
+
+/// Scale window coordinates to webview coordinates
+fn scale_to_webview(window_x: f32, window_y: f32, window_width: f32, window_height: f32) -> (f32, f32) {
+    let scale_x = WEBVIEW_WIDTH / window_width;
+    let scale_y = WEBVIEW_HEIGHT / window_height;
+    (window_x * scale_x, window_y * scale_y)
+}
+
+/// Track mouse cursor position and forward mouse move events (throttled)
+/// This system MUST run before forward_mouse_buttons and forward_mouse_scroll
+fn track_mouse_position(
+    mut mouse_state: ResMut<MouseState>,
+    mut motion_events: MessageReader<MouseMotion>,
+    mut cursor_events: MessageReader<CursorMoved>,
+    config: Res<PentimentoConfig>,
+    capture_webview: Option<NonSendMut<WebviewResource>>,
+    overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+    windows: Query<&Window>,
+) {
+    // Always clear motion events - we use cursor position instead
+    motion_events.clear();
+
+    let Ok(window) = windows.single() else {
+        cursor_events.clear();
+        return;
+    };
+
+    let window_width = window.resolution.width();
+    let window_height = window.resolution.height();
+
+    // Process CursorMoved events - these contain the actual cursor position
+    // Use the LAST event position as that's the most recent
+    let mut had_cursor_event = false;
+    for event in cursor_events.read() {
+        let (webview_x, webview_y) =
+            scale_to_webview(event.position.x, event.position.y, window_width, window_height);
+        mouse_state.window_x = event.position.x;
+        mouse_state.window_y = event.position.y;
+        mouse_state.webview_x = webview_x;
+        mouse_state.webview_y = webview_y;
+        had_cursor_event = true;
+    }
+
+    // Only send mouse move to webview if there was cursor movement AND throttle allows
+    if !had_cursor_event {
+        return;
+    }
+
+    let now = Instant::now();
+    if now.duration_since(mouse_state.last_move_sent) < MOUSE_MOVE_THROTTLE {
+        return;
+    }
+
+    let mouse_event = MouseEvent::Move {
+        x: mouse_state.webview_x,
+        y: mouse_state.webview_y,
+    };
+
+    // Forward to appropriate webview based on mode
+    match config.composite_mode {
+        CompositeMode::Capture => {
+            if let Some(mut webview) = capture_webview {
+                webview.webview.send_mouse_event(mouse_event);
+                mouse_state.last_move_sent = now;
+            }
+        }
+        CompositeMode::Overlay => {
+            // In overlay mode, the GTK window receives native mouse events
+            // We still forward for consistency, but the overlay handles its own input
+            if let Some(mut webview) = overlay_webview {
+                webview.webview.send_mouse_event(mouse_event);
+                mouse_state.last_move_sent = now;
+            }
+        }
+    }
+}
+
+/// Forward mouse button events to the webview
+/// Runs after track_mouse_position so MouseState is up-to-date
+fn forward_mouse_buttons(
+    mut button_events: MessageReader<MouseButtonInput>,
+    mouse_state: Res<MouseState>,
+    config: Res<PentimentoConfig>,
+    capture_webview: Option<NonSendMut<WebviewResource>>,
+    overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+) {
+    // Use the tracked position (updated by track_mouse_position which runs first)
+    let click_x = mouse_state.webview_x;
+    let click_y = mouse_state.webview_y;
+
+    // Collect events first to avoid borrow issues
+    let events: Vec<_> = button_events.read().cloned().collect();
+    if events.is_empty() {
+        return;
+    }
+
+    // Process events based on mode
+    match config.composite_mode {
+        CompositeMode::Capture => {
+            let Some(mut webview) = capture_webview else { return };
+            for event in events {
+                let button = match event.button {
+                    bevy::input::mouse::MouseButton::Left => IpcMouseButton::Left,
+                    bevy::input::mouse::MouseButton::Right => IpcMouseButton::Right,
+                    bevy::input::mouse::MouseButton::Middle => IpcMouseButton::Middle,
+                    _ => continue,
+                };
+
+                if event.state.is_pressed() {
+                    info!(
+                        "Click at webview ({:.1}, {:.1}) window ({:.1}, {:.1})",
+                        click_x, click_y, mouse_state.window_x, mouse_state.window_y
+                    );
+                }
+
+                let mouse_event = if event.state.is_pressed() {
+                    MouseEvent::ButtonDown { button, x: click_x, y: click_y }
+                } else {
+                    MouseEvent::ButtonUp { button, x: click_x, y: click_y }
+                };
+                webview.webview.send_mouse_event(mouse_event);
+            }
+        }
+        CompositeMode::Overlay => {
+            let Some(mut webview) = overlay_webview else { return };
+            for event in events {
+                let button = match event.button {
+                    bevy::input::mouse::MouseButton::Left => IpcMouseButton::Left,
+                    bevy::input::mouse::MouseButton::Right => IpcMouseButton::Right,
+                    bevy::input::mouse::MouseButton::Middle => IpcMouseButton::Middle,
+                    _ => continue,
+                };
+
+                if event.state.is_pressed() {
+                    info!(
+                        "Click at webview ({:.1}, {:.1}) window ({:.1}, {:.1})",
+                        click_x, click_y, mouse_state.window_x, mouse_state.window_y
+                    );
+                }
+
+                let mouse_event = if event.state.is_pressed() {
+                    MouseEvent::ButtonDown { button, x: click_x, y: click_y }
+                } else {
+                    MouseEvent::ButtonUp { button, x: click_x, y: click_y }
+                };
+                webview.webview.send_mouse_event(mouse_event);
+            }
+        }
+    }
+}
+
+/// Forward mouse scroll events to the webview
+/// Runs after track_mouse_position so MouseState is up-to-date
+fn forward_mouse_scroll(
+    mut scroll_events: MessageReader<MouseWheel>,
+    mouse_state: Res<MouseState>,
+    config: Res<PentimentoConfig>,
+    capture_webview: Option<NonSendMut<WebviewResource>>,
+    overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+) {
+    // Use the tracked position (updated by track_mouse_position which runs first)
+    let scroll_x = mouse_state.webview_x;
+    let scroll_y = mouse_state.webview_y;
+
+    let events: Vec<_> = scroll_events.read().cloned().collect();
+    if events.is_empty() {
+        return;
+    }
+
+    match config.composite_mode {
+        CompositeMode::Capture => {
+            let Some(mut webview) = capture_webview else { return };
+            for event in events {
+                let (delta_x, delta_y) = match event.unit {
+                    bevy::input::mouse::MouseScrollUnit::Line => (event.x * 40.0, event.y * 40.0),
+                    bevy::input::mouse::MouseScrollUnit::Pixel => (event.x, event.y),
+                };
+                webview.webview.send_mouse_event(MouseEvent::Scroll {
+                    delta_x,
+                    delta_y: -delta_y,
+                    x: scroll_x,
+                    y: scroll_y,
+                });
+            }
+        }
+        CompositeMode::Overlay => {
+            let Some(mut webview) = overlay_webview else { return };
+            for event in events {
+                let (delta_x, delta_y) = match event.unit {
+                    bevy::input::mouse::MouseScrollUnit::Line => (event.x * 40.0, event.y * 40.0),
+                    bevy::input::mouse::MouseScrollUnit::Pixel => (event.x, event.y),
+                };
+                webview.webview.send_mouse_event(MouseEvent::Scroll {
+                    delta_x,
+                    delta_y: -delta_y,
+                    x: scroll_x,
+                    y: scroll_y,
+                });
+            }
+        }
+    }
+}
+
+/// Forward keyboard events to the webview
+fn forward_keyboard(
+    mut key_events: MessageReader<KeyboardInput>,
+    key_input: Res<ButtonInput<KeyCode>>,
+    config: Res<PentimentoConfig>,
+    capture_webview: Option<NonSendMut<WebviewResource>>,
+    overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+) {
+    // Build current modifier state
+    let modifiers = Modifiers {
+        shift: key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight),
+        ctrl: key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight),
+        alt: key_input.pressed(KeyCode::AltLeft) || key_input.pressed(KeyCode::AltRight),
+        meta: key_input.pressed(KeyCode::SuperLeft) || key_input.pressed(KeyCode::SuperRight),
+    };
+
+    let events: Vec<_> = key_events.read().cloned().collect();
+    if events.is_empty() {
+        return;
+    }
+
+    match config.composite_mode {
+        CompositeMode::Capture => {
+            let Some(mut webview) = capture_webview else { return };
+            for event in events {
+                let key = bevy_keycode_to_web_key(event.key_code);
+                webview.webview.send_keyboard_event(KeyboardEvent {
+                    key,
+                    pressed: event.state.is_pressed(),
+                    modifiers: modifiers.clone(),
+                });
+            }
+        }
+        CompositeMode::Overlay => {
+            let Some(mut webview) = overlay_webview else { return };
+            for event in events {
+                let key = bevy_keycode_to_web_key(event.key_code);
+                webview.webview.send_keyboard_event(KeyboardEvent {
+                    key,
+                    pressed: event.state.is_pressed(),
+                    modifiers: modifiers.clone(),
+                });
+            }
+        }
+    }
+}
+
+/// Convert Bevy KeyCode to web key string
+/// See: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
+fn bevy_keycode_to_web_key(key_code: KeyCode) -> String {
+    match key_code {
+        // Alphabet
+        KeyCode::KeyA => "a".to_string(),
+        KeyCode::KeyB => "b".to_string(),
+        KeyCode::KeyC => "c".to_string(),
+        KeyCode::KeyD => "d".to_string(),
+        KeyCode::KeyE => "e".to_string(),
+        KeyCode::KeyF => "f".to_string(),
+        KeyCode::KeyG => "g".to_string(),
+        KeyCode::KeyH => "h".to_string(),
+        KeyCode::KeyI => "i".to_string(),
+        KeyCode::KeyJ => "j".to_string(),
+        KeyCode::KeyK => "k".to_string(),
+        KeyCode::KeyL => "l".to_string(),
+        KeyCode::KeyM => "m".to_string(),
+        KeyCode::KeyN => "n".to_string(),
+        KeyCode::KeyO => "o".to_string(),
+        KeyCode::KeyP => "p".to_string(),
+        KeyCode::KeyQ => "q".to_string(),
+        KeyCode::KeyR => "r".to_string(),
+        KeyCode::KeyS => "s".to_string(),
+        KeyCode::KeyT => "t".to_string(),
+        KeyCode::KeyU => "u".to_string(),
+        KeyCode::KeyV => "v".to_string(),
+        KeyCode::KeyW => "w".to_string(),
+        KeyCode::KeyX => "x".to_string(),
+        KeyCode::KeyY => "y".to_string(),
+        KeyCode::KeyZ => "z".to_string(),
+
+        // Numbers
+        KeyCode::Digit0 => "0".to_string(),
+        KeyCode::Digit1 => "1".to_string(),
+        KeyCode::Digit2 => "2".to_string(),
+        KeyCode::Digit3 => "3".to_string(),
+        KeyCode::Digit4 => "4".to_string(),
+        KeyCode::Digit5 => "5".to_string(),
+        KeyCode::Digit6 => "6".to_string(),
+        KeyCode::Digit7 => "7".to_string(),
+        KeyCode::Digit8 => "8".to_string(),
+        KeyCode::Digit9 => "9".to_string(),
+
+        // Function keys
+        KeyCode::F1 => "F1".to_string(),
+        KeyCode::F2 => "F2".to_string(),
+        KeyCode::F3 => "F3".to_string(),
+        KeyCode::F4 => "F4".to_string(),
+        KeyCode::F5 => "F5".to_string(),
+        KeyCode::F6 => "F6".to_string(),
+        KeyCode::F7 => "F7".to_string(),
+        KeyCode::F8 => "F8".to_string(),
+        KeyCode::F9 => "F9".to_string(),
+        KeyCode::F10 => "F10".to_string(),
+        KeyCode::F11 => "F11".to_string(),
+        KeyCode::F12 => "F12".to_string(),
+
+        // Special keys
+        KeyCode::Space => " ".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Escape => "Escape".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::Delete => "Delete".to_string(),
+        KeyCode::Insert => "Insert".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PageUp".to_string(),
+        KeyCode::PageDown => "PageDown".to_string(),
+
+        // Arrow keys
+        KeyCode::ArrowUp => "ArrowUp".to_string(),
+        KeyCode::ArrowDown => "ArrowDown".to_string(),
+        KeyCode::ArrowLeft => "ArrowLeft".to_string(),
+        KeyCode::ArrowRight => "ArrowRight".to_string(),
+
+        // Modifier keys
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => "Shift".to_string(),
+        KeyCode::ControlLeft | KeyCode::ControlRight => "Control".to_string(),
+        KeyCode::AltLeft | KeyCode::AltRight => "Alt".to_string(),
+        KeyCode::SuperLeft | KeyCode::SuperRight => "Meta".to_string(),
+
+        // Punctuation and symbols
+        KeyCode::Comma => ",".to_string(),
+        KeyCode::Period => ".".to_string(),
+        KeyCode::Slash => "/".to_string(),
+        KeyCode::Backslash => "\\".to_string(),
+        KeyCode::Semicolon => ";".to_string(),
+        KeyCode::Quote => "'".to_string(),
+        KeyCode::BracketLeft => "[".to_string(),
+        KeyCode::BracketRight => "]".to_string(),
+        KeyCode::Minus => "-".to_string(),
+        KeyCode::Equal => "=".to_string(),
+        KeyCode::Backquote => "`".to_string(),
+
+        // Numpad
+        KeyCode::Numpad0 => "0".to_string(),
+        KeyCode::Numpad1 => "1".to_string(),
+        KeyCode::Numpad2 => "2".to_string(),
+        KeyCode::Numpad3 => "3".to_string(),
+        KeyCode::Numpad4 => "4".to_string(),
+        KeyCode::Numpad5 => "5".to_string(),
+        KeyCode::Numpad6 => "6".to_string(),
+        KeyCode::Numpad7 => "7".to_string(),
+        KeyCode::Numpad8 => "8".to_string(),
+        KeyCode::Numpad9 => "9".to_string(),
+        KeyCode::NumpadAdd => "+".to_string(),
+        KeyCode::NumpadSubtract => "-".to_string(),
+        KeyCode::NumpadMultiply => "*".to_string(),
+        KeyCode::NumpadDivide => "/".to_string(),
+        KeyCode::NumpadDecimal => ".".to_string(),
+        KeyCode::NumpadEnter => "Enter".to_string(),
+
+        // Default for unmapped keys
+        _ => format!("{:?}", key_code),
+    }
+}

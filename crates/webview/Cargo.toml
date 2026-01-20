@@ -14,9 +14,11 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }
+raw-window-handle = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+gdk = "0.18"
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
 cairo-rs = { version = "0.18", features = ["png", "use_glib"] }
 glib = "0.18"

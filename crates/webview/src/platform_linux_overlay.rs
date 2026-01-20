@@ -1,0 +1,330 @@
+//! Linux overlay webview implementation using transparent GTK window
+//!
+//! This implementation creates a transparent GTK window that overlays the Bevy window.
+//! The desktop compositor handles the actual blending, avoiding the need for framebuffer capture.
+
+use crate::error::WebviewError;
+use pentimento_ipc::{KeyboardEvent, MouseButton, MouseEvent, UiToBevy};
+use raw_window_handle::RawWindowHandle;
+use std::cell::RefCell;
+use std::rc::Rc;
+use tokio::sync::mpsc;
+
+use gdk::prelude::*;
+use gtk::prelude::*;
+use webkit2gtk::{LoadEvent, WebViewExt};
+use wry::WebViewBuilderExtUnix;
+
+/// Overlay webview state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayState {
+    /// Waiting for content to load
+    Initializing,
+    /// Content loaded, ready for use
+    Ready,
+}
+
+/// Linux overlay webview using transparent GTK window
+pub struct LinuxOverlayWebview {
+    webview: wry::WebView,
+    window: gtk::Window,
+    size: (u32, u32),
+    state: OverlayState,
+    load_finished: Rc<RefCell<bool>>,
+}
+
+impl LinuxOverlayWebview {
+    pub fn new(
+        parent_handle: RawWindowHandle,
+        html_content: &str,
+        size: (u32, u32),
+        from_ui_tx: mpsc::UnboundedSender<UiToBevy>,
+    ) -> Result<Self, WebviewError> {
+        // Initialize GTK if not already done
+        if !gtk::is_initialized() {
+            gtk::init().map_err(|e| WebviewError::GtkInit(e.to_string()))?;
+        }
+
+        // Create a transparent popup window
+        // Using Popup type to avoid window decorations
+        let window = gtk::Window::new(gtk::WindowType::Popup);
+        window.set_decorated(false);
+        window.set_app_paintable(true);
+        window.set_default_size(size.0 as i32, size.1 as i32);
+
+        // Enable RGBA visual for transparency
+        if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
+            if let Some(visual) = screen.rgba_visual() {
+                window.set_visual(Some(&visual));
+                tracing::info!("RGBA visual enabled for transparent overlay");
+            } else {
+                tracing::warn!("No RGBA visual available - transparency may not work");
+            }
+        }
+
+        // Set up transparent background via CSS
+        let css_provider = gtk::CssProvider::new();
+        css_provider
+            .load_from_data(b"window { background-color: transparent; }")
+            .map_err(|e| WebviewError::WindowCreate(format!("CSS load failed: {}", e)))?;
+
+        if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
+            gtk::StyleContext::add_provider_for_screen(
+                &screen,
+                &css_provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+
+        // Create a Fixed container for the webview
+        let container = gtk::Fixed::new();
+        container.set_size_request(size.0 as i32, size.1 as i32);
+        window.add(&container);
+
+        // Set up load detection
+        let load_finished = Rc::new(RefCell::new(false));
+
+        // Create the webview
+        let load_finished_clone = load_finished.clone();
+        let webview = wry::WebViewBuilder::new()
+            .with_html(html_content)
+            .with_transparent(true)
+            .with_ipc_handler(move |msg: wry::http::Request<String>| {
+                let body = msg.body();
+                if let Ok(ui_msg) = serde_json::from_str::<UiToBevy>(body) {
+                    let _ = from_ui_tx.send(ui_msg);
+                }
+            })
+            .build_gtk(&container)
+            .map_err(|e| WebviewError::WebviewCreate(e.to_string()))?;
+
+        // Find the WebKitWebView to set up load detection
+        if let Some(webkit_webview) = Self::find_webkit_webview(&container) {
+            let load_finished_for_handler = load_finished_clone;
+            webkit_webview.connect_load_changed(move |_webview, load_event| {
+                if load_event == LoadEvent::Finished {
+                    *load_finished_for_handler.borrow_mut() = true;
+                    tracing::info!("Overlay WebView content loaded");
+                }
+            });
+        }
+
+        // Position the overlay window based on parent handle
+        Self::position_relative_to_parent(&window, parent_handle, size);
+
+        // Show the window
+        window.show_all();
+
+        // Process GTK events to initialize
+        for _ in 0..50 {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
+
+        tracing::info!("Linux overlay webview created at size {:?}", size);
+
+        Ok(Self {
+            webview,
+            window,
+            size,
+            state: OverlayState::Initializing,
+            load_finished,
+        })
+    }
+
+    /// Position the overlay window relative to the parent window
+    fn position_relative_to_parent(
+        window: &gtk::Window,
+        parent_handle: RawWindowHandle,
+        _size: (u32, u32),
+    ) {
+        // Try to get parent window position based on handle type
+        match parent_handle {
+            RawWindowHandle::Xlib(handle) => {
+                // For X11, we can query the window position
+                // For now, position at (0, 0) - will be updated by set_position
+                tracing::info!("X11 parent window: {:?}", handle.window);
+                window.move_(0, 0);
+            }
+            RawWindowHandle::Xcb(handle) => {
+                tracing::info!("XCB parent window: {:?}", handle.window);
+                window.move_(0, 0);
+            }
+            RawWindowHandle::Wayland(_handle) => {
+                // Wayland positioning is more complex due to security model
+                // The compositor controls window positioning
+                tracing::info!("Wayland parent window - positioning controlled by compositor");
+            }
+            _ => {
+                tracing::warn!("Unknown window handle type for parent positioning");
+            }
+        }
+    }
+
+    /// Find the WebKitWebView widget within a GTK container
+    fn find_webkit_webview(container: &gtk::Fixed) -> Option<webkit2gtk::WebView> {
+        for child in container.children() {
+            if let Ok(wv) = child.clone().downcast::<webkit2gtk::WebView>() {
+                return Some(wv);
+            }
+            if let Ok(bin) = child.downcast::<gtk::Bin>() {
+                if let Some(inner) = bin.child() {
+                    if let Ok(wv) = inner.downcast::<webkit2gtk::WebView>() {
+                        return Some(wv);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn poll(&mut self) {
+        // Pump GTK events
+        for _ in 0..10 {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
+
+        // Update state
+        if self.state == OverlayState::Initializing && *self.load_finished.borrow() {
+            self.state = OverlayState::Ready;
+            tracing::info!("Overlay webview ready");
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.state == OverlayState::Ready
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if self.size == (width, height) {
+            return;
+        }
+
+        self.size = (width, height);
+        self.window.resize(width as i32, height as i32);
+
+        tracing::info!("Overlay webview resized to ({}, {})", width, height);
+    }
+
+    pub fn set_position(&mut self, x: i32, y: i32) {
+        self.window.move_(x, y);
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        if visible {
+            self.window.show();
+        } else {
+            self.window.hide();
+        }
+    }
+
+    pub fn inject_mouse(&mut self, event: MouseEvent) {
+        // For overlay mode, the GTK window receives native events
+        // We still support injection for programmatic control
+        let js = match event {
+            MouseEvent::Move { x, y } => {
+                format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new MouseEvent('mousemove', {{
+                            bubbles: true, cancelable: true,
+                            clientX: {x}, clientY: {y}, view: window
+                        }}));
+                    }})()"#,
+                    x = x, y = y
+                )
+            }
+            MouseEvent::ButtonDown { button, x, y } => {
+                let button_num = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Middle => 1,
+                    MouseButton::Right => 2,
+                };
+                format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new MouseEvent('mousedown', {{
+                            bubbles: true, cancelable: true,
+                            clientX: {x}, clientY: {y}, button: {button}, view: window
+                        }}));
+                    }})()"#,
+                    x = x, y = y, button = button_num
+                )
+            }
+            MouseEvent::ButtonUp { button, x, y } => {
+                let button_num = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Middle => 1,
+                    MouseButton::Right => 2,
+                };
+                format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new MouseEvent('mouseup', {{
+                            bubbles: true, cancelable: true,
+                            clientX: {x}, clientY: {y}, button: {button}, view: window
+                        }}));
+                        if ({button} === 0) {{
+                            target.dispatchEvent(new MouseEvent('click', {{
+                                bubbles: true, cancelable: true,
+                                clientX: {x}, clientY: {y}, button: 0, view: window
+                            }}));
+                        }}
+                    }})()"#,
+                    x = x, y = y, button = button_num
+                )
+            }
+            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
+                format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new WheelEvent('wheel', {{
+                            bubbles: true, cancelable: true,
+                            clientX: {x}, clientY: {y},
+                            deltaX: {delta_x}, deltaY: {delta_y}, deltaMode: 0,
+                            view: window
+                        }}));
+                    }})()"#,
+                    x = x, y = y, delta_x = delta_x, delta_y = delta_y
+                )
+            }
+        };
+
+        let _ = self.webview.evaluate_script(&js);
+    }
+
+    pub fn inject_keyboard(&mut self, event: KeyboardEvent) {
+        let event_type = if event.pressed { "keydown" } else { "keyup" };
+        let key_escaped = event.key.replace('\\', "\\\\").replace('\'', "\\'");
+
+        let js = format!(
+            r#"(function() {{
+                const target = document.activeElement || document.body;
+                target.dispatchEvent(new KeyboardEvent('{event_type}', {{
+                    bubbles: true, cancelable: true,
+                    key: '{key}',
+                    shiftKey: {shift}, ctrlKey: {ctrl},
+                    altKey: {alt}, metaKey: {meta},
+                    view: window
+                }}));
+            }})()"#,
+            event_type = event_type,
+            key = key_escaped,
+            shift = event.modifiers.shift,
+            ctrl = event.modifiers.ctrl,
+            alt = event.modifiers.alt,
+            meta = event.modifiers.meta
+        );
+
+        let _ = self.webview.evaluate_script(&js);
+    }
+
+    pub fn eval(&self, js: &str) -> Result<(), WebviewError> {
+        self.webview
+            .evaluate_script(js)
+            .map_err(|e| WebviewError::EvalScript(e.to_string()))
+    }
+}

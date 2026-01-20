@@ -11,6 +11,7 @@ cd "$SCRIPT_DIR"
 DEV_MODE=false
 BUILD_ONLY=false
 RELEASE=false
+COMPOSITE_MODE="capture"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -26,6 +27,14 @@ while [[ $# -gt 0 ]]; do
             RELEASE=true
             shift
             ;;
+        --capture)
+            COMPOSITE_MODE="capture"
+            shift
+            ;;
+        --overlay)
+            COMPOSITE_MODE="overlay"
+            shift
+            ;;
         --help|-h)
             echo "Pentimento Launcher"
             echo ""
@@ -35,7 +44,15 @@ while [[ $# -gt 0 ]]; do
             echo "  --dev       Run in development mode (uses Vite dev server for UI)"
             echo "  --build     Build only, don't run"
             echo "  --release   Build and run in release mode"
+            echo "  --capture   Use capture compositing mode (default)"
+            echo "  --overlay   Use overlay compositing mode (transparent window)"
             echo "  --help, -h  Show this help message"
+            echo ""
+            echo "Compositing modes:"
+            echo "  capture - Renders webview offscreen, captures to texture (default)"
+            echo "            Most compatible, works on all systems"
+            echo "  overlay - Uses transparent GTK window overlay"
+            echo "            Better performance, may have issues on some systems"
             exit 0
             ;;
         *)
@@ -76,7 +93,11 @@ if [ "$BUILD_ONLY" = true ]; then
 fi
 
 # Run the application
-echo "Launching Pentimento..."
+echo "Launching Pentimento ($COMPOSITE_MODE mode)..."
+
+# Set environment variables
+export PENTIMENTO_COMPOSITE="$COMPOSITE_MODE"
+
 if [ "$DEV_MODE" = true ]; then
     export PENTIMENTO_DEV=1
     echo "(Development mode - UI served from Vite dev server)"

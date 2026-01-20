@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 image = { workspace = true }
 bytemuck = { workspace = true }
+raw-window-handle = { workspace = true }
 
 # Embed UI assets
 rust-embed = { version = "8.7", features = ["debug-embed", "compression"] }
