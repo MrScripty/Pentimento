@@ -4,7 +4,11 @@ Cargo.lock
 
 # Node
 node_modules/
+package-lock.json
+
+# Build output
 dist/
+/ui/dist/
 
 # IDE
 .idea/
@@ -27,3 +31,9 @@ Thumbs.db
 
 # Svelte
 .svelte-kit/
+
+# Claude Code
+.claude/
+
+# Test outputs
+/tmp/
