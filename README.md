@@ -54,6 +54,42 @@ just build
 just run
 ```
 
+## Launcher Options
+
+The `launcher.sh` script provides options for building and running:
+
+```bash
+./launcher.sh [OPTIONS]
+```
+
+**Build Options:**
+- `--dev` - Development mode (uses Vite dev server for UI hot reload)
+- `--build` - Build only, don't run
+- `--release` - Build and run in release mode
+
+**Compositing Modes:**
+- `--capture` - Renders webview offscreen and captures to texture (default)
+  - Most compatible, works on all systems
+  - Slightly higher overhead due to framebuffer capture
+- `--overlay` - Uses transparent GTK window overlay
+  - Better performance, compositor handles blending
+  - Best on X11, may have positioning issues on Wayland
+
+**Examples:**
+```bash
+# Run with default capture mode
+./launcher.sh
+
+# Run with overlay mode
+./launcher.sh --overlay
+
+# Release build with overlay mode
+./launcher.sh --release --overlay
+
+# Development mode (start Vite separately: cd ui && npm run dev)
+./launcher.sh --dev
+```
+
 ## Project Structure
 
 ```
@@ -69,7 +105,10 @@ Pentimento/
 
 ## Architecture
 
-Bevy owns the native window and GPU rendering. Svelte runs in an offscreen webview (via wry/WebKitGTK). The UI framebuffer is captured on-demand and composited as a texture over the 3D scene.
+Bevy owns the native window and GPU rendering. Svelte runs in a webview (via wry/WebKitGTK). Two compositing modes are supported:
+
+- **Capture mode**: Webview renders offscreen, framebuffer is captured and composited as a Bevy texture
+- **Overlay mode**: Transparent GTK window overlays the Bevy window, desktop compositor handles blending
 
 ## License
 
