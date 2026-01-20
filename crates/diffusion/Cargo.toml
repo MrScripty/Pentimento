@@ -1,0 +1,28 @@
+[package]
+name = "pentimento-diffusion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pentimento-ipc = { path = "../ipc" }
+
+tokio = { workspace = true, features = ["net"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Remote streaming
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+
+# Local GPU inference (optional)
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+candle-transformers = { workspace = true, optional = true }
+
+[features]
+default = []
+local = ["candle-core", "candle-nn", "candle-transformers"]

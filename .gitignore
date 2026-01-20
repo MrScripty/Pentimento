@@ -1,0 +1,29 @@
+# Rust
+/target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Svelte
+.svelte-kit/

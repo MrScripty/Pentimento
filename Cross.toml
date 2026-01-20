@@ -1,0 +1,10 @@
+[target.x86_64-pc-windows-gnu]
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:main"
+
+[target.x86_64-pc-windows-gnu.env]
+passthrough = [
+    "RUSTFLAGS",
+]
+
+[build]
+default-target = "x86_64-unknown-linux-gnu"

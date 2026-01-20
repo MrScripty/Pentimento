@@ -1,0 +1,41 @@
+[package]
+name = "pentimento"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pentimento-webview = { path = "../webview" }
+pentimento-ipc = { path = "../ipc" }
+pentimento-diffusion = { path = "../diffusion", optional = true }
+
+bevy = { workspace = true, features = [
+    "3d",
+    "wayland",
+    "x11",
+    "ktx2",
+    "png",
+] }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+image = { workspace = true }
+bytemuck = { workspace = true }
+
+# Embed UI assets
+rust-embed = { version = "8.7", features = ["debug-embed", "compression"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[features]
+default = ["wayland"]
+wayland = []
+x11 = []
+local-diffusion = ["pentimento-diffusion/local"]
+
+[[bin]]
+name = "pentimento"
+path = "src/main.rs"
