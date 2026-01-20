@@ -25,12 +25,22 @@ pub struct UiTextureHandle {
 #[derive(Component)]
 pub struct UiOverlay;
 
+/// Track webview initialization state for Bevy systems
+#[derive(Resource, Default)]
+pub struct WebviewStatus {
+    pub initialized: bool,
+    pub first_capture_done: bool,
+}
+
 /// Initialize the webview and UI overlay
 pub fn setup_ui_composite(world: &mut World) {
     let (width, height) = {
         let mut window_query = world.query::<&Window>();
         let window = window_query.iter(world).next().expect("No window found");
-        (window.physical_width(), window.physical_height())
+        // Use resolution (logical size) rather than physical size to avoid DPI scaling issues
+        // The physical size may change as the window surface is configured
+        let resolution = &window.resolution;
+        (resolution.width() as u32, resolution.height() as u32)
     };
 
     info!("Setting up UI composite system ({}x{})", width, height);
@@ -51,6 +61,7 @@ pub fn setup_ui_composite(world: &mut World) {
     }
 
     // Create an initial transparent texture for the UI overlay
+    // Use Rgba8UnormSrgb for proper gamma-corrected display
     let mut image = Image::new_fill(
         Extent3d {
             width,
@@ -73,34 +84,28 @@ pub fn setup_ui_composite(world: &mut World) {
         handle: texture_handle.clone(),
     });
 
+    // Initialize the last window size to prevent immediate resize detection
+    world.insert_resource(LastWindowSize { width, height });
+
     // Create a full-screen UI node with the texture
-    world
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                ..default()
-            },
-            // Make sure it's on top of everything
-            ZIndex(i32::MAX),
-            UiOverlay,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                ImageNode {
-                    image: texture_handle,
-                    ..default()
-                },
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-            ));
-        });
+    // We use a single ImageNode that fills the entire screen
+    world.spawn((
+        ImageNode {
+            image: texture_handle,
+            ..default()
+        },
+        Node {
+            width: Val::Vw(100.0),
+            height: Val::Vh(100.0),
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        // Make sure it's on top of everything
+        ZIndex(i32::MAX),
+        UiOverlay,
+    ));
 
     info!("UI overlay created");
 }
@@ -110,6 +115,7 @@ pub fn update_ui_texture(
     webview_res: Option<NonSendMut<WebviewResource>>,
     ui_texture: Option<Res<UiTextureHandle>>,
     mut images: ResMut<Assets<Image>>,
+    mut status: ResMut<WebviewStatus>,
 ) {
     let Some(mut webview_res) = webview_res else {
         return;
@@ -118,21 +124,50 @@ pub fn update_ui_texture(
         return;
     };
 
-    // Poll the webview to process GTK events
+    // Poll the webview to process GTK events and advance state machine
     webview_res.webview.poll();
+
+    // Check ready state
+    if !webview_res.webview.is_ready() {
+        // Still warming up - don't attempt capture
+        return;
+    }
+
+    if !status.initialized {
+        info!("Webview ready, enabling captures");
+        status.initialized = true;
+    }
 
     // Try to capture if dirty
     if let Some(captured) = webview_res.webview.capture_if_dirty() {
+        let cap_width = captured.width();
+        let cap_height = captured.height();
+
+        // Count non-transparent pixels for debugging
+        let non_transparent = captured.pixels().filter(|p| p.0[3] > 0).count();
+
+        if !status.first_capture_done {
+            info!(
+                "First successful capture! {}x{}, non-transparent pixels: {}",
+                cap_width, cap_height, non_transparent
+            );
+            status.first_capture_done = true;
+        }
+
         // Update the Bevy texture with the captured framebuffer
         if let Some(image) = images.get_mut(&ui_texture.handle) {
-            let width = captured.width();
-            let height = captured.height();
-
             // Resize if needed
-            if image.width() != width || image.height() != height {
+            if image.width() != cap_width || image.height() != cap_height {
+                info!(
+                    "Resizing texture from {}x{} to {}x{}",
+                    image.width(),
+                    image.height(),
+                    cap_width,
+                    cap_height
+                );
                 image.resize(Extent3d {
-                    width,
-                    height,
+                    width: cap_width,
+                    height: cap_height,
                     depth_or_array_layers: 1,
                 });
             }
@@ -156,8 +191,14 @@ pub fn handle_window_resize(
     ui_texture: Option<Res<UiTextureHandle>>,
     mut images: ResMut<Assets<Image>>,
     mut last_size: ResMut<LastWindowSize>,
+    status: Res<WebviewStatus>,
     windows: Query<&Window>,
 ) {
+    // Don't process resize during warmup phase
+    if !status.initialized {
+        return;
+    }
+
     let Some(mut webview_res) = webview_res else {
         return;
     };
@@ -168,8 +209,9 @@ pub fn handle_window_resize(
         return;
     };
 
-    let width = window.physical_width();
-    let height = window.physical_height();
+    // Use resolution (logical size) to match the initial setup
+    let width = window.resolution.width() as u32;
+    let height = window.resolution.height() as u32;
 
     // Check if size changed
     if width == last_size.width && height == last_size.height {

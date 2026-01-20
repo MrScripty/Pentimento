@@ -35,7 +35,8 @@ pub struct OffscreenWebview {
 impl OffscreenWebview {
     /// Create a new offscreen webview with the given HTML content
     pub fn new(html_content: &str, size: (u32, u32)) -> Result<Self, WebviewError> {
-        let dirty = Arc::new(AtomicBool::new(true)); // Start dirty to trigger initial capture
+        // Start NOT dirty - wait for warmup to complete before first capture
+        let dirty = Arc::new(AtomicBool::new(false));
         let (to_ui_tx, _to_ui_rx) = mpsc::unbounded_channel();
         let (from_ui_tx, from_ui_rx) = mpsc::unbounded_channel();
 
@@ -70,13 +71,27 @@ impl OffscreenWebview {
     }
 
     /// Capture the framebuffer if the UI has changed since last capture.
-    /// Returns None if the UI hasn't changed.
+    /// Returns None if the UI hasn't changed or if the webview isn't ready.
     pub fn capture_if_dirty(&mut self) -> Option<image::RgbaImage> {
+        // Only attempt capture if webview is ready
+        if !self.is_ready() {
+            return None;
+        }
+
         if self.dirty.swap(false, Ordering::SeqCst) {
             self.inner.capture()
         } else {
             None
         }
+    }
+
+    /// Check if the webview is ready for capture operations
+    pub fn is_ready(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.inner.is_ready();
+
+        #[cfg(target_os = "windows")]
+        return true; // Windows implementation TBD
     }
 
     /// Force a capture regardless of dirty state

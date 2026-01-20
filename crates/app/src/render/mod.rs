@@ -8,8 +8,9 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        // Initialize window size tracking resource
-        app.init_resource::<ui_composite::LastWindowSize>();
+        // Initialize resources
+        app.init_resource::<ui_composite::LastWindowSize>()
+            .init_resource::<ui_composite::WebviewStatus>();
 
         // Use exclusive system for setup since it needs direct World access
         app.add_systems(Startup, ui_composite::setup_ui_composite)

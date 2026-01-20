@@ -11,8 +11,33 @@ use tokio::sync::mpsc;
 use cairo::{Format, ImageSurface};
 use gio::prelude::*;
 use gtk::prelude::*;
-use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebView as WebKitWebView, WebViewExt};
+use webkit2gtk::{LoadEvent, SnapshotOptions, SnapshotRegion, WebView as WebKitWebView, WebViewExt};
 use wry::WebViewBuilderExtUnix;
+
+/// Webview lifecycle states for managing capture timing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebviewState {
+    /// Just created, waiting for content to load
+    Initializing,
+    /// Content loaded, warming up for first capture
+    WarmingUp { frames_remaining: u32 },
+    /// Ready for normal capture operations
+    Ready,
+    /// Resize in progress, waiting for stabilization
+    Resizing { frames_remaining: u32 },
+}
+
+/// Number of frames to wait during warmup before first capture (~1 second at 60fps)
+const WARMUP_FRAMES: u32 = 60;
+
+/// Number of GTK iterations per poll during warmup/initialization
+const WARMUP_GTK_ITERATIONS: u32 = 20;
+
+/// Number of frames to wait after resize before capture (increased for WebKit to process)
+const RESIZE_DEBOUNCE_FRAMES: u32 = 30;
+
+/// Number of GTK iterations for async snapshot completion
+const SNAPSHOT_GTK_ITERATIONS: u32 = 50;
 
 /// Linux webview implementation using GTK Fixed container
 pub struct LinuxWebview {
@@ -20,12 +45,19 @@ pub struct LinuxWebview {
     webkit_webview: WebKitWebView,
     #[allow(dead_code)]
     container: gtk::Fixed,
+    /// Offscreen window to host the container (needed for widget realization)
+    #[allow(dead_code)]
+    offscreen_window: gtk::OffscreenWindow,
     size: (u32, u32),
     dirty: Arc<AtomicBool>,
     /// Cached snapshot result from async capture
     snapshot_cache: Rc<RefCell<Option<image::RgbaImage>>>,
     /// Flag indicating snapshot is in progress
     snapshot_pending: Rc<RefCell<bool>>,
+    /// Current lifecycle state
+    state: WebviewState,
+    /// Flag set when WebKit reports load finished
+    load_finished: Rc<RefCell<bool>>,
 }
 
 impl LinuxWebview {
@@ -40,9 +72,15 @@ impl LinuxWebview {
             gtk::init().map_err(|e| WebviewError::GtkInit(e.to_string()))?;
         }
 
-        // Create an offscreen GTK container
+        // Create an offscreen window to host the webview container
+        // This is required for the widgets to be properly realized and have valid GL contexts
+        let offscreen_window = gtk::OffscreenWindow::new();
+        offscreen_window.set_default_size(size.0 as i32, size.1 as i32);
+
+        // Create a Fixed container inside the offscreen window
         let container = gtk::Fixed::new();
         container.set_size_request(size.0 as i32, size.1 as i32);
+        offscreen_window.add(&container);
 
         // Clone for IPC handler
         let dirty_clone = dirty.clone();
@@ -69,14 +107,46 @@ impl LinuxWebview {
         let webkit_webview = Self::find_webkit_webview(&container)
             .ok_or_else(|| WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into()))?;
 
+        // Set up load detection - track when WebKit finishes loading content
+        let load_finished = Rc::new(RefCell::new(false));
+        let load_finished_clone = load_finished.clone();
+        webkit_webview.connect_load_changed(move |_webview, load_event| {
+            if load_event == LoadEvent::Finished {
+                *load_finished_clone.borrow_mut() = true;
+                tracing::info!("WebKitGTK content load finished");
+            }
+        });
+
+        // Show the offscreen window to realize all widgets and set up GL contexts
+        // This is needed for WebKit to properly render content
+        offscreen_window.show_all();
+
+        // Process GTK events to allow the window and widgets to fully initialize
+        // This helps prevent GL context conflicts with Bevy
+        for _ in 0..50 {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
+
+        // Verify realization
+        if !container.is_realized() {
+            tracing::warn!("Container widget not realized - GL errors may occur");
+        } else {
+            tracing::debug!("Container widget realized successfully");
+        }
+
         Ok(Self {
             webview,
             webkit_webview,
             container,
+            offscreen_window,
             size,
             dirty,
             snapshot_cache: Rc::new(RefCell::new(None)),
             snapshot_pending: Rc::new(RefCell::new(false)),
+            state: WebviewState::Initializing,
+            load_finished,
         })
     }
 
@@ -101,16 +171,99 @@ impl LinuxWebview {
     }
 
     pub fn poll(&mut self) {
-        // Pump GTK events without blocking
-        while gtk::events_pending() {
-            gtk::main_iteration_do(false);
+        // Determine how many GTK iterations based on current state
+        let iterations = match self.state {
+            WebviewState::Initializing | WebviewState::WarmingUp { .. } => {
+                WARMUP_GTK_ITERATIONS
+            }
+            WebviewState::Ready | WebviewState::Resizing { .. } => 10,
+        };
+
+        // Pump GTK events
+        for _ in 0..iterations {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
         }
+
+        // Handle state transitions
+        self.update_state();
+    }
+
+    /// Update the webview state machine
+    fn update_state(&mut self) {
+        match self.state {
+            WebviewState::Initializing => {
+                if *self.load_finished.borrow() {
+                    tracing::info!("WebView load complete, transitioning to WarmingUp state");
+                    // Set viewport dimensions via JavaScript to ensure WebKit knows the size
+                    let (width, height) = self.size;
+                    self.webkit_webview.run_javascript(
+                        &format!(
+                            "document.body.style.width = '{}px'; \
+                             document.body.style.height = '{}px'; \
+                             document.documentElement.style.width = '{}px'; \
+                             document.documentElement.style.height = '{}px';",
+                            width, height, width, height
+                        ),
+                        gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                    self.state = WebviewState::WarmingUp {
+                        frames_remaining: WARMUP_FRAMES,
+                    };
+                }
+            }
+            WebviewState::WarmingUp { frames_remaining } => {
+                if frames_remaining == 0 {
+                    tracing::info!("Warmup complete, transitioning to Ready state");
+                    self.state = WebviewState::Ready;
+                    // Now safe to mark dirty for first capture
+                    self.dirty.store(true, Ordering::SeqCst);
+                } else {
+                    self.state = WebviewState::WarmingUp {
+                        frames_remaining: frames_remaining - 1,
+                    };
+                }
+            }
+            WebviewState::Resizing { frames_remaining } => {
+                if frames_remaining == 0 {
+                    tracing::info!("Resize stabilized, returning to Ready state");
+                    self.state = WebviewState::Ready;
+                    // Safe to capture after resize
+                    self.dirty.store(true, Ordering::SeqCst);
+                } else {
+                    self.state = WebviewState::Resizing {
+                        frames_remaining: frames_remaining - 1,
+                    };
+                }
+            }
+            WebviewState::Ready => {
+                // Normal operation, no transition needed
+            }
+        }
+    }
+
+    /// Check if the webview is ready to accept capture requests
+    pub fn is_ready(&self) -> bool {
+        self.state == WebviewState::Ready
+    }
+
+    /// Get the current state (for debugging)
+    pub fn state(&self) -> WebviewState {
+        self.state
     }
 
     pub fn capture(&self) -> Option<image::RgbaImage> {
         // Check if we have a cached snapshot ready
         if let Some(img) = self.snapshot_cache.borrow_mut().take() {
             return Some(img);
+        }
+
+        // Only start new captures in Ready state
+        if self.state != WebviewState::Ready {
+            tracing::trace!("Capture skipped: webview in {:?} state", self.state);
+            return None;
         }
 
         // If a snapshot is already pending, don't start another one
@@ -123,9 +276,9 @@ impl LinuxWebview {
 
         let cache = self.snapshot_cache.clone();
         let pending = self.snapshot_pending.clone();
-        let size = self.size;
 
         // Use webkit_web_view_snapshot with async callback
+        // Use FullDocument to get the complete render regardless of viewport
         self.webkit_webview.snapshot(
             SnapshotRegion::FullDocument,
             SnapshotOptions::TRANSPARENT_BACKGROUND,
@@ -135,9 +288,10 @@ impl LinuxWebview {
 
                 match result {
                     Ok(surface) => {
-                        match Self::cairo_surface_to_rgba(&surface, size) {
+                        match Self::cairo_surface_to_rgba(&surface) {
                             Ok(img) => {
                                 *cache.borrow_mut() = Some(img);
+                                tracing::debug!("Snapshot captured successfully");
                             }
                             Err(e) => {
                                 tracing::error!("Failed to convert Cairo surface: {}", e);
@@ -145,18 +299,22 @@ impl LinuxWebview {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("WebKitGTK snapshot failed: {}", e);
+                        tracing::warn!("WebKitGTK snapshot failed: {}", e);
                     }
                 }
             },
         );
 
         // Pump GTK events to allow the async operation to progress
-        // We do a limited number of iterations to avoid blocking indefinitely
-        for _ in 0..10 {
+        // Use more iterations than before to give the async snapshot time to complete
+        for i in 0..SNAPSHOT_GTK_ITERATIONS {
             if gtk::events_pending() {
                 gtk::main_iteration_do(false);
-            } else {
+            }
+
+            // Check if completed early
+            if !*self.snapshot_pending.borrow() {
+                tracing::trace!("Snapshot completed after {} iterations", i + 1);
                 break;
             }
         }
@@ -165,32 +323,26 @@ impl LinuxWebview {
         self.snapshot_cache.borrow_mut().take()
     }
 
-    /// Convert a Cairo ImageSurface to an RGBA image
-    fn cairo_surface_to_rgba(
-        surface: &cairo::Surface,
-        target_size: (u32, u32),
-    ) -> Result<image::RgbaImage, String> {
-        // Create a new ImageSurface with ARGB32 format to render the snapshot
-        let width = target_size.0 as i32;
-        let height = target_size.1 as i32;
+    /// Convert a Cairo surface to an RGBA image
+    /// Uses a large fixed size to capture the full WebKit render
+    fn cairo_surface_to_rgba(surface: &cairo::Surface) -> Result<image::RgbaImage, String> {
+        // Use a large surface to ensure we capture everything WebKit renders
+        // The actual content will be smaller, and Bevy will scale as needed
+        let width = 1920;
+        let height = 1080;
 
         let mut img_surface = ImageSurface::create(Format::ARgb32, width, height)
             .map_err(|e| format!("Failed to create image surface: {}", e))?;
 
-        // Create a context and draw the source surface
         let ctx = cairo::Context::new(&img_surface)
             .map_err(|e| format!("Failed to create context: {}", e))?;
 
-        // The webkit snapshot typically returns the surface at the correct size,
-        // so we just paint it directly. If scaling is needed, we can compute it
-        // from the extents.
         ctx.set_source_surface(surface, 0.0, 0.0)
             .map_err(|e| format!("Failed to set source surface: {}", e))?;
 
         ctx.paint()
             .map_err(|e| format!("Failed to paint: {}", e))?;
 
-        // Ensure all drawing is done
         drop(ctx);
         img_surface.flush();
 
@@ -233,9 +385,64 @@ impl LinuxWebview {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        // Ignore resize if dimensions unchanged
+        if self.size == (width, height) {
+            return;
+        }
+
+        tracing::info!(
+            "Webview resize: {:?} -> ({}, {})",
+            self.size,
+            width,
+            height
+        );
+
         self.size = (width, height);
+
+        // Resize the offscreen window, container, and webkit webview
+        self.offscreen_window
+            .set_default_size(width as i32, height as i32);
+        self.offscreen_window.resize(width as i32, height as i32);
         self.container.set_size_request(width as i32, height as i32);
-        self.dirty.store(true, Ordering::SeqCst);
+
+        // Also set size on the webkit webview widget itself
+        self.webkit_webview
+            .set_size_request(width as i32, height as i32);
+
+        // Force WebKit to re-layout by triggering a resize event in JavaScript
+        // This helps ensure the viewport updates to match the new size
+        self.webkit_webview.run_javascript(
+            &format!(
+                "window.dispatchEvent(new Event('resize')); \
+                 document.body.style.width = '{}px'; \
+                 document.body.style.height = '{}px';",
+                width, height
+            ),
+            gio::Cancellable::NONE,
+            |_| {},
+        );
+
+        // Pump more GTK events to help the resize propagate
+        // WebKit needs more iterations to fully process the resize
+        for _ in 0..30 {
+            if gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
+
+        // Clear any cached snapshot since it's now the wrong size
+        *self.snapshot_cache.borrow_mut() = None;
+        *self.snapshot_pending.borrow_mut() = false;
+
+        // Only transition to Resizing state if we're already Ready
+        // Don't interrupt Initializing or WarmingUp states
+        if self.state == WebviewState::Ready {
+            self.state = WebviewState::Resizing {
+                frames_remaining: RESIZE_DEBOUNCE_FRAMES,
+            };
+            // Don't mark dirty immediately - wait for resize to stabilize
+            // The dirty flag will be set when state transitions back to Ready
+        }
     }
 
     pub fn inject_mouse(&mut self, _event: MouseEvent) {

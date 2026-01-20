@@ -25,14 +25,39 @@ impl UiAssets {
     }
 
     fn embedded_html() -> String {
-        match Self::get("ui/index.html") {
+        // Get the HTML file
+        let html = match Self::get("ui/index.html") {
             Some(file) => String::from_utf8(file.data.to_vec())
                 .expect("index.html is not valid UTF-8"),
             None => {
                 // Return a placeholder if UI hasn't been built yet
-                Self::placeholder_html()
+                return Self::placeholder_html();
             }
-        }
+        };
+
+        // Get the CSS and JS assets to inline them
+        let css = Self::get("ui/assets/index.css")
+            .map(|f| String::from_utf8(f.data.to_vec()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let js = Self::get("ui/assets/index.js")
+            .map(|f| String::from_utf8(f.data.to_vec()).unwrap_or_default())
+            .unwrap_or_default();
+
+        // Replace the external references with inline content
+        // The HTML has lines like:
+        //   <script type="module" crossorigin src="/assets/index.js"></script>
+        //   <link rel="stylesheet" crossorigin href="/assets/index.css">
+        let html = html.replace(
+            r#"<script type="module" crossorigin src="/assets/index.js"></script>"#,
+            &format!(r#"<script type="module">{}</script>"#, js),
+        );
+        let html = html.replace(
+            r#"<link rel="stylesheet" crossorigin href="/assets/index.css">"#,
+            &format!(r#"<style>{}</style>"#, css),
+        );
+
+        html
     }
 
     #[cfg(debug_assertions)]
