@@ -24,4 +24,10 @@ pub enum WebviewError {
 
     #[error("Platform not supported")]
     PlatformNotSupported,
+
+    #[error("Initialization failed: {0}")]
+    InitializationFailed(String),
+
+    #[error("Webview not ready")]
+    NotReady,
 }

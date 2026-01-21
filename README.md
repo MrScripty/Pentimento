@@ -1,6 +1,6 @@
 # Pentimento
 
-A desktop application combining Bevy 3D rendering with a Svelte 5 UI in a single native window.
+A desktop application combining Bevy 0.18 3D rendering with a Svelte 5 UI in a single native window.
 
 ## System Requirements
 
@@ -68,12 +68,15 @@ The `launcher.sh` script provides options for building and running:
 - `--release` - Build and run in release mode
 
 **Compositing Modes:**
-- `--capture` - Renders webview offscreen and captures to texture (default)
+- `--capture` - Renders WebKitGTK offscreen and captures to texture (default)
   - Most compatible, works on all systems
   - Slightly higher overhead due to framebuffer capture
 - `--overlay` - Uses transparent GTK window overlay
   - Better performance, compositor handles blending
   - Best on X11, may have positioning issues on Wayland
+- `--cef` - Renders CEF (Chromium) offscreen and captures to texture
+  - Downloads CEF binaries on first run (~150MB)
+  - Chromium rendering engine instead of WebKitGTK
 
 **Examples:**
 ```bash
@@ -82,6 +85,9 @@ The `launcher.sh` script provides options for building and running:
 
 # Run with overlay mode
 ./launcher.sh --overlay
+
+# Run with CEF mode (downloads binaries on first run)
+./launcher.sh --cef
 
 # Release build with overlay mode
 ./launcher.sh --release --overlay
@@ -105,10 +111,11 @@ Pentimento/
 
 ## Architecture
 
-Bevy owns the native window and GPU rendering. Svelte runs in a webview (via wry/WebKitGTK). Two compositing modes are supported:
+Bevy owns the native window and GPU rendering. Svelte runs in a webview. Three compositing modes are supported:
 
-- **Capture mode**: Webview renders offscreen, framebuffer is captured and composited as a Bevy texture
+- **Capture mode**: WebKitGTK renders offscreen, framebuffer is captured and composited as a Bevy texture
 - **Overlay mode**: Transparent GTK window overlays the Bevy window, desktop compositor handles blending
+- **CEF mode**: Chromium (CEF) renders offscreen, framebuffer is captured and composited as a Bevy texture
 
 ## License
 

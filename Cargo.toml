@@ -5,6 +5,7 @@ members = [
     "crates/webview",
     "crates/ipc",
     "crates/diffusion",
+    "crates/cef-helper",
 ]
 
 [workspace.package]

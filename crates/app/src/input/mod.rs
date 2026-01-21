@@ -1,6 +1,6 @@
 //! Input handling - forwards Bevy input events to the webview
 //!
-//! Supports both capture and overlay compositing modes.
+//! Supports capture, overlay, and CEF compositing modes.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use crate::config::{CompositeMode, PentimentoConfig};
 use crate::render::{OverlayWebviewResource, WebviewResource};
+#[cfg(feature = "cef")]
+use crate::render::CefWebviewResource;
 
 /// WebKit render size (must match platform_linux.rs cairo_surface_to_rgba)
 const WEBVIEW_WIDTH: f32 = 1920.0;
@@ -77,6 +79,7 @@ fn track_mouse_position(
     config: Res<PentimentoConfig>,
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+    #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
     windows: Query<&Window>,
 ) {
     // Always clear motion events - we use cursor position instead
@@ -94,8 +97,18 @@ fn track_mouse_position(
     // Use the LAST event position as that's the most recent
     let mut had_cursor_event = false;
     for event in cursor_events.read() {
+        // For CEF mode, the webview is resized to match window, so use 1:1 mapping
+        // For other modes, scale to the fixed 1920x1080 webview size
+        #[cfg(feature = "cef")]
+        let (webview_x, webview_y) = if config.composite_mode == CompositeMode::Cef {
+            (event.position.x, event.position.y) // No scaling for CEF
+        } else {
+            scale_to_webview(event.position.x, event.position.y, window_width, window_height)
+        };
+        #[cfg(not(feature = "cef"))]
         let (webview_x, webview_y) =
             scale_to_webview(event.position.x, event.position.y, window_width, window_height);
+
         mouse_state.window_x = event.position.x;
         mouse_state.window_y = event.position.y;
         mouse_state.webview_x = webview_x;
@@ -127,12 +140,22 @@ fn track_mouse_position(
             }
         }
         CompositeMode::Overlay => {
-            // In overlay mode, the GTK window receives native mouse events
-            // We still forward for consistency, but the overlay handles its own input
             if let Some(mut webview) = overlay_webview {
                 webview.webview.send_mouse_event(mouse_event);
                 mouse_state.last_move_sent = now;
             }
+        }
+        #[cfg(feature = "cef")]
+        CompositeMode::Cef => {
+            if let Some(mut webview) = cef_webview {
+                webview.webview.send_mouse_event(mouse_event);
+                mouse_state.last_move_sent = now;
+            }
+        }
+        #[cfg(not(feature = "cef"))]
+        CompositeMode::Cef => {}
+        CompositeMode::Tauri => {
+            // Tauri mode handles input in the browser
         }
     }
 }
@@ -145,6 +168,7 @@ fn forward_mouse_buttons(
     config: Res<PentimentoConfig>,
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+    #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
 ) {
     // Use the tracked position (updated by track_mouse_position which runs first)
     let click_x = mouse_state.webview_x;
@@ -156,25 +180,25 @@ fn forward_mouse_buttons(
         return;
     }
 
+    // Helper to convert button
+    let convert_button = |button: bevy::input::mouse::MouseButton| -> Option<IpcMouseButton> {
+        match button {
+            bevy::input::mouse::MouseButton::Left => Some(IpcMouseButton::Left),
+            bevy::input::mouse::MouseButton::Right => Some(IpcMouseButton::Right),
+            bevy::input::mouse::MouseButton::Middle => Some(IpcMouseButton::Middle),
+            _ => None,
+        }
+    };
+
     // Process events based on mode
     match config.composite_mode {
         CompositeMode::Capture => {
             let Some(mut webview) = capture_webview else { return };
-            for event in events {
-                let button = match event.button {
-                    bevy::input::mouse::MouseButton::Left => IpcMouseButton::Left,
-                    bevy::input::mouse::MouseButton::Right => IpcMouseButton::Right,
-                    bevy::input::mouse::MouseButton::Middle => IpcMouseButton::Middle,
-                    _ => continue,
-                };
-
+            for event in &events {
+                let Some(button) = convert_button(event.button) else { continue };
                 if event.state.is_pressed() {
-                    info!(
-                        "Click at webview ({:.1}, {:.1}) window ({:.1}, {:.1})",
-                        click_x, click_y, mouse_state.window_x, mouse_state.window_y
-                    );
+                    info!("Click at webview ({:.1}, {:.1})", click_x, click_y);
                 }
-
                 let mouse_event = if event.state.is_pressed() {
                     MouseEvent::ButtonDown { button, x: click_x, y: click_y }
                 } else {
@@ -185,21 +209,11 @@ fn forward_mouse_buttons(
         }
         CompositeMode::Overlay => {
             let Some(mut webview) = overlay_webview else { return };
-            for event in events {
-                let button = match event.button {
-                    bevy::input::mouse::MouseButton::Left => IpcMouseButton::Left,
-                    bevy::input::mouse::MouseButton::Right => IpcMouseButton::Right,
-                    bevy::input::mouse::MouseButton::Middle => IpcMouseButton::Middle,
-                    _ => continue,
-                };
-
+            for event in &events {
+                let Some(button) = convert_button(event.button) else { continue };
                 if event.state.is_pressed() {
-                    info!(
-                        "Click at webview ({:.1}, {:.1}) window ({:.1}, {:.1})",
-                        click_x, click_y, mouse_state.window_x, mouse_state.window_y
-                    );
+                    info!("Click at webview ({:.1}, {:.1})", click_x, click_y);
                 }
-
                 let mouse_event = if event.state.is_pressed() {
                     MouseEvent::ButtonDown { button, x: click_x, y: click_y }
                 } else {
@@ -208,6 +222,25 @@ fn forward_mouse_buttons(
                 webview.webview.send_mouse_event(mouse_event);
             }
         }
+        #[cfg(feature = "cef")]
+        CompositeMode::Cef => {
+            let Some(mut webview) = cef_webview else { return };
+            for event in &events {
+                let Some(button) = convert_button(event.button) else { continue };
+                if event.state.is_pressed() {
+                    info!("CEF Click at webview ({:.1}, {:.1})", click_x, click_y);
+                }
+                let mouse_event = if event.state.is_pressed() {
+                    MouseEvent::ButtonDown { button, x: click_x, y: click_y }
+                } else {
+                    MouseEvent::ButtonUp { button, x: click_x, y: click_y }
+                };
+                webview.webview.send_mouse_event(mouse_event);
+            }
+        }
+        #[cfg(not(feature = "cef"))]
+        CompositeMode::Cef => {}
+        CompositeMode::Tauri => {}
     }
 }
 
@@ -219,8 +252,8 @@ fn forward_mouse_scroll(
     config: Res<PentimentoConfig>,
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+    #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
 ) {
-    // Use the tracked position (updated by track_mouse_position which runs first)
     let scroll_x = mouse_state.webview_x;
     let scroll_y = mouse_state.webview_y;
 
@@ -229,14 +262,19 @@ fn forward_mouse_scroll(
         return;
     }
 
+    // Helper to convert scroll deltas
+    let convert_delta = |event: &bevy::input::mouse::MouseWheel| -> (f32, f32) {
+        match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => (event.x * 40.0, event.y * 40.0),
+            bevy::input::mouse::MouseScrollUnit::Pixel => (event.x, event.y),
+        }
+    };
+
     match config.composite_mode {
         CompositeMode::Capture => {
             let Some(mut webview) = capture_webview else { return };
-            for event in events {
-                let (delta_x, delta_y) = match event.unit {
-                    bevy::input::mouse::MouseScrollUnit::Line => (event.x * 40.0, event.y * 40.0),
-                    bevy::input::mouse::MouseScrollUnit::Pixel => (event.x, event.y),
-                };
+            for event in &events {
+                let (delta_x, delta_y) = convert_delta(event);
                 webview.webview.send_mouse_event(MouseEvent::Scroll {
                     delta_x,
                     delta_y: -delta_y,
@@ -247,11 +285,8 @@ fn forward_mouse_scroll(
         }
         CompositeMode::Overlay => {
             let Some(mut webview) = overlay_webview else { return };
-            for event in events {
-                let (delta_x, delta_y) = match event.unit {
-                    bevy::input::mouse::MouseScrollUnit::Line => (event.x * 40.0, event.y * 40.0),
-                    bevy::input::mouse::MouseScrollUnit::Pixel => (event.x, event.y),
-                };
+            for event in &events {
+                let (delta_x, delta_y) = convert_delta(event);
                 webview.webview.send_mouse_event(MouseEvent::Scroll {
                     delta_x,
                     delta_y: -delta_y,
@@ -260,6 +295,22 @@ fn forward_mouse_scroll(
                 });
             }
         }
+        #[cfg(feature = "cef")]
+        CompositeMode::Cef => {
+            let Some(mut webview) = cef_webview else { return };
+            for event in &events {
+                let (delta_x, delta_y) = convert_delta(event);
+                webview.webview.send_mouse_event(MouseEvent::Scroll {
+                    delta_x,
+                    delta_y: -delta_y,
+                    x: scroll_x,
+                    y: scroll_y,
+                });
+            }
+        }
+        #[cfg(not(feature = "cef"))]
+        CompositeMode::Cef => {}
+        CompositeMode::Tauri => {}
     }
 }
 
@@ -270,6 +321,7 @@ fn forward_keyboard(
     config: Res<PentimentoConfig>,
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
+    #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
 ) {
     // Build current modifier state
     let modifiers = Modifiers {
@@ -287,7 +339,7 @@ fn forward_keyboard(
     match config.composite_mode {
         CompositeMode::Capture => {
             let Some(mut webview) = capture_webview else { return };
-            for event in events {
+            for event in &events {
                 let key = bevy_keycode_to_web_key(event.key_code);
                 webview.webview.send_keyboard_event(KeyboardEvent {
                     key,
@@ -298,7 +350,7 @@ fn forward_keyboard(
         }
         CompositeMode::Overlay => {
             let Some(mut webview) = overlay_webview else { return };
-            for event in events {
+            for event in &events {
                 let key = bevy_keycode_to_web_key(event.key_code);
                 webview.webview.send_keyboard_event(KeyboardEvent {
                     key,
@@ -307,6 +359,21 @@ fn forward_keyboard(
                 });
             }
         }
+        #[cfg(feature = "cef")]
+        CompositeMode::Cef => {
+            let Some(mut webview) = cef_webview else { return };
+            for event in &events {
+                let key = bevy_keycode_to_web_key(event.key_code);
+                webview.webview.send_keyboard_event(KeyboardEvent {
+                    key,
+                    pressed: event.state.is_pressed(),
+                    modifiers: modifiers.clone(),
+                });
+            }
+        }
+        #[cfg(not(feature = "cef"))]
+        CompositeMode::Cef => {}
+        CompositeMode::Tauri => {}
     }
 }
 

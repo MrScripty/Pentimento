@@ -12,6 +12,12 @@ pub enum CompositeMode {
     /// Transparent child window overlay (better performance)
     /// Uses wry's native windowing, may have issues on some systems
     Overlay,
+    /// CEF (Chromium Embedded Framework) offscreen rendering
+    /// Uses Chromium instead of WebKitGTK, requires CEF binaries
+    Cef,
+    /// Bevy compiled to WASM running inside Tauri webview
+    /// Inverts ownership - Tauri owns the window, Bevy renders to canvas
+    Tauri,
 }
 
 impl CompositeMode {
@@ -19,6 +25,8 @@ impl CompositeMode {
     pub fn from_env() -> Self {
         match std::env::var("PENTIMENTO_COMPOSITE").as_deref() {
             Ok("overlay") => Self::Overlay,
+            Ok("cef") => Self::Cef,
+            Ok("tauri") => Self::Tauri,
             Ok("capture") | _ => Self::Capture,
         }
     }

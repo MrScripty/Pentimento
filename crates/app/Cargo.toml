@@ -35,6 +35,7 @@ gtk = "0.18"
 default = ["wayland"]
 wayland = []
 x11 = []
+cef = ["pentimento-webview/cef"]
 local-diffusion = ["pentimento-diffusion/local"]
 
 [[bin]]

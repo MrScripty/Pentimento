@@ -1,8 +1,10 @@
 //! Render pipeline extensions for UI compositing
 //!
-//! Supports two compositing modes:
+//! Supports multiple compositing modes:
 //! - Capture: Offscreen webview with framebuffer capture (default)
 //! - Overlay: Transparent child window composited by desktop compositor
+//! - Cef: CEF (Chromium) offscreen rendering with framebuffer capture
+//! - Tauri: Bevy WASM in Tauri webview (requires separate build)
 
 use bevy::prelude::*;
 
@@ -10,10 +12,14 @@ use crate::config::{CompositeMode, PentimentoConfig};
 
 mod ui_composite;
 mod ui_overlay;
+#[cfg(feature = "cef")]
+mod ui_cef;
 
 // Re-export types needed by the input module
 pub use ui_composite::WebviewResource;
 pub use ui_overlay::OverlayWebviewResource;
+#[cfg(feature = "cef")]
+pub use ui_cef::CefWebviewResource;
 
 pub struct RenderPlugin;
 
@@ -35,7 +41,7 @@ impl Plugin for RenderPlugin {
                 info!("Render plugin initialized with CAPTURE mode");
             }
             CompositeMode::Overlay => {
-                // New overlay mode setup
+                // Overlay mode setup
                 app.init_resource::<ui_overlay::OverlayStatus>()
                     .init_resource::<ui_overlay::OverlayLastWindowSize>()
                     .init_resource::<ui_overlay::OverlayPosition>();
@@ -46,6 +52,29 @@ impl Plugin for RenderPlugin {
                     .add_systems(Update, ui_overlay::sync_overlay_position);
 
                 info!("Render plugin initialized with OVERLAY mode");
+            }
+            #[cfg(feature = "cef")]
+            CompositeMode::Cef => {
+                // CEF mode setup
+                app.init_resource::<ui_cef::CefLastWindowSize>()
+                    .init_resource::<ui_cef::CefWebviewStatus>();
+
+                app.add_systems(Startup, ui_cef::setup_ui_cef)
+                    .add_systems(Update, ui_cef::update_cef_ui_texture)
+                    .add_systems(Update, ui_cef::handle_cef_window_resize);
+
+                info!("Render plugin initialized with CEF mode");
+            }
+            #[cfg(not(feature = "cef"))]
+            CompositeMode::Cef => {
+                error!("CEF mode requires the 'cef' feature. Build with: cargo build --features cef");
+                panic!("CEF mode not available - rebuild with --features cef");
+            }
+            CompositeMode::Tauri => {
+                // Tauri mode is handled differently - Bevy runs as WASM in Tauri's webview
+                // In native builds, this mode is not applicable
+                warn!("Tauri mode requires building for WASM and running inside Tauri");
+                info!("Render plugin: Tauri mode - no native render setup needed");
             }
         }
     }

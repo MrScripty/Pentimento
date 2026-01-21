@@ -21,6 +21,8 @@ fn main() {
     );
 
     // Initialize GTK for webview on Linux (needed for both modes)
+    // Note: For CEF mode, GTK is not strictly required, but we initialize it
+    // anyway for compatibility with non-CEF code paths
     #[cfg(target_os = "linux")]
     {
         gtk::init().expect("Failed to initialize GTK");
