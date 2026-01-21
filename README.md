@@ -1,6 +1,8 @@
 # Pentimento
 
-A desktop application combining Bevy 0.18 3D rendering with a Svelte 5 UI in a single native window.
+Combine full featured Svelte 5 GUI's with a native Bevy 0.18 3D GPU viewport for advanced graphics applications.
+
+This is a stand-alone feature demo for Studio-Whip, exploring multiple methods of utalizing modern web tech to design frontends while retaining the performance and capabilities of native GPU graphics engines.
 
 ## System Requirements
 
