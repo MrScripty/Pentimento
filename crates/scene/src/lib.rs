@@ -1,5 +1,9 @@
-//! Scene setup and management
+//! Shared scene setup for Pentimento
+//!
+//! This crate provides the common 3D scene setup used by both
+//! the native Bevy app and the WASM Tauri build.
 
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
 pub struct ScenePlugin;
@@ -16,10 +20,12 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Camera
+    // Camera with WebGL2-compatible tonemapping
+    // TonyMcMapFace requires tonemapping_luts which needs zstd (not available in WASM)
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Tonemapping::Reinhard,
     ));
 
     // Directional light (sun)

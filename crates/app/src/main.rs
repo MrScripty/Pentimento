@@ -7,9 +7,9 @@ mod config;
 mod embedded_ui;
 mod input;
 mod render;
-mod scene;
 
 use config::{CompositeMode, PentimentoConfig};
+use pentimento_scene::ScenePlugin;
 
 fn main() {
     // Parse configuration from environment
@@ -51,7 +51,7 @@ fn main() {
                     ..default()
                 }),
         )
-        .add_plugins(scene::ScenePlugin)
+        .add_plugins(ScenePlugin)
         .add_plugins(render::RenderPlugin)
         .add_plugins(input::InputPlugin)
         .run();

@@ -2,10 +2,13 @@
 resolver = "2"
 members = [
     "crates/app",
+    "crates/app-wasm",
+    "crates/scene",
     "crates/webview",
     "crates/ipc",
     "crates/diffusion",
     "crates/cef-helper",
+    "src-tauri",
 ]
 
 [workspace.package]

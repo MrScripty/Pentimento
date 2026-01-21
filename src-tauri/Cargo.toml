@@ -1,0 +1,26 @@
+[package]
+name = "pentimento-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pentimento Tauri desktop app (Bevy WASM + Svelte)"
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-shell = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+pentimento-ipc = { path = "../crates/ipc" }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[lib]
+name = "pentimento_tauri_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+path = "src/lib.rs"

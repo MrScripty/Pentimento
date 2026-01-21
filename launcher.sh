@@ -44,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             # with the version check in cef-dll-sys build.rs
             shift
             ;;
+        --tauri)
+            COMPOSITE_MODE="tauri"
+            shift
+            ;;
         --help|-h)
             echo "Pentimento Launcher"
             echo ""
@@ -56,6 +60,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --capture   Use capture compositing mode (default)"
             echo "  --overlay   Use overlay compositing mode (transparent window)"
             echo "  --cef       Use CEF (Chromium) compositing mode"
+            echo "  --tauri     Use Tauri mode (Bevy WASM in webview)"
             echo "  --help, -h  Show this help message"
             echo ""
             echo "Compositing modes:"
@@ -65,6 +70,8 @@ while [[ $# -gt 0 ]]; do
             echo "            Better performance, may have issues on some systems"
             echo "  cef     - Renders CEF (Chromium) offscreen, captures to texture"
             echo "            Downloads CEF binaries on first run (~150MB)"
+            echo "  tauri   - Tauri owns window, Bevy runs as WASM, Svelte UI in same webview"
+            echo "            Experimental - uses WebGL2 for rendering"
             exit 0
             ;;
         *)
@@ -75,7 +82,74 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build UI if not in dev mode
+# Tauri mode has a completely different build/run process
+if [ "$COMPOSITE_MODE" = "tauri" ]; then
+    echo "Building Pentimento in Tauri mode..."
+
+    # Build Svelte UI
+    echo "Building Svelte UI..."
+    if [ -d "ui" ]; then
+        cd ui
+        if [ ! -d "node_modules" ]; then
+            echo "Installing npm dependencies..."
+            npm install
+        fi
+        npm run build
+        cd ..
+    fi
+
+    # Build Bevy WASM
+    echo "Building Bevy WASM..."
+    if [ "$RELEASE" = true ]; then
+        cargo build --target wasm32-unknown-unknown --release -p pentimento-wasm
+        WASM_FILE="target/wasm32-unknown-unknown/release/pentimento_wasm.wasm"
+    else
+        cargo build --target wasm32-unknown-unknown -p pentimento-wasm
+        WASM_FILE="target/wasm32-unknown-unknown/debug/pentimento_wasm.wasm"
+    fi
+
+    # Run wasm-bindgen
+    echo "Running wasm-bindgen..."
+    mkdir -p dist/wasm
+    wasm-bindgen "$WASM_FILE" --target web --out-dir dist/wasm --out-name pentimento_wasm
+
+    # Copy WASM to where Tauri can serve it (production build)
+    mkdir -p dist/ui/wasm
+    cp dist/wasm/* dist/ui/wasm/
+
+    # Also copy to Vite public dir for dev server
+    mkdir -p dist/wasm-public/wasm
+    cp dist/wasm/* dist/wasm-public/wasm/
+
+    if [ "$BUILD_ONLY" = true ]; then
+        echo "Build complete (Tauri mode)"
+        echo "WASM output: dist/wasm/"
+        echo "UI output: dist/ui/"
+        exit 0
+    fi
+
+    # Run Tauri app
+    echo "Launching Pentimento (Tauri mode)..."
+    if [ "$RELEASE" = true ]; then
+        cargo tauri build
+        # Find and run the built binary
+        TAURI_BINARY=$(find target/release/bundle -name "pentimento*" -type f -executable 2>/dev/null | head -1)
+        if [ -n "$TAURI_BINARY" ]; then
+            exec "$TAURI_BINARY"
+        else
+            echo "Built Tauri bundle is in target/release/bundle/"
+        fi
+    else
+        # Kill any existing Vite processes on port 5173
+        fuser -k 5173/tcp 2>/dev/null || true
+
+        # Tauri will start Vite via beforeDevCommand
+        cargo tauri dev
+    fi
+    exit 0
+fi
+
+# Build UI if not in dev mode (native modes)
 if [ "$DEV_MODE" = false ]; then
     echo "Building Svelte UI..."
     if [ -d "ui" ]; then
@@ -89,7 +163,7 @@ if [ "$DEV_MODE" = false ]; then
     fi
 fi
 
-# Build Rust application
+# Build Rust application (native modes)
 echo "Building Pentimento..."
 if [ "$RELEASE" = true ]; then
     cargo build --release -p pentimento $CARGO_FEATURES

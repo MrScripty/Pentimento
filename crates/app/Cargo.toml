@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 pentimento-webview = { path = "../webview" }
+pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
 pentimento-diffusion = { path = "../diffusion", optional = true }
 

@@ -13,10 +13,76 @@
             width: 100%;
             height: 100%;
         }
+        /* Bevy WASM canvas (Tauri mode only) */
+        #bevy-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            display: none; /* Hidden by default, shown in Tauri mode */
+        }
+        /* UI overlay */
+        #app {
+            position: relative;
+            z-index: 1;
+            pointer-events: none;
+        }
+        #app > * {
+            pointer-events: auto;
+        }
     </style>
 </head>
 <body>
+    <!-- Bevy WASM canvas (only visible in Tauri mode) -->
+    <canvas id="bevy-canvas"></canvas>
+
+    <!-- Svelte UI overlay -->
     <div id="app"></div>
+
     <script type="module" src="/src/main.ts"></script>
+
+    <!-- Load Bevy WASM in Tauri mode -->
+    <script>
+        function initBevyWasm() {
+            console.log('Pentimento: Initializing Bevy WASM...');
+            var canvas = document.getElementById('bevy-canvas');
+            if (canvas) {
+                canvas.style.display = 'block';
+                console.log('Pentimento: Canvas made visible');
+            }
+            // Dynamically create script tag to load WASM module
+            var script = document.createElement('script');
+            script.type = 'module';
+            script.textContent = 'import init from "./wasm/pentimento_wasm.js"; console.log("Pentimento: Loading WASM..."); init().then(() => console.log("Pentimento: WASM loaded!")).catch(err => console.error("Failed to load Bevy WASM:", err));';
+            document.body.appendChild(script);
+        }
+
+        function checkTauriAndInit() {
+            // Check for Tauri globals (v1 uses __TAURI__, v2 uses __TAURI_INTERNALS__)
+            if ('__TAURI__' in window || '__TAURI_INTERNALS__' in window) {
+                console.log('Pentimento: Tauri mode detected');
+                initBevyWasm();
+                return true;
+            }
+            return false;
+        }
+
+        // Try immediately
+        if (!checkTauriAndInit()) {
+            // If not detected yet, try after DOM is ready
+            document.addEventListener('DOMContentLoaded', function() {
+                if (!checkTauriAndInit()) {
+                    // Final attempt after a short delay (Tauri might inject globals late)
+                    setTimeout(function() {
+                        if (!checkTauriAndInit()) {
+                            console.log('Pentimento: Running in native mode (no Tauri detected)');
+                        }
+                    }, 100);
+                }
+            });
+        }
+    </script>
 </body>
 </html>

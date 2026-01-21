@@ -9,6 +9,7 @@ export default defineConfig({
         tailwindcss(),
     ],
     root: './ui',
+    publicDir: '../dist/wasm-public',
     build: {
         outDir: '../dist/ui',
         emptyOutDir: true,
@@ -28,5 +29,9 @@ export default defineConfig({
     server: {
         port: 5173,
         strictPort: true,
+        fs: {
+            // Allow serving files from dist/wasm during development
+            allow: ['..'],
+        },
     },
 });
