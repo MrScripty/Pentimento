@@ -150,8 +150,8 @@ impl UiAssets {
     </div>
     <script>
         // Mark UI as dirty on load
-        if (window.__PENTIMENTO_IPC__) {
-            window.__PENTIMENTO_IPC__.postMessage(JSON.stringify({ type: 'UiDirty' }));
+        if (window.ipc) {
+            window.ipc.postMessage(JSON.stringify({ type: 'UiDirty' }));
         }
     </script>
 </body>

@@ -1,7 +1,7 @@
 //! Linux-specific webview implementation using GTK and WebKitGTK
 
 use crate::error::WebviewError;
-use pentimento_ipc::{KeyboardEvent, MouseEvent, UiToBevy};
+use pentimento_ipc::{KeyboardEvent, MouseButton, MouseEvent, UiToBevy};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -445,14 +445,187 @@ impl LinuxWebview {
         }
     }
 
-    pub fn inject_mouse(&mut self, _event: MouseEvent) {
-        // TODO: Synthesize GDK mouse events
-        // This requires creating synthetic GdkEvent structures
-        // and dispatching them to the webview widget
+    pub fn inject_mouse(&mut self, event: MouseEvent) {
+        // Use JavaScript to dispatch DOM events
+        // This is more reliable than synthesizing GDK events
+        //
+        // For click events, we use a two-phase approach:
+        // 1. Dispatch the DOM event
+        // 2. Use requestAnimationFrame to wait for Svelte to re-render
+        // 3. Send IPC message to mark dirty AFTER the DOM has updated
+        let (js, needs_raf_dirty) = match event {
+            MouseEvent::Move { x, y } => {
+                // Mouse move doesn't need dirty update
+                (format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new MouseEvent('mousemove', {{
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: {x},
+                            clientY: {y},
+                            view: window
+                        }}));
+                    }})()"#,
+                    x = x,
+                    y = y
+                ), false)
+            }
+            MouseEvent::ButtonDown { button, x, y } => {
+                let button_num = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Middle => 1,
+                    MouseButton::Right => 2,
+                };
+                // mousedown alone typically doesn't change visible UI state much
+                (format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new MouseEvent('mousedown', {{
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: {x},
+                            clientY: {y},
+                            button: {button},
+                            view: window
+                        }}));
+                    }})()"#,
+                    x = x,
+                    y = y,
+                    button = button_num
+                ), false) // Don't mark dirty yet - wait for click
+            }
+            MouseEvent::ButtonUp { button, x, y } => {
+                let button_num = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Middle => 1,
+                    MouseButton::Right => 2,
+                };
+                // Click is where state changes happen - use RAF to wait for DOM update
+                (format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new MouseEvent('mouseup', {{
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: {x},
+                            clientY: {y},
+                            button: {button},
+                            view: window
+                        }}));
+                        // Also dispatch click for left button
+                        if ({button} === 0) {{
+                            target.dispatchEvent(new MouseEvent('click', {{
+                                bubbles: true,
+                                cancelable: true,
+                                clientX: {x},
+                                clientY: {y},
+                                button: 0,
+                                view: window
+                            }}));
+                            // Wait for DOM to update after click, then notify
+                            requestAnimationFrame(() => {{
+                                requestAnimationFrame(() => {{
+                                    if (window.ipc) {{
+                                        window.ipc.postMessage(JSON.stringify({{ type: 'UiDirty' }}));
+                                    }}
+                                }});
+                            }});
+                        }}
+                    }})()"#,
+                    x = x,
+                    y = y,
+                    button = button_num
+                ), true)
+            }
+            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
+                (format!(
+                    r#"(function() {{
+                        const target = document.elementFromPoint({x}, {y}) || document.body;
+                        target.dispatchEvent(new WheelEvent('wheel', {{
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: {x},
+                            clientY: {y},
+                            deltaX: {delta_x},
+                            deltaY: {delta_y},
+                            deltaMode: 0,
+                            view: window
+                        }}));
+                        // Scroll might change visible content
+                        requestAnimationFrame(() => {{
+                            if (window.ipc) {{
+                                window.ipc.postMessage(JSON.stringify({{ type: 'UiDirty' }}));
+                            }}
+                        }});
+                    }})()"#,
+                    x = x,
+                    y = y,
+                    delta_x = delta_x,
+                    delta_y = delta_y
+                ), true)
+            }
+        };
+
+        // Execute the JavaScript to dispatch the event
+        self.webkit_webview.run_javascript(&js, gio::Cancellable::NONE, |_| {});
+
+        // For events that use RAF to mark dirty via IPC, we need to pump GTK events
+        // to let the JavaScript and RAF callbacks execute
+        if needs_raf_dirty {
+            // Pump enough iterations for JS execution + 2 RAF cycles
+            for _ in 0..50 {
+                gtk::main_iteration_do(false);
+            }
+        }
     }
 
-    pub fn inject_keyboard(&mut self, _event: KeyboardEvent) {
-        // TODO: Synthesize GDK keyboard events
+    pub fn inject_keyboard(&mut self, event: KeyboardEvent) {
+        // Use JavaScript to dispatch DOM keyboard events
+        let event_type = if event.pressed { "keydown" } else { "keyup" };
+
+        // Escape the key for JavaScript string
+        let key_escaped = event.key.replace('\\', "\\\\").replace('\'', "\\'");
+
+        let js = format!(
+            r#"(function() {{
+                const target = document.activeElement || document.body;
+                target.dispatchEvent(new KeyboardEvent('{event_type}', {{
+                    bubbles: true,
+                    cancelable: true,
+                    key: '{key}',
+                    shiftKey: {shift},
+                    ctrlKey: {ctrl},
+                    altKey: {alt},
+                    metaKey: {meta},
+                    view: window
+                }}));
+                // For text input, also dispatch input event for printable keys
+                if ('{event_type}' === 'keydown' && '{key}'.length === 1 && !{ctrl} && !{alt} && !{meta}) {{
+                    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {{
+                        // Let the browser handle text input naturally
+                    }}
+                }}
+            }})()"#,
+            event_type = event_type,
+            key = key_escaped,
+            shift = event.modifiers.shift,
+            ctrl = event.modifiers.ctrl,
+            alt = event.modifiers.alt,
+            meta = event.modifiers.meta
+        );
+
+        self.webkit_webview.run_javascript(&js, gio::Cancellable::NONE, |_| {});
+
+        // Only mark dirty for key presses (not releases) that might change UI
+        // Modifier keys alone don't typically change visible UI
+        let is_modifier = matches!(
+            event.key.as_str(),
+            "Shift" | "Control" | "Alt" | "Meta"
+        );
+        if event.pressed && !is_modifier {
+            self.dirty.store(true, Ordering::SeqCst);
+        }
     }
 
     pub fn eval(&self, js: &str) -> Result<(), WebviewError> {

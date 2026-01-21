@@ -10,8 +10,32 @@
 
     let { renderStats }: Props = $props();
 
+    // Track which dropdown is open
+    let openMenu = $state<string | null>(null);
+
+    // Track selected tool
+    let selectedTool = $state<string>('select');
+
     function handleResetCamera() {
         bridge.cameraReset();
+    }
+
+    function toggleMenu(menu: string) {
+        openMenu = openMenu === menu ? null : menu;
+    }
+
+    function closeMenu() {
+        openMenu = null;
+    }
+
+    function handleMenuAction(action: string) {
+        console.log('Menu action:', action);
+        closeMenu();
+    }
+
+    function selectTool(tool: string) {
+        selectedTool = tool;
+        console.log('Selected tool:', tool);
     }
 </script>
 
@@ -19,24 +43,56 @@
     <div class="toolbar-left">
         <h1 class="title">Pentimento</h1>
         <nav class="nav">
-            <button class="nav-button">File</button>
-            <button class="nav-button">Edit</button>
-            <button class="nav-button">View</button>
+            <div class="menu-container">
+                <button class="nav-button" class:active={openMenu === 'file'} onclick={() => toggleMenu('file')}>File</button>
+                {#if openMenu === 'file'}
+                    <div class="dropdown">
+                        <button class="dropdown-item" onclick={() => handleMenuAction('new')}>New Project</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('open')}>Open...</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('save')}>Save</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('export')}>Export...</button>
+                    </div>
+                {/if}
+            </div>
+            <div class="menu-container">
+                <button class="nav-button" class:active={openMenu === 'edit'} onclick={() => toggleMenu('edit')}>Edit</button>
+                {#if openMenu === 'edit'}
+                    <div class="dropdown">
+                        <button class="dropdown-item" onclick={() => handleMenuAction('undo')}>Undo</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('redo')}>Redo</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('cut')}>Cut</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('copy')}>Copy</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('paste')}>Paste</button>
+                    </div>
+                {/if}
+            </div>
+            <div class="menu-container">
+                <button class="nav-button" class:active={openMenu === 'view'} onclick={() => toggleMenu('view')}>View</button>
+                {#if openMenu === 'view'}
+                    <div class="dropdown">
+                        <button class="dropdown-item" onclick={() => handleMenuAction('zoom-in')}>Zoom In</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('zoom-out')}>Zoom Out</button>
+                        <button class="dropdown-item" onclick={() => handleMenuAction('fit')}>Fit to Window</button>
+                    </div>
+                {/if}
+            </div>
         </nav>
     </div>
 
     <div class="toolbar-center">
         <div class="tool-group">
-            <button class="tool-button" title="Select">
+            <button class="tool-button" class:selected={selectedTool === 'select'} title="Select" onclick={() => selectTool('select')}>
                 <span class="icon">↖</span>
             </button>
-            <button class="tool-button" title="Move">
+            <button class="tool-button" class:selected={selectedTool === 'move'} title="Move" onclick={() => selectTool('move')}>
                 <span class="icon">✥</span>
             </button>
-            <button class="tool-button" title="Rotate">
+            <button class="tool-button" class:selected={selectedTool === 'rotate'} title="Rotate" onclick={() => selectTool('rotate')}>
                 <span class="icon">↻</span>
             </button>
-            <button class="tool-button" title="Scale">
+            <button class="tool-button" class:selected={selectedTool === 'scale'} title="Scale" onclick={() => selectTool('scale')}>
                 <span class="icon">⤢</span>
             </button>
         </div>
@@ -96,9 +152,52 @@
         transition: background 0.15s;
     }
 
-    .nav-button:hover {
+    .nav-button:hover,
+    .nav-button.active {
         background: rgba(255, 255, 255, 0.1);
         color: white;
+    }
+
+    .menu-container {
+        position: relative;
+    }
+
+    .dropdown {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 4px;
+        min-width: 160px;
+        background: rgba(30, 30, 30, 0.95);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        padding: 4px;
+        z-index: 200;
+    }
+
+    .dropdown-item {
+        display: block;
+        width: 100%;
+        padding: 8px 12px;
+        background: transparent;
+        border: none;
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+        border-radius: 4px;
+        transition: background 0.1s;
+    }
+
+    .dropdown-item:hover {
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+    .dropdown-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.1);
+        margin: 4px 0;
     }
 
     .tool-group {
@@ -125,6 +224,11 @@
 
     .tool-button:hover {
         background: rgba(255, 255, 255, 0.15);
+        color: white;
+    }
+
+    .tool-button.selected {
+        background: rgba(100, 150, 255, 0.3);
         color: white;
     }
 
