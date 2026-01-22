@@ -1,0 +1,12 @@
+{
+  "name": "pentimento-electron",
+  "version": "0.1.0",
+  "description": "Pentimento Electron wrapper for Bevy WASM + Svelte UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}
