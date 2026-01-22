@@ -668,6 +668,28 @@ impl LinuxCefWebview {
             Err(WebviewError::NotReady)
         }
     }
+
+    /// Open Chrome DevTools for debugging the webview
+    pub fn show_dev_tools(&self) {
+        let Some(browser) = &self.browser else {
+            tracing::warn!("Cannot show DevTools: browser not initialized");
+            return;
+        };
+
+        let Some(host) = browser.host() else {
+            tracing::warn!("Cannot show DevTools: no browser host");
+            return;
+        };
+
+        // Create window info for the DevTools window (non-offscreen, regular window)
+        let window_info = WindowInfo::default();
+
+        // Use default browser settings for DevTools
+        let settings = BrowserSettings::default();
+
+        tracing::info!("Opening CEF DevTools window");
+        host.show_dev_tools(Some(&window_info), None, Some(&settings), None);
+    }
 }
 
 impl Drop for LinuxCefWebview {

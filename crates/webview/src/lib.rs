@@ -373,4 +373,9 @@ impl CefWebview {
     pub fn eval(&self, js: &str) -> Result<(), WebviewError> {
         self.inner.eval(js)
     }
+
+    /// Open Chrome DevTools for debugging the webview (Ctrl+Shift+I)
+    pub fn show_dev_tools(&self) {
+        self.inner.show_dev_tools();
+    }
 }

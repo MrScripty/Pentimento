@@ -31,6 +31,10 @@ impl Plugin for InputPlugin {
                     .after(track_mouse_position),
             );
 
+        // CEF DevTools hotkey (Ctrl+Shift+I)
+        #[cfg(feature = "cef")]
+        app.add_systems(PreUpdate, handle_devtools_hotkey);
+
         info!("Input plugin initialized");
     }
 }
@@ -497,5 +501,30 @@ fn bevy_keycode_to_web_key(key_code: KeyCode) -> String {
 
         // Default for unmapped keys
         _ => format!("{:?}", key_code),
+    }
+}
+
+/// Handle Ctrl+Shift+I to open DevTools (CEF mode only)
+#[cfg(feature = "cef")]
+fn handle_devtools_hotkey(
+    key_input: Res<ButtonInput<KeyCode>>,
+    config: Res<PentimentoConfig>,
+    cef_webview: Option<NonSend<CefWebviewResource>>,
+) {
+    // Only handle in CEF mode
+    if config.composite_mode != CompositeMode::Cef {
+        return;
+    }
+
+    // Check for Ctrl+Shift+I
+    let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
+    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
+    let i_pressed = key_input.just_pressed(KeyCode::KeyI);
+
+    if ctrl && shift && i_pressed {
+        if let Some(webview) = cef_webview {
+            info!("Opening CEF DevTools (Ctrl+Shift+I)");
+            webview.webview.show_dev_tools();
+        }
     }
 }
