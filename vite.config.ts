@@ -10,6 +10,8 @@ export default defineConfig({
     ],
     root: './ui',
     publicDir: '../dist/wasm-public',
+    // Use relative paths for assets (required for Electron file:// protocol)
+    base: './',
     build: {
         outDir: '../dist/ui',
         emptyOutDir: true,
