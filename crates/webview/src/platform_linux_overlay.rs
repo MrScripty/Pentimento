@@ -2,6 +2,11 @@
 //!
 //! This implementation creates a transparent GTK window that overlays the Bevy window.
 //! The desktop compositor handles the actual blending, avoiding the need for framebuffer capture.
+//!
+//! Input handling uses a selective passthrough approach:
+//! - UI regions (toolbar, sidebar) receive native input for proper Svelte interaction
+//! - The 3D viewport area is click-through, passing events to Bevy underneath
+//! This allows both the UI and 3D scene to receive input appropriately.
 
 use crate::error::WebviewError;
 use pentimento_ipc::{KeyboardEvent, MouseButton, MouseEvent, UiToBevy};
@@ -11,10 +16,12 @@ use std::rc::Rc;
 use tokio::sync::mpsc;
 
 use gdk::prelude::*;
+use gdk::cairo;
 use gio::Cancellable;
 use gtk::prelude::*;
 use webkit2gtk::{LoadEvent, WebViewExt};
 use wry::WebViewBuilderExtUnix;
+
 
 /// Overlay webview state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +136,9 @@ impl LinuxOverlayWebview {
         // Show the window
         window.show_all();
 
+        // Set up selective input passthrough: UI regions receive input, viewport is click-through
+        Self::update_input_regions(&window, size.0, size.1);
+
         // Process GTK events to initialize
         for _ in 0..50 {
             if gtk::events_pending() {
@@ -176,6 +186,54 @@ impl LinuxOverlayWebview {
                 tracing::warn!("Unknown window handle type for parent positioning");
             }
         }
+    }
+
+    /// Update input regions to allow selective passthrough
+    ///
+    /// Creates an input shape that covers only UI elements (toolbar, sidebar),
+    /// making the 3D viewport area click-through to Bevy underneath.
+    fn update_input_regions(window: &gtk::Window, width: u32, height: u32) {
+        let Some(gdk_window) = window.window() else {
+            tracing::warn!("Could not get GDK window for input region setup");
+            return;
+        };
+
+        // UI layout constants (matching Svelte CSS)
+        // Toolbar: top 0, height 48px, full width
+        // Sidebar: top 56px, right 8px, width 300px, bottom 8px
+        let toolbar_height = 72; // 48px + some padding for dropdowns
+        let sidebar_width = 316; // 300px + 8px margin + 8px padding
+        let sidebar_top = 56;
+        let sidebar_margin = 8;
+
+        let w = width as i32;
+        let h = height as i32;
+
+        // Create a region covering only the UI elements
+        let region = cairo::Region::create();
+
+        // Add toolbar rectangle (full width, at top)
+        let toolbar_rect = cairo::RectangleInt::new(0, 0, w, toolbar_height);
+        region.union_rectangle(&toolbar_rect);
+
+        // Add sidebar rectangle (right side, below toolbar)
+        let sidebar_rect = cairo::RectangleInt::new(
+            w - sidebar_width,
+            sidebar_top,
+            sidebar_width,
+            h - sidebar_top - sidebar_margin,
+        );
+        region.union_rectangle(&sidebar_rect);
+
+        // Set the input shape - only these regions will receive input
+        // Everything else (the 3D viewport) will be click-through
+        gdk_window.input_shape_combine_region(&region, 0, 0);
+
+        tracing::debug!(
+            "Input regions set: toolbar (0,0,{},{}), sidebar ({},{},{},{})",
+            w, toolbar_height,
+            w - sidebar_width, sidebar_top, sidebar_width, h - sidebar_top - sidebar_margin
+        );
     }
 
     /// Find the WebKitWebView widget within a GTK container
@@ -261,6 +319,9 @@ impl LinuxOverlayWebview {
             |_| {},
         );
 
+        // Update input regions for the new size
+        Self::update_input_regions(&self.window, width, height);
+
         // Pump GTK events to help the resize propagate
         for _ in 0..30 {
             if gtk::events_pending() {
@@ -284,8 +345,8 @@ impl LinuxOverlayWebview {
     }
 
     pub fn inject_mouse(&mut self, event: MouseEvent) {
-        // For overlay mode, the GTK window receives native events
-        // We still support injection for programmatic control
+        // For overlay mode with click-through, we inject synthetic events via JavaScript.
+        // Note: Synthetic events may not trigger all browser behaviors (e.g., :active styles).
         let js = match event {
             MouseEvent::Move { x, y } => {
                 format!(

@@ -18,6 +18,10 @@ pub struct OverlayWebviewResource {
 #[derive(Resource, Default)]
 pub struct OverlayStatus {
     pub initialized: bool,
+    /// Frames to wait before creating the overlay (allows Bevy window to stabilize)
+    pub startup_delay_frames: u32,
+    /// Whether the overlay has been created yet
+    pub created: bool,
 }
 
 /// Track window size for resize handling
@@ -34,8 +38,38 @@ pub struct OverlayPosition {
     pub y: i32,
 }
 
-/// Initialize the overlay webview
+/// Initialize overlay tracking resources (defers actual webview creation)
 pub fn setup_ui_overlay(world: &mut World) {
+    // Get window size for tracking
+    let (width, height) = {
+        let mut window_query = world.query::<&Window>();
+        if let Some(window) = window_query.iter(world).next() {
+            (
+                window.resolution.physical_width(),
+                window.resolution.physical_height(),
+            )
+        } else {
+            (1920, 1080) // Default, will be updated
+        }
+    };
+
+    info!("Setting up UI overlay system (deferred creation, {}x{})", width, height);
+
+    // Initialize tracking resources - webview creation is deferred to avoid GLX conflicts
+    // The overlay will be created after a few frames when the Bevy window is stable
+    world.insert_resource(OverlayStatus {
+        initialized: false,
+        startup_delay_frames: 5, // Wait 5 frames for window to stabilize
+        created: false,
+    });
+    world.insert_resource(OverlayLastWindowSize { width, height });
+    world.insert_resource(OverlayPosition::default());
+
+    info!("UI overlay setup complete (webview creation deferred)");
+}
+
+/// Actually create the overlay webview (called after startup delay)
+fn create_overlay_webview(world: &mut World) -> bool {
     // Get window entity and properties
     let window_entity = world
         .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
@@ -43,12 +77,11 @@ pub fn setup_ui_overlay(world: &mut World) {
         .next();
 
     let Some(window_entity) = window_entity else {
-        error!("No primary window found for overlay setup");
-        return;
+        error!("No primary window found for overlay creation");
+        return false;
     };
 
     // Get window size - use PHYSICAL size for overlay since GTK operates in physical pixels
-    // The logical resolution may differ from physical size due to DPI scaling
     let (width, height) = {
         let window = world.get::<Window>(window_entity).unwrap();
         (
@@ -57,13 +90,13 @@ pub fn setup_ui_overlay(world: &mut World) {
         )
     };
 
-    info!("Setting up UI overlay system ({}x{})", width, height);
+    info!("Creating overlay webview ({}x{})", width, height);
 
     // Get the raw window handle from Bevy
     let raw_handle = world.get::<RawHandleWrapper>(window_entity);
     let Some(raw_handle) = raw_handle else {
         error!("No RawHandleWrapper found on primary window");
-        return;
+        return false;
     };
 
     // Extract the raw window handle using the public getter method
@@ -77,27 +110,48 @@ pub fn setup_ui_overlay(world: &mut World) {
         Ok(webview) => {
             world.insert_non_send_resource(OverlayWebviewResource { webview });
             info!("Overlay webview created successfully");
+
+            // Update size tracking
+            if let Some(mut last_size) = world.get_resource_mut::<OverlayLastWindowSize>() {
+                last_size.width = width;
+                last_size.height = height;
+            }
+            true
         }
         Err(e) => {
             error!("Failed to create overlay webview: {}", e);
+            false
+        }
+    }
+}
+
+/// Poll the overlay webview and handle window tracking
+pub fn update_overlay_webview(world: &mut World) {
+    // Check if we need to create the webview (deferred creation)
+    let should_create = {
+        let mut status = world.resource_mut::<OverlayStatus>();
+        if !status.created {
+            if status.startup_delay_frames > 0 {
+                status.startup_delay_frames -= 1;
+                return;
+            }
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_create {
+        let success = create_overlay_webview(world);
+        let mut status = world.resource_mut::<OverlayStatus>();
+        status.created = success;
+        if !success {
             return;
         }
     }
 
-    // Initialize tracking resources
-    world.insert_resource(OverlayStatus { initialized: false });
-    world.insert_resource(OverlayLastWindowSize { width, height });
-    world.insert_resource(OverlayPosition::default());
-
-    info!("UI overlay setup complete");
-}
-
-/// Poll the overlay webview and handle window tracking
-pub fn update_overlay_webview(
-    overlay_res: Option<NonSendMut<OverlayWebviewResource>>,
-    mut status: ResMut<OverlayStatus>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-) {
+    // Now poll the webview if it exists
+    let overlay_res = world.get_non_send_resource_mut::<OverlayWebviewResource>();
     let Some(mut overlay) = overlay_res else {
         return;
     };
@@ -110,16 +164,13 @@ pub fn update_overlay_webview(
         return;
     }
 
+    drop(overlay);
+
+    let mut status = world.resource_mut::<OverlayStatus>();
     if !status.initialized {
         info!("Overlay webview ready");
         status.initialized = true;
     }
-
-    // Get current window position for overlay tracking
-    // Note: Bevy doesn't provide window position directly,
-    // so the overlay may need additional platform-specific code
-    // to track window moves on X11/Wayland
-    let _window = windows.single();
 }
 
 /// Handle window resize for overlay mode

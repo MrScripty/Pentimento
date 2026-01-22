@@ -105,19 +105,25 @@ fn track_mouse_position(
     // Use the LAST event position as that's the most recent
     let mut had_cursor_event = false;
     for event in cursor_events.read() {
-        // For CEF mode, scale by DPI factor since CEF renders at physical resolution
-        // but Bevy's CursorMoved events are in logical coordinates
-        // For other modes, scale to the fixed webview size from display config
-        #[cfg(feature = "cef")]
-        let (webview_x, webview_y) = if config.composite_mode == CompositeMode::Cef {
-            let scale_factor = window.resolution.scale_factor();
-            (event.position.x * scale_factor, event.position.y * scale_factor)
-        } else {
-            scale_to_webview(event.position.x, event.position.y, window_width, window_height, &display_config)
+        // Bevy's CursorMoved events are in LOGICAL coordinates.
+        // CEF and Overlay render at PHYSICAL resolution, so scale by DPI factor.
+        // Capture mode renders at display_config size, so scale to that.
+        let (webview_x, webview_y) = match config.composite_mode {
+            #[cfg(feature = "cef")]
+            CompositeMode::Cef => {
+                let scale_factor = window.resolution.scale_factor();
+                (event.position.x * scale_factor, event.position.y * scale_factor)
+            }
+            CompositeMode::Overlay => {
+                // Overlay uses physical resolution like CEF
+                let scale_factor = window.resolution.scale_factor();
+                (event.position.x * scale_factor, event.position.y * scale_factor)
+            }
+            _ => {
+                // Capture and other modes scale to display_config
+                scale_to_webview(event.position.x, event.position.y, window_width, window_height, &display_config)
+            }
         };
-        #[cfg(not(feature = "cef"))]
-        let (webview_x, webview_y) =
-            scale_to_webview(event.position.x, event.position.y, window_width, window_height, &display_config);
 
         mouse_state.window_x = event.position.x;
         mouse_state.window_y = event.position.y;

@@ -42,14 +42,15 @@ impl Plugin for RenderPlugin {
             }
             CompositeMode::Overlay => {
                 // Overlay mode setup
-                app.init_resource::<ui_overlay::OverlayStatus>()
-                    .init_resource::<ui_overlay::OverlayLastWindowSize>()
-                    .init_resource::<ui_overlay::OverlayPosition>();
+                // Note: Resources are initialized by setup_ui_overlay, not here
+                // because OverlayStatus has non-default initial values
 
                 app.add_systems(Startup, ui_overlay::setup_ui_overlay)
+                    // update_overlay_webview is an exclusive system (takes &mut World)
+                    // because it handles deferred webview creation
                     .add_systems(Update, ui_overlay::update_overlay_webview)
-                    .add_systems(Update, ui_overlay::handle_overlay_resize)
-                    .add_systems(Update, ui_overlay::sync_overlay_position);
+                    .add_systems(Update, ui_overlay::handle_overlay_resize.after(ui_overlay::update_overlay_webview))
+                    .add_systems(Update, ui_overlay::sync_overlay_position.after(ui_overlay::update_overlay_webview));
 
                 info!("Render plugin initialized with OVERLAY mode");
             }
