@@ -4,6 +4,7 @@
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
+use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::window::CursorMoved;
 use pentimento_config::DisplayConfig;
@@ -24,7 +25,7 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseState>()
             // Run in PreUpdate to get the freshest input state before other systems
-            .add_systems(PreUpdate, track_mouse_position)
+            .add_systems(PreUpdate, track_mouse_position.after(InputSystems))
             .add_systems(
                 PreUpdate,
                 (forward_mouse_buttons, forward_mouse_scroll, forward_keyboard)
@@ -33,7 +34,7 @@ impl Plugin for InputPlugin {
 
         // CEF DevTools hotkey (Ctrl+Shift+I)
         #[cfg(feature = "cef")]
-        app.add_systems(PreUpdate, handle_devtools_hotkey);
+        app.add_systems(PreUpdate, handle_devtools_hotkey.after(InputSystems));
 
         info!("Input plugin initialized");
     }
@@ -98,19 +99,16 @@ fn track_mouse_position(
         return;
     };
 
-    let window_width = window.resolution.width();
-    let window_height = window.resolution.height();
-
     // Process CursorMoved events - these contain the actual cursor position
     // Use the LAST event position as that's the most recent
     let mut had_cursor_event = false;
     for event in cursor_events.read() {
         // Bevy's CursorMoved events are in LOGICAL coordinates.
-        // CEF and Overlay render at PHYSICAL resolution, so scale by DPI factor.
-        // Capture mode renders at display_config size, so scale to that.
+        // CEF, Overlay, and Capture render at PHYSICAL resolution, so scale by DPI factor.
         let (webview_x, webview_y) = match config.composite_mode {
             #[cfg(feature = "cef")]
             CompositeMode::Cef => {
+                // CEF renders at physical resolution
                 let scale_factor = window.resolution.scale_factor();
                 (event.position.x * scale_factor, event.position.y * scale_factor)
             }
@@ -119,9 +117,13 @@ fn track_mouse_position(
                 let scale_factor = window.resolution.scale_factor();
                 (event.position.x * scale_factor, event.position.y * scale_factor)
             }
+            CompositeMode::Capture => {
+                let scale_factor = window.resolution.scale_factor();
+                (event.position.x * scale_factor, event.position.y * scale_factor)
+            }
             _ => {
-                // Capture and other modes scale to display_config
-                scale_to_webview(event.position.x, event.position.y, window_width, window_height, &display_config)
+                // Fallback for other modes (Tauri handles its own input)
+                (event.position.x, event.position.y)
             }
         };
 

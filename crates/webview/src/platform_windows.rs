@@ -39,6 +39,10 @@ impl WindowsWebview {
         self._size = (width, height);
     }
 
+    pub fn set_scale_factor(&mut self, _scale_factor: f64) {
+        // TODO: Apply scaling once Windows WebView2 implementation is available.
+    }
+
     pub fn inject_mouse(&mut self, _event: MouseEvent) {
         // TODO: Use SendInput or WebView2 input injection
     }

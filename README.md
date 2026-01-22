@@ -178,7 +178,10 @@ Inverts the architecture - the desktop framework owns the window:
 
 **Electron mode** (`--electron`) is recommended for WASM on Linux as it uses Chromium with stable WebGL2 support.
 
-**Tauri mode** (`--tauri`) is unmaintained due to WebKitGTK WebGL bugs (see Known Issues).
+**Tauri mode** (`--tauri`) is unmaintained due to WebKitGTK 
+WebGL bugs.
+
+The Tauri team is exploring alternatives including Chromium/CEF integration and Servo. See the [Tauri discussion](https://github.com/orgs/tauri-apps/discussions/8524) for updates.
 
 ## Known Issues
 
@@ -193,9 +196,19 @@ WebKitGTK 2.40+ has known WebGL2 instability issues that cause context loss and 
 - `WebLoaderStrategy::internallyFailedLoadTimerFired()` errors in console
 - WebGL context lost
 
-**Recommendation:** Use `--electron` for WASM mode (uses Chromium), or `--capture`/`--cef` for native Bevy rendering.
+### Capture Mode - Unmaintained
 
-The Tauri team is exploring alternatives including Chromium/CEF integration and Servo. See the [Tauri discussion](https://github.com/orgs/tauri-apps/discussions/8524) for updates. The Tauri mode code remains in the repository but will not receive further development until WebKitGTK WebGL is stable.
+This mode is fundamentaly flawed. Despite many agent hours and my own time developing methodologies for this mode, there was no way to make it work in a maner which results in a good UX. I cannot recomend this method for any serious use. 
+
+- UI only updates when a new capture occurs; event-driven capture misses hover/animation updates and can feel frozen.
+- A continuous capture heartbeat fixes responsiveness but is expensive and can tank frame rate. If you dont do this you have to roll your own system for keeping the process alive until all actions have completed.
+- GTK/WebKit are single-threaded, so heavy capture or input pumping can stall Bevy if done synchronously.
+- DPI scaling must be applied before rasterization (render at physical size, adjust viewport scale), or the UI will blur. WebKitGTK will not adapt on its own, but will scale the rendered result instead causing blurry UI.
+
+It is possible to run WebKitGTK and Bevy completly seperate processes so that event loops are decoupled, but the complicaitons of handling frame transport negate pratical use cases. For example, in theory you can use DMA‑BUF/EGLImage to share GPU buffers accross context, but it is a Linux kernel mechanism that does not translate to other OS. It could work with good performance, but it is not sutable for the needs of Studio Whip or the vast majority of other applicaiotns. 
+
+**Recommendation:** Use `--electron` for WASM mode (uses Chromium), or `--cef` for native Bevy rendering. `--overlay` might work but it is not consistent across platforms as it depends on the OS implementaiton of webview.
+
 
 ## License
 

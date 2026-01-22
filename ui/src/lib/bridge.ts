@@ -11,10 +11,13 @@ import type { BevyToUi, UiToBevy, LayoutInfo } from './types';
 // Declare the IPC interface injected by Rust (native modes)
 declare global {
     interface Window {
-        __PENTIMENTO_IPC__: {
+        __PENTIMENTO_IPC__?: {
             postMessage: (msg: string) => void;
         };
-        __PENTIMENTO_RECEIVE__: (msg: string) => void;
+        __PENTIMENTO_RECEIVE__?: (msg: string) => void;
+        ipc?: {
+            postMessage: (msg: string) => void;
+        };
         __TAURI__?: unknown;
         __TAURI_INTERNALS__?: unknown;
         __ELECTRON__?: boolean;
@@ -28,6 +31,16 @@ function isWasmMode(): boolean {
     return '__TAURI__' in window ||
            '__TAURI_INTERNALS__' in window ||
            '__ELECTRON__' in window;
+}
+
+function getNativeIpc(): { postMessage: (msg: string) => void } | null {
+    if (window.__PENTIMENTO_IPC__) {
+        return window.__PENTIMENTO_IPC__;
+    }
+    if (window.ipc) {
+        return window.ipc;
+    }
+    return null;
 }
 
 class BevyBridge {
@@ -51,6 +64,10 @@ class BevyBridge {
             const runtime = '__ELECTRON__' in window ? 'Electron' : 'Tauri';
             console.log(`Pentimento bridge initialized in ${runtime} WASM mode`);
         } else {
+            const ipc = getNativeIpc();
+            if (!window.__PENTIMENTO_IPC__ && ipc) {
+                window.__PENTIMENTO_IPC__ = ipc;
+            }
             // Native modes: Set up message receiver (called from Rust)
             window.__PENTIMENTO_RECEIVE__ = (msgJson: string) => {
                 try {
@@ -79,11 +96,14 @@ class BevyBridge {
             window.dispatchEvent(new CustomEvent('pentimento:ui-to-bevy', {
                 detail: JSON.stringify(msg)
             }));
-        } else if (window.__PENTIMENTO_IPC__) {
-            // Native modes: Use IPC injected by Rust
-            window.__PENTIMENTO_IPC__.postMessage(JSON.stringify(msg));
         } else {
-            console.warn('IPC not available - running outside Pentimento?');
+            // Native modes: Use IPC injected by Rust
+            const ipc = getNativeIpc();
+            if (ipc) {
+                ipc.postMessage(JSON.stringify(msg));
+            } else {
+                console.warn('IPC not available - running outside Pentimento?');
+            }
         }
     }
 

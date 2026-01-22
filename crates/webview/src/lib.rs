@@ -128,6 +128,12 @@ impl OffscreenWebview {
         self.mark_dirty();
     }
 
+    /// Update the scale factor for HiDPI rendering
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.inner.set_scale_factor(scale_factor);
+        self.mark_dirty();
+    }
+
     /// Forward a mouse event to the webview
     pub fn send_mouse_event(&mut self, event: MouseEvent) {
         self.inner.inject_mouse(event);
