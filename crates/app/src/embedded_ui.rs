@@ -45,15 +45,15 @@ impl UiAssets {
             .unwrap_or_default();
 
         // Replace the external references with inline content
-        // The HTML has lines like:
-        //   <script type="module" crossorigin src="/assets/index.js"></script>
-        //   <link rel="stylesheet" crossorigin href="/assets/index.css">
+        // The HTML has lines like (with relative paths due to Vite base: './'):
+        //   <script type="module" crossorigin src="./assets/index.js"></script>
+        //   <link rel="stylesheet" crossorigin href="./assets/index.css">
         let html = html.replace(
-            r#"<script type="module" crossorigin src="/assets/index.js"></script>"#,
+            r#"<script type="module" crossorigin src="./assets/index.js"></script>"#,
             &format!(r#"<script type="module">{}</script>"#, js),
         );
         let html = html.replace(
-            r#"<link rel="stylesheet" crossorigin href="/assets/index.css">"#,
+            r#"<link rel="stylesheet" crossorigin href="./assets/index.css">"#,
             &format!(r#"<style>{}</style>"#, css),
         );
 
