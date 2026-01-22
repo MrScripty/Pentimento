@@ -24,12 +24,8 @@ pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
-        // DEBUG: Disable plugins on WASM to test if they cause the WebKit crash
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            app.add_plugins(CameraControllerPlugin);
-            app.add_plugins(LightingPlugin);
-        }
+        app.add_plugins(CameraControllerPlugin);
+        app.add_plugins(LightingPlugin);
 
         app.add_systems(Startup, setup_scene);
 
@@ -47,45 +43,19 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Camera with WebGL2-compatible tonemapping
+    // Camera with WebGL2-compatible tonemapping and orbit controls
     // TonyMcMapFace requires tonemapping_luts which needs zstd (not available in WASM)
+    let orbit_camera = OrbitCamera::default();
+    let camera_position = orbit_camera.calculate_position();
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_translation(camera_position).looking_at(orbit_camera.target, Vec3::Y),
+        Tonemapping::Reinhard,
+        MainCamera,
+        orbit_camera,
+    ));
 
-    // WASM: static camera (plugins disabled for debugging)
-    #[cfg(target_arch = "wasm32")]
-    {
-        commands.spawn((
-            Camera3d::default(),
-            Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-            Tonemapping::Reinhard,
-            MainCamera,
-        ));
-
-        // Directional light (sun) - inline since LightingPlugin is disabled
-        commands.spawn((
-            DirectionalLight {
-                illuminance: 10000.0,
-                shadows_enabled: true,
-                ..default()
-            },
-            Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, 0.5, 0.0)),
-        ));
-    }
-
-    // Native: camera with orbit controls
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let orbit_camera = OrbitCamera::default();
-        let camera_position = orbit_camera.calculate_position();
-        commands.spawn((
-            Camera3d::default(),
-            Transform::from_translation(camera_position).looking_at(orbit_camera.target, Vec3::Y),
-            Tonemapping::Reinhard,
-            MainCamera,
-            orbit_camera,
-        ));
-    }
-
-    // Sun lighting is handled by LightingPlugin (native only for now)
+    // Sun lighting is handled by LightingPlugin
 
     // Ground plane
     commands.spawn((
