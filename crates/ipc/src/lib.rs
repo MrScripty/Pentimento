@@ -82,6 +82,9 @@ pub enum UiToBevy {
     /// Settings changed
     UpdateSettings(AppSettings),
 
+    /// Lighting settings changed
+    UpdateLighting(LightingSettings),
+
     /// Node graph connection changed
     NodeGraphUpdate(NodeGraphState),
 }
@@ -261,6 +264,42 @@ impl Default for AppSettings {
             show_wireframe: false,
             show_grid: true,
             diffusion_server_url: None,
+        }
+    }
+}
+
+// ============================================================================
+// Lighting Types
+// ============================================================================
+
+/// Configurable lighting settings for the scene
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LightingSettings {
+    /// Sun direction as normalized vector (pointing toward light source)
+    pub sun_direction: [f32; 3],
+    /// Sun color as RGB (0.0-1.0)
+    pub sun_color: [f32; 3],
+    /// Sun intensity in lux (typical outdoor: 10000-100000)
+    pub sun_intensity: f32,
+    /// Ambient light color as RGB (0.0-1.0)
+    pub ambient_color: [f32; 3],
+    /// Ambient light intensity (0.0-1.0 typical range)
+    pub ambient_intensity: f32,
+}
+
+impl Default for LightingSettings {
+    fn default() -> Self {
+        Self {
+            // Default sun direction: from upper-left-front (normalized)
+            sun_direction: [-0.5, -0.7, -0.5],
+            // Warm white sun color
+            sun_color: [1.0, 0.98, 0.95],
+            // Bright outdoor illuminance
+            sun_intensity: 10000.0,
+            // Cool sky-blue ambient
+            ambient_color: [0.6, 0.7, 1.0],
+            // Moderate ambient fill
+            ambient_intensity: 500.0,
         }
     }
 }
