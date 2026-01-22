@@ -33,10 +33,21 @@
     .app {
         width: 100vw;
         height: 100vh;
+        /* Let events pass through to the canvas below */
         pointer-events: none;
     }
 
-    .app :global(*) {
+    /* Only enable pointer events on actual interactive elements, not wrapper divs */
+    .app :global(button),
+    .app :global(input),
+    .app :global(select),
+    .app :global(textarea),
+    .app :global(a),
+    .app :global(label),
+    .app :global([role="button"]),
+    .app :global(.interactive),
+    .app :global(.toolbar),
+    .app :global(.side-panel) {
         pointer-events: auto;
     }
 </style>
