@@ -43,14 +43,18 @@ pub struct CefLastWindowSize {
 
 /// Initialize the CEF webview and UI overlay
 pub fn setup_ui_cef(world: &mut World) {
+    // Use PHYSICAL resolution for sharp rendering on HiDPI displays
+    // Logical resolution would cause fuzzy/blurry UI when scaled up
     let (width, height) = {
         let mut window_query = world.query::<&Window>();
         let window = window_query.iter(world).next().expect("No window found");
-        let resolution = &window.resolution;
-        (resolution.width() as u32, resolution.height() as u32)
+        (
+            window.resolution.physical_width(),
+            window.resolution.physical_height(),
+        )
     };
 
-    info!("Setting up CEF UI composite system ({}x{})", width, height);
+    info!("Setting up CEF UI composite system ({}x{} physical)", width, height);
 
     // Get HTML content for the webview
     let html = UiAssets::get_html();
@@ -198,8 +202,9 @@ pub fn handle_cef_window_resize(
         return;
     };
 
-    let width = window.resolution.width() as u32;
-    let height = window.resolution.height() as u32;
+    // Use PHYSICAL resolution for sharp rendering on HiDPI displays
+    let width = window.resolution.physical_width();
+    let height = window.resolution.physical_height();
 
     if width == last_size.width && height == last_size.height {
         return;
@@ -209,7 +214,7 @@ pub fn handle_cef_window_resize(
         return;
     }
 
-    info!("Window resized to {}x{}, updating CEF webview", width, height);
+    info!("Window resized to {}x{} physical, updating CEF webview", width, height);
     last_size.width = width;
     last_size.height = height;
 
