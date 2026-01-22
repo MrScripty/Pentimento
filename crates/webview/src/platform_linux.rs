@@ -324,12 +324,11 @@ impl LinuxWebview {
     }
 
     /// Convert a Cairo surface to an RGBA image
-    /// Uses a large fixed size to capture the full WebKit render
+    /// Uses default dimensions from config
     fn cairo_surface_to_rgba(surface: &cairo::Surface) -> Result<image::RgbaImage, String> {
-        // Use a large surface to ensure we capture everything WebKit renders
-        // The actual content will be smaller, and Bevy will scale as needed
-        let width = 1920;
-        let height = 1080;
+        // Use display config dimensions as the render target size
+        let width = pentimento_config::DEFAULT_WIDTH as i32;
+        let height = pentimento_config::DEFAULT_HEIGHT as i32;
 
         let mut img_surface = ImageSurface::create(Format::ARgb32, width, height)
             .map_err(|e| format!("Failed to create image surface: {}", e))?;

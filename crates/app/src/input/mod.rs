@@ -6,6 +6,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::CursorMoved;
+use pentimento_config::DisplayConfig;
 use pentimento_ipc::{KeyboardEvent, Modifiers, MouseButton as IpcMouseButton, MouseEvent};
 use std::time::{Duration, Instant};
 
@@ -13,10 +14,6 @@ use crate::config::{CompositeMode, PentimentoConfig};
 use crate::render::{OverlayWebviewResource, WebviewResource};
 #[cfg(feature = "cef")]
 use crate::render::CefWebviewResource;
-
-/// WebKit render size (must match platform_linux.rs cairo_surface_to_rgba)
-const WEBVIEW_WIDTH: f32 = 1920.0;
-const WEBVIEW_HEIGHT: f32 = 1080.0;
 
 /// Minimum interval between mouse move events sent to webview (throttling)
 const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps max
@@ -64,9 +61,15 @@ impl Default for MouseState {
 }
 
 /// Scale window coordinates to webview coordinates
-fn scale_to_webview(window_x: f32, window_y: f32, window_width: f32, window_height: f32) -> (f32, f32) {
-    let scale_x = WEBVIEW_WIDTH / window_width;
-    let scale_y = WEBVIEW_HEIGHT / window_height;
+fn scale_to_webview(
+    window_x: f32,
+    window_y: f32,
+    window_width: f32,
+    window_height: f32,
+    display_config: &DisplayConfig,
+) -> (f32, f32) {
+    let scale_x = display_config.width_f32() / window_width;
+    let scale_y = display_config.height_f32() / window_height;
     (window_x * scale_x, window_y * scale_y)
 }
 
@@ -77,6 +80,7 @@ fn track_mouse_position(
     mut motion_events: MessageReader<MouseMotion>,
     mut cursor_events: MessageReader<CursorMoved>,
     config: Res<PentimentoConfig>,
+    display_config: Res<DisplayConfig>,
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
     #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
@@ -98,16 +102,16 @@ fn track_mouse_position(
     let mut had_cursor_event = false;
     for event in cursor_events.read() {
         // For CEF mode, the webview is resized to match window, so use 1:1 mapping
-        // For other modes, scale to the fixed 1920x1080 webview size
+        // For other modes, scale to the fixed webview size from display config
         #[cfg(feature = "cef")]
         let (webview_x, webview_y) = if config.composite_mode == CompositeMode::Cef {
             (event.position.x, event.position.y) // No scaling for CEF
         } else {
-            scale_to_webview(event.position.x, event.position.y, window_width, window_height)
+            scale_to_webview(event.position.x, event.position.y, window_width, window_height, &display_config)
         };
         #[cfg(not(feature = "cef"))]
         let (webview_x, webview_y) =
-            scale_to_webview(event.position.x, event.position.y, window_width, window_height);
+            scale_to_webview(event.position.x, event.position.y, window_width, window_height, &display_config);
 
         mouse_state.window_x = event.position.x;
         mouse_state.window_y = event.position.y;

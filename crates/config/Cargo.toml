@@ -1,0 +1,14 @@
+[package]
+name = "pentimento-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared configuration for Pentimento window, display, and application settings"
+
+[dependencies]
+serde = { workspace = true }
+bevy = { workspace = true, optional = true }
+
+[features]
+default = []
+bevy = ["dep:bevy"]

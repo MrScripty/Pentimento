@@ -10,6 +10,7 @@ webkit = []
 cef = ["dep:cef", "dep:urlencoding"]
 
 [dependencies]
+pentimento-config = { path = "../config" }
 pentimento-ipc = { path = "../ipc" }
 
 wry = { workspace = true }

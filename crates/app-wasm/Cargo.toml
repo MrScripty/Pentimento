@@ -9,6 +9,7 @@ description = "Pentimento Bevy app compiled to WASM for Tauri mode"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+pentimento-config = { path = "../config" }
 pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
 

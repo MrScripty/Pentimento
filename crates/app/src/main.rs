@@ -2,6 +2,14 @@
 
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
+use pentimento_config::{DisplayConfig, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+
+#[cfg(feature = "wireframe")]
+use bevy::render::{
+    render_resource::WgpuFeatures,
+    settings::{RenderCreation, WgpuSettings},
+    RenderPlugin as BevyRenderPlugin,
+};
 
 mod config;
 mod embedded_ui;
@@ -28,19 +36,50 @@ fn main() {
         gtk::init().expect("Failed to initialize GTK");
     }
 
+    // Display configuration - single source of truth for window size
+    let display_config = DisplayConfig::default();
+
     // Configure window based on compositing mode
     let window_config = Window {
         title: "Pentimento".into(),
-        resolution: WindowResolution::new(1920, 1080),
+        resolution: WindowResolution::new(DEFAULT_WIDTH, DEFAULT_HEIGHT),
         present_mode: bevy::window::PresentMode::AutoVsync,
         // Transparent window helps with overlay mode blending
         transparent: config.composite_mode == CompositeMode::Overlay,
         ..default()
     };
 
-    App::new()
-        .insert_resource(config)
-        .add_plugins(
+    let mut app = App::new();
+
+    app.insert_resource(config)
+        .insert_resource(display_config);
+
+    // Configure plugins with optional wireframe support
+    #[cfg(feature = "wireframe")]
+    {
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(window_config),
+                    ..default()
+                })
+                .set(bevy::log::LogPlugin {
+                    level: bevy::log::Level::INFO,
+                    ..default()
+                })
+                .set(BevyRenderPlugin {
+                    render_creation: RenderCreation::Automatic(WgpuSettings {
+                        features: WgpuFeatures::POLYGON_MODE_LINE,
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        );
+    }
+
+    #[cfg(not(feature = "wireframe"))]
+    {
+        app.add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(window_config),
@@ -50,8 +89,10 @@ fn main() {
                     level: bevy::log::Level::INFO,
                     ..default()
                 }),
-        )
-        .add_plugins(ScenePlugin)
+        );
+    }
+
+    app.add_plugins(ScenePlugin)
         .add_plugins(render::RenderPlugin)
         .add_plugins(input::InputPlugin)
         .run();

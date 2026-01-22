@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+pentimento-config = { path = "../config", features = ["bevy"] }
 pentimento-webview = { path = "../webview" }
 pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
@@ -33,11 +34,13 @@ rust-embed = { version = "8.7", features = ["debug-embed", "compression"] }
 gtk = "0.18"
 
 [features]
-default = ["wayland"]
+default = ["wayland", "wireframe", "selection"]
 wayland = []
 x11 = []
 cef = ["pentimento-webview/cef"]
 local-diffusion = ["pentimento-diffusion/local"]
+wireframe = ["pentimento-scene/wireframe"]
+selection = ["pentimento-scene/selection"]
 
 [[bin]]
 name = "pentimento"

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/app",
     "crates/app-wasm",
+    "crates/config",
     "crates/scene",
     "crates/webview",
     "crates/ipc",
