@@ -91,7 +91,7 @@ The `launcher.sh` script provides options for building and running:
 | `--capture` | Bevy (native) | x86_64 | WebKitGTK | Default, most compatible |
 | `--overlay` | Bevy (native) | x86_64 | WebKitGTK | Better performance on X11 |
 | `--cef` | Bevy (native) | x86_64 | Chromium | Chromium rendering engine |
-| `--tauri` | Tauri (native) | WASM | WebKitGTK | Cross-platform, simpler deployment |
+| `--tauri` | Tauri (native) | WASM | WebKitGTK | ⚠️ **Unmaintained** - see Known Issues |
 
 - `--capture` - Renders WebKitGTK offscreen and captures to texture (default)
   - Most compatible, works on all systems
@@ -102,10 +102,10 @@ The `launcher.sh` script provides options for building and running:
 - `--cef` - Renders CEF (Chromium) offscreen and captures to texture
   - Downloads CEF binaries on first run (~150MB)
   - Chromium rendering engine instead of WebKitGTK
-- `--tauri` - Tauri mode with Bevy running as WASM
+- `--tauri` - ⚠️ **Unmaintained** - Tauri mode with Bevy running as WASM
   - Tauri owns the window, Bevy renders via WebGL2 in a canvas
   - Svelte UI runs in the same webview as Bevy WASM
-  - Simpler architecture, cross-platform via Tauri
+  - **Not functional on Linux** due to WebKitGTK WebGL bugs (see Known Issues)
 
 **Examples:**
 ```bash
@@ -166,6 +166,23 @@ Inverts the architecture - Tauri owns the window:
 - Svelte UI runs in the same webview alongside Bevy
 - Communication via CustomEvents instead of native IPC
 - Uses `Tonemapping::Reinhard` for WebGL2 compatibility (TonyMcMapFace requires tonemapping_luts which needs zstd, unavailable in WASM)
+
+## Known Issues
+
+### Tauri/WASM Mode - Unmaintained
+
+**Status:** Tauri mode (`--tauri`) is **unmaintained** and not functional on Linux due to an upstream WebKitGTK bug.
+
+WebKitGTK 2.40+ has known WebGL2 instability issues that cause context loss and crashes. This is a WebKitGTK bug, not a Pentimento or Tauri issue. The WASM build works correctly in Chrome/Firefox - only WebKitGTK is affected.
+
+**Symptoms:**
+- Window turns solid grey after a few seconds
+- `WebLoaderStrategy::internallyFailedLoadTimerFired()` errors in console
+- WebGL context lost
+
+**Recommendation:** Use `--capture` (default) or `--cef` mode instead. These use native Bevy rendering and avoid the WebKitGTK WebGL issues entirely.
+
+The Tauri team is exploring alternatives including Chromium/CEF integration and Servo. See the [Tauri discussion](https://github.com/orgs/tauri-apps/discussions/8524) for updates. The Tauri mode code remains in the repository but will not receive further development until WebKitGTK WebGL is stable.
 
 ## License
 
