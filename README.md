@@ -40,9 +40,9 @@ sudo dnf install -y \
 
 Node.js 22+ is required for the Svelte UI build.
 
-### Tauri Mode Additional Requirements
+### WASM Mode Requirements (Electron/Tauri)
 
-For Tauri mode, you also need:
+For Electron or Tauri WASM modes, you also need:
 
 ```bash
 # Rust WASM target
@@ -51,7 +51,7 @@ rustup target add wasm32-unknown-unknown
 # wasm-bindgen CLI
 cargo install wasm-bindgen-cli
 
-# Tauri CLI
+# For Tauri mode only (unmaintained)
 cargo install tauri-cli
 ```
 
@@ -91,6 +91,7 @@ The `launcher.sh` script provides options for building and running:
 | `--capture` | Bevy (native) | x86_64 | WebKitGTK | Default, most compatible |
 | `--overlay` | Bevy (native) | x86_64 | WebKitGTK | Better performance on X11 |
 | `--cef` | Bevy (native) | x86_64 | Chromium | Chromium rendering engine |
+| `--electron` | Electron | WASM | Chromium | Stable WASM mode for Linux |
 | `--tauri` | Tauri (native) | WASM | WebKitGTK | ⚠️ **Unmaintained** - see Known Issues |
 
 - `--capture` - Renders WebKitGTK offscreen and captures to texture (default)
@@ -102,6 +103,10 @@ The `launcher.sh` script provides options for building and running:
 - `--cef` - Renders CEF (Chromium) offscreen and captures to texture
   - Downloads CEF binaries on first run (~150MB)
   - Chromium rendering engine instead of WebKitGTK
+- `--electron` - Electron mode with Bevy running as WASM
+  - Electron owns the window, Bevy renders via WebGL2 in a canvas
+  - Svelte UI runs in the same webview as Bevy WASM
+  - Uses Chromium (stable WebGL2, recommended for Linux WASM)
 - `--tauri` - ⚠️ **Unmaintained** - Tauri mode with Bevy running as WASM
   - Tauri owns the window, Bevy renders via WebGL2 in a canvas
   - Svelte UI runs in the same webview as Bevy WASM
@@ -118,7 +123,10 @@ The `launcher.sh` script provides options for building and running:
 # Run with CEF mode (downloads binaries on first run)
 ./launcher.sh --cef
 
-# Run with Tauri mode (Bevy as WASM)
+# Run with Electron mode (Bevy as WASM, recommended for WASM on Linux)
+./launcher.sh --electron
+
+# Run with Tauri mode (Bevy as WASM) - UNMAINTAINED
 ./launcher.sh --tauri
 
 # Release build with overlay mode
@@ -139,7 +147,8 @@ Pentimento/
 │   ├── webview/     # Offscreen webview management
 │   ├── ipc/         # Message protocol
 │   └── diffusion/   # Texture streaming
-├── src-tauri/       # Tauri desktop app
+├── src-tauri/       # Tauri desktop app (unmaintained)
+├── src-electron/    # Electron desktop app
 ├── ui/              # Svelte frontend
 └── dist/
     ├── ui/          # Built Svelte output
@@ -158,14 +167,18 @@ Bevy owns the native window and GPU rendering. Svelte runs in a webview:
 - **Overlay mode**: Transparent GTK window overlays the Bevy window, desktop compositor handles blending
 - **CEF mode**: Chromium (CEF) renders offscreen, framebuffer is captured and composited as a Bevy texture
 
-### Tauri Mode
+### WASM Modes (Electron, Tauri)
 
-Inverts the architecture - Tauri owns the window:
+Inverts the architecture - the desktop framework owns the window:
 
 - Bevy compiles to WASM and renders via WebGL2 in a canvas element
 - Svelte UI runs in the same webview alongside Bevy
 - Communication via CustomEvents instead of native IPC
 - Uses `Tonemapping::Reinhard` for WebGL2 compatibility (TonyMcMapFace requires tonemapping_luts which needs zstd, unavailable in WASM)
+
+**Electron mode** (`--electron`) is recommended for WASM on Linux as it uses Chromium with stable WebGL2 support.
+
+**Tauri mode** (`--tauri`) is unmaintained due to WebKitGTK WebGL bugs (see Known Issues).
 
 ## Known Issues
 
@@ -180,7 +193,7 @@ WebKitGTK 2.40+ has known WebGL2 instability issues that cause context loss and 
 - `WebLoaderStrategy::internallyFailedLoadTimerFired()` errors in console
 - WebGL context lost
 
-**Recommendation:** Use `--capture` (default) or `--cef` mode instead. These use native Bevy rendering and avoid the WebKitGTK WebGL issues entirely.
+**Recommendation:** Use `--electron` for WASM mode (uses Chromium), or `--capture`/`--cef` for native Bevy rendering.
 
 The Tauri team is exploring alternatives including Chromium/CEF integration and Servo. See the [Tauri discussion](https://github.com/orgs/tauri-apps/discussions/8524) for updates. The Tauri mode code remains in the repository but will not receive further development until WebKitGTK WebGL is stable.
 

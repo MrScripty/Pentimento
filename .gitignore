@@ -36,6 +36,9 @@ Thumbs.db
 src-electron/node_modules/
 src-electron/dist/
 
+# WASM files copied to UI public dir for dev server
+ui/public/wasm/
+
 # Claude Code
 .claude/
 
