@@ -48,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             COMPOSITE_MODE="tauri"
             shift
             ;;
+        --electron)
+            COMPOSITE_MODE="electron"
+            shift
+            ;;
         --help|-h)
             echo "Pentimento Launcher"
             echo ""
@@ -60,7 +64,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --capture   Use capture compositing mode (default)"
             echo "  --overlay   Use overlay compositing mode (transparent window)"
             echo "  --cef       Use CEF (Chromium) compositing mode"
-            echo "  --tauri     Use Tauri mode (Bevy WASM in webview)"
+            echo "  --tauri     Use Tauri mode (Bevy WASM in webview) - UNMAINTAINED"
+            echo "  --electron  Use Electron mode (Bevy WASM in Chromium)"
             echo "  --help, -h  Show this help message"
             echo ""
             echo "Compositing modes:"
@@ -70,8 +75,9 @@ while [[ $# -gt 0 ]]; do
             echo "            Better performance, may have issues on some systems"
             echo "  cef     - Renders CEF (Chromium) offscreen, captures to texture"
             echo "            Downloads CEF binaries on first run (~150MB)"
-            echo "  tauri   - Tauri owns window, Bevy runs as WASM, Svelte UI in same webview"
-            echo "            Experimental - uses WebGL2 for rendering"
+            echo "  tauri   - Tauri owns window, Bevy runs as WASM (UNMAINTAINED - WebKitGTK bug)"
+            echo "  electron - Electron owns window, Bevy runs as WASM, uses Chromium"
+            echo "             Stable WebGL2 rendering via Chromium"
             exit 0
             ;;
         *)
@@ -145,6 +151,93 @@ if [ "$COMPOSITE_MODE" = "tauri" ]; then
 
         # Tauri will start Vite via beforeDevCommand
         cargo tauri dev
+    fi
+    exit 0
+fi
+
+# Electron mode has a completely different build/run process
+if [ "$COMPOSITE_MODE" = "electron" ]; then
+    echo "Building Pentimento in Electron mode..."
+
+    # Build Svelte UI
+    echo "Building Svelte UI..."
+    if [ -d "ui" ]; then
+        cd ui
+        if [ ! -d "node_modules" ]; then
+            echo "Installing npm dependencies..."
+            npm install
+        fi
+        npm run build
+        cd ..
+    fi
+
+    # Build Bevy WASM
+    echo "Building Bevy WASM..."
+    if [ "$RELEASE" = true ]; then
+        cargo build --target wasm32-unknown-unknown --release -p pentimento-wasm
+        WASM_FILE="target/wasm32-unknown-unknown/release/pentimento_wasm.wasm"
+    else
+        cargo build --target wasm32-unknown-unknown -p pentimento-wasm
+        WASM_FILE="target/wasm32-unknown-unknown/debug/pentimento_wasm.wasm"
+    fi
+
+    # Run wasm-bindgen
+    echo "Running wasm-bindgen..."
+    mkdir -p dist/wasm
+    wasm-bindgen "$WASM_FILE" --target web --out-dir dist/wasm --out-name pentimento_wasm
+
+    # Copy WASM to UI directory
+    mkdir -p dist/ui/wasm
+    cp dist/wasm/* dist/ui/wasm/
+
+    # Also copy to Vite public dir for dev server
+    mkdir -p ui/public/wasm
+    cp dist/wasm/* ui/public/wasm/
+
+    # Setup Electron (install dependencies and download binary if needed)
+    echo "Setting up Electron..."
+    cd src-electron
+
+    # Check if Electron binary exists
+    ELECTRON_BIN="node_modules/electron/dist/electron"
+    if [ ! -f "$ELECTRON_BIN" ]; then
+        echo "Electron not found. Installing dependencies and downloading Electron binary..."
+        rm -rf node_modules package-lock.json
+        npm install
+
+        # Verify Electron was downloaded
+        if [ ! -f "$ELECTRON_BIN" ]; then
+            echo "Error: Failed to download Electron binary"
+            exit 1
+        fi
+        echo "Electron binary downloaded successfully"
+    fi
+    cd ..
+
+    if [ "$BUILD_ONLY" = true ]; then
+        echo "Build complete (Electron mode)"
+        echo "WASM output: dist/wasm/"
+        echo "UI output: dist/ui/"
+        echo "Electron: src-electron/"
+        exit 0
+    fi
+
+    # Run Electron app using the bundled binary
+    echo "Launching Pentimento (Electron mode)..."
+    # Unset ELECTRON_RUN_AS_NODE to ensure Electron runs as Electron, not Node.js
+    unset ELECTRON_RUN_AS_NODE
+    cd src-electron
+    if [ "$DEV_MODE" = true ]; then
+        # Dev mode: Start Vite server, then Electron
+        cd ../ui
+        npm run dev &
+        VITE_PID=$!
+        sleep 2
+        cd ../src-electron
+        VITE_DEV_SERVER_URL="http://localhost:5173" ./node_modules/electron/dist/electron .
+        kill $VITE_PID 2>/dev/null || true
+    else
+        ./node_modules/electron/dist/electron .
     fi
     exit 0
 fi
