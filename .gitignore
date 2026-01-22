@@ -32,6 +32,10 @@ Thumbs.db
 # Svelte
 .svelte-kit/
 
+# Electron binaries (downloaded on first run)
+src-electron/node_modules/
+src-electron/dist/
+
 # Claude Code
 .claude/
 
