@@ -13,7 +13,7 @@
             width: 100%;
             height: 100%;
         }
-        /* Bevy WASM canvas (Tauri mode only) */
+        /* Bevy WASM canvas (Tauri/Electron mode only) */
         #bevy-canvas {
             position: fixed;
             top: 0;
@@ -25,17 +25,19 @@
         }
         /* UI overlay */
         #app {
-            position: relative;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             z-index: 1;
             pointer-events: none;
         }
-        #app > * {
-            pointer-events: auto;
-        }
+        /* Only specific UI components should capture events */
     </style>
 </head>
 <body>
-    <!-- Bevy WASM canvas (only visible in Tauri mode) -->
+    <!-- Bevy WASM canvas (only visible in Tauri/Electron mode) -->
     <canvas id="bevy-canvas"></canvas>
 
     <!-- Svelte UI overlay -->
@@ -43,7 +45,7 @@
 
     <script type="module" src="/src/main.ts"></script>
 
-    <!-- Load Bevy WASM in Tauri mode -->
+    <!-- Load Bevy WASM in Tauri/Electron mode -->
     <script>
         function initBevyWasm() {
             console.log('Pentimento: Initializing Bevy WASM...');
@@ -59,10 +61,18 @@
             document.body.appendChild(script);
         }
 
-        function checkTauriAndInit() {
+        function isWasmMode() {
             // Check for Tauri globals (v1 uses __TAURI__, v2 uses __TAURI_INTERNALS__)
-            if ('__TAURI__' in window || '__TAURI_INTERNALS__' in window) {
-                console.log('Pentimento: Tauri mode detected');
+            // or Electron global (set by preload script)
+            return '__TAURI__' in window ||
+                   '__TAURI_INTERNALS__' in window ||
+                   '__ELECTRON__' in window;
+        }
+
+        function checkAndInit() {
+            if (isWasmMode()) {
+                var mode = '__ELECTRON__' in window ? 'Electron' : 'Tauri';
+                console.log('Pentimento: ' + mode + ' mode detected');
                 initBevyWasm();
                 return true;
             }
@@ -70,14 +80,14 @@
         }
 
         // Try immediately
-        if (!checkTauriAndInit()) {
+        if (!checkAndInit()) {
             // If not detected yet, try after DOM is ready
             document.addEventListener('DOMContentLoaded', function() {
-                if (!checkTauriAndInit()) {
-                    // Final attempt after a short delay (Tauri might inject globals late)
+                if (!checkAndInit()) {
+                    // Final attempt after a short delay (runtime might inject globals late)
                     setTimeout(function() {
-                        if (!checkTauriAndInit()) {
-                            console.log('Pentimento: Running in native mode (no Tauri detected)');
+                        if (!checkAndInit()) {
+                            console.log('Pentimento: Running in native mode (no WASM runtime detected)');
                         }
                     }, 100);
                 }

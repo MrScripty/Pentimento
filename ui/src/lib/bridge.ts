@@ -3,7 +3,7 @@
  *
  * Supports multiple modes:
  * - Native modes (capture/overlay/cef): Uses __PENTIMENTO_IPC__ injected by Rust
- * - Tauri mode: Uses CustomEvents for WASM <-> JS communication
+ * - WASM modes (Tauri/Electron): Uses CustomEvents for WASM <-> JS communication
  */
 
 import type { BevyToUi, UiToBevy, LayoutInfo } from './types';
@@ -17,26 +17,29 @@ declare global {
         __PENTIMENTO_RECEIVE__: (msg: string) => void;
         __TAURI__?: unknown;
         __TAURI_INTERNALS__?: unknown;
+        __ELECTRON__?: boolean;
     }
 }
 
 type MessageHandler = (msg: BevyToUi) => void;
 
-/** Check if running in Tauri mode (Bevy WASM) */
-function isTauriMode(): boolean {
-    return '__TAURI__' in window || '__TAURI_INTERNALS__' in window;
+/** Check if running in WASM mode (Tauri or Electron with Bevy WASM) */
+function isWasmMode(): boolean {
+    return '__TAURI__' in window ||
+           '__TAURI_INTERNALS__' in window ||
+           '__ELECTRON__' in window;
 }
 
 class BevyBridge {
     private handlers: Set<MessageHandler> = new Set();
     private layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-    private readonly tauriMode: boolean;
+    private readonly wasmMode: boolean;
 
     constructor() {
-        this.tauriMode = isTauriMode();
+        this.wasmMode = isWasmMode();
 
-        if (this.tauriMode) {
-            // Tauri mode: Listen for CustomEvents from Bevy WASM
+        if (this.wasmMode) {
+            // WASM mode (Tauri/Electron): Listen for CustomEvents from Bevy WASM
             window.addEventListener('pentimento:bevy-to-ui', ((event: CustomEvent) => {
                 try {
                     const msg: BevyToUi = JSON.parse(event.detail);
@@ -45,7 +48,8 @@ class BevyBridge {
                     console.error('Failed to parse Bevy WASM message:', e);
                 }
             }) as EventListener);
-            console.log('Pentimento bridge initialized in Tauri mode');
+            const runtime = '__ELECTRON__' in window ? 'Electron' : 'Tauri';
+            console.log(`Pentimento bridge initialized in ${runtime} WASM mode`);
         } else {
             // Native modes: Set up message receiver (called from Rust)
             window.__PENTIMENTO_RECEIVE__ = (msgJson: string) => {
@@ -70,8 +74,8 @@ class BevyBridge {
     }
 
     private send(msg: UiToBevy): void {
-        if (this.tauriMode) {
-            // Tauri mode: Send via CustomEvent to Bevy WASM
+        if (this.wasmMode) {
+            // WASM mode (Tauri/Electron): Send via CustomEvent to Bevy WASM
             window.dispatchEvent(new CustomEvent('pentimento:ui-to-bevy', {
                 detail: JSON.stringify(msg)
             }));
