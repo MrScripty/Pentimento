@@ -1,0 +1,4 @@
+[target.wasm32-unknown-unknown]
+# Increase WASM stack size from 1MB (default) to 8MB
+# Complex shader compilation via naga_oil needs more stack space
+rustflags = ["-C", "link-args=-z stack-size=8388608"]
