@@ -3,6 +3,7 @@
 //! This crate compiles Bevy to WebAssembly for running inside a Tauri webview.
 //! The 3D scene renders to a canvas element while Svelte UI overlays it.
 
+use bevy::input::mouse::{MouseButton, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use pentimento_ipc::{BevyToUi, CameraCommand, UiToBevy};
 use pentimento_scene::ScenePlugin;
@@ -48,6 +49,44 @@ pub struct TauriIpcPlugin;
 impl Plugin for TauriIpcPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, handle_ui_messages);
+        app.add_systems(Update, debug_mouse_input);
+    }
+}
+
+/// Debug system to log mouse input
+fn debug_mouse_input(
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    mut motion_events: MessageReader<MouseMotion>,
+    mut scroll_events: MessageReader<MouseWheel>,
+) {
+    // Log any button press
+    if mouse_button.just_pressed(MouseButton::Middle) {
+        info!("DEBUG: Middle mouse button PRESSED!");
+    }
+    if mouse_button.just_released(MouseButton::Middle) {
+        info!("DEBUG: Middle mouse button RELEASED!");
+    }
+    if mouse_button.just_pressed(MouseButton::Left) {
+        info!("DEBUG: Left mouse button PRESSED!");
+    }
+    if mouse_button.just_pressed(MouseButton::Right) {
+        info!("DEBUG: Right mouse button PRESSED!");
+    }
+
+    // Log held state periodically (only when motion happens)
+    let has_motion = !motion_events.is_empty();
+    if has_motion && mouse_button.pressed(MouseButton::Middle) {
+        info!("DEBUG: Middle mouse HELD while moving");
+    }
+
+    for event in motion_events.read() {
+        if event.delta.length() > 5.0 {
+            info!("DEBUG: Mouse motion: {:?}", event.delta);
+        }
+    }
+
+    for event in scroll_events.read() {
+        info!("DEBUG: Mouse scroll: {:?}", event);
     }
 }
 
