@@ -5,7 +5,16 @@ edition.workspace = true
 license.workspace = true
 description = "Shared 3D scene setup for Pentimento (native and WASM builds)"
 
+[features]
+default = []
+# Wireframe requires POLYGON_MODE_LINE GPU feature (native only, not WASM/WebGL)
+wireframe = []
+# Selection requires mesh picking which crashes WebKit/WASM
+selection = ["bevy/bevy_picking", "bevy/mesh_picking"]
+
 [dependencies]
+pentimento-ipc = { path = "../ipc" }
+
 bevy = { workspace = true, default-features = false, features = [
     "bevy_core_pipeline",
     "bevy_pbr",

@@ -6,11 +6,38 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
+mod camera;
+mod lighting;
+#[cfg(feature = "selection")]
+mod selection;
+#[cfg(feature = "wireframe")]
+mod wireframe;
+
+pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
+pub use lighting::{LightingPlugin, SceneLighting, SunLight};
+#[cfg(feature = "selection")]
+pub use selection::{Selectable, Selected, SelectionPlugin, SelectionState};
+#[cfg(feature = "wireframe")]
+pub use wireframe::{WireframeOverlayPlugin, WireframeSettings};
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
+        // DEBUG: Disable plugins on WASM to test if they cause the WebKit crash
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.add_plugins(CameraControllerPlugin);
+            app.add_plugins(LightingPlugin);
+        }
+
         app.add_systems(Startup, setup_scene);
+
+        #[cfg(feature = "selection")]
+        app.add_plugins(SelectionPlugin);
+
+        #[cfg(feature = "wireframe")]
+        app.add_plugins(WireframeOverlayPlugin);
     }
 }
 
@@ -22,21 +49,43 @@ fn setup_scene(
 ) {
     // Camera with WebGL2-compatible tonemapping
     // TonyMcMapFace requires tonemapping_luts which needs zstd (not available in WASM)
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Tonemapping::Reinhard,
-    ));
 
-    // Directional light (sun)
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 10000.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, 0.5, 0.0)),
-    ));
+    // WASM: static camera (plugins disabled for debugging)
+    #[cfg(target_arch = "wasm32")]
+    {
+        commands.spawn((
+            Camera3d::default(),
+            Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            Tonemapping::Reinhard,
+            MainCamera,
+        ));
+
+        // Directional light (sun) - inline since LightingPlugin is disabled
+        commands.spawn((
+            DirectionalLight {
+                illuminance: 10000.0,
+                shadows_enabled: true,
+                ..default()
+            },
+            Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, 0.5, 0.0)),
+        ));
+    }
+
+    // Native: camera with orbit controls
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let orbit_camera = OrbitCamera::default();
+        let camera_position = orbit_camera.calculate_position();
+        commands.spawn((
+            Camera3d::default(),
+            Transform::from_translation(camera_position).looking_at(orbit_camera.target, Vec3::Y),
+            Tonemapping::Reinhard,
+            MainCamera,
+            orbit_camera,
+        ));
+    }
+
+    // Sun lighting is handled by LightingPlugin (native only for now)
 
     // Ground plane
     commands.spawn((
@@ -49,7 +98,8 @@ fn setup_scene(
     ));
 
     // Test cube
-    commands.spawn((
+    #[allow(unused_variables)]
+    let cube = commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.8, 0.2, 0.2),
@@ -58,10 +108,14 @@ fn setup_scene(
             ..default()
         })),
         Transform::from_xyz(0.0, 0.5, 0.0),
-    ));
+        Name::new("Cube"),
+    )).id();
+    #[cfg(feature = "selection")]
+    commands.entity(cube).insert(Selectable { id: "cube".to_string() });
 
     // Test sphere
-    commands.spawn((
+    #[allow(unused_variables)]
+    let sphere = commands.spawn((
         Mesh3d(meshes.add(Sphere::new(0.5).mesh().uv(32, 18))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.2, 0.6, 0.8),
@@ -70,10 +124,14 @@ fn setup_scene(
             ..default()
         })),
         Transform::from_xyz(2.0, 0.5, 0.0),
-    ));
+        Name::new("Sphere"),
+    )).id();
+    #[cfg(feature = "selection")]
+    commands.entity(sphere).insert(Selectable { id: "sphere".to_string() });
 
     // Test torus
-    commands.spawn((
+    #[allow(unused_variables)]
+    let torus = commands.spawn((
         Mesh3d(meshes.add(Torus::new(0.3, 0.5))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.2, 0.8, 0.2),
@@ -82,7 +140,10 @@ fn setup_scene(
             ..default()
         })),
         Transform::from_xyz(-2.0, 0.5, 0.0),
-    ));
+        Name::new("Torus"),
+    )).id();
+    #[cfg(feature = "selection")]
+    commands.entity(torus).insert(Selectable { id: "torus".to_string() });
 
     info!("Scene initialized with test objects");
 }
