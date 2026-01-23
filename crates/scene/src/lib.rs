@@ -9,12 +9,16 @@ use bevy::prelude::*;
 mod camera;
 mod lighting;
 #[cfg(feature = "selection")]
+mod outline;
+#[cfg(feature = "selection")]
 mod selection;
 #[cfg(feature = "wireframe")]
 mod wireframe;
 
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
+#[cfg(feature = "selection")]
+pub use outline::OutlinePlugin;
 #[cfg(feature = "selection")]
 pub use selection::{Selectable, Selected, SelectionPlugin, SelectionState};
 #[cfg(feature = "wireframe")]
@@ -30,7 +34,10 @@ impl Plugin for ScenePlugin {
         app.add_systems(Startup, setup_scene);
 
         #[cfg(feature = "selection")]
-        app.add_plugins(SelectionPlugin);
+        {
+            app.add_plugins(SelectionPlugin);
+            app.add_plugins(OutlinePlugin);
+        }
 
         #[cfg(feature = "wireframe")]
         app.add_plugins(WireframeOverlayPlugin);
