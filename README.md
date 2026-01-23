@@ -19,7 +19,7 @@ just run      # Run release
 |------|--------------|-----------|--------|
 | `--cef` | Native Bevy + offscreen Chromium | CEF | Recommended |
 | `--electron` | WASM Bevy in Electron | Chromium | Recommended for WASM |
-| `--overlay` | Native Bevy + GTK overlay | WebKitGTK | X11 only |
+| `--overlay` | Native Bevy + GTK overlay | WebKitGTK | Implementation inconsistent accross platforms |
 | `--capture` | Native Bevy + offscreen WebKitGTK | WebKitGTK | Unmaintained |
 | `--tauri` | WASM Bevy in Tauri | WebKitGTK | Unmaintained |
 

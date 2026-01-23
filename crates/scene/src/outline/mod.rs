@@ -35,6 +35,8 @@ use id_material::entity_to_color;
 pub struct OutlineRenderTargets {
     /// Texture where entity IDs are rendered
     pub id_buffer: Handle<Image>,
+    /// Texture where edge detection outputs the outline (composited via UI)
+    pub outline_buffer: Handle<Image>,
 }
 
 /// Marker for the ID buffer camera
@@ -56,7 +58,7 @@ impl Plugin for OutlinePlugin {
         app.init_resource::<OutlineSettings>()
             .add_plugins(MaterialPlugin::<EntityIdMaterial>::default())
             .add_plugins(EdgeDetectionPlugin)
-            .add_systems(Startup, setup_outline_system)
+            .add_systems(Startup, (setup_outline_system, setup_outline_overlay).chain())
             .add_systems(
                 Update,
                 (
@@ -87,11 +89,15 @@ fn setup_outline_system(
     let width = window.resolution.physical_width().max(1);
     let height = window.resolution.physical_height().max(1);
 
-    // Create ID buffer render target
+    // Create ID buffer render target (entity IDs as colors)
     let id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
+
+    // Create outline buffer render target (edge detection output, composited via UI)
+    let outline_buffer = create_render_texture(width, height, TextureFormat::Rgba8UnormSrgb, &mut images);
 
     commands.insert_resource(OutlineRenderTargets {
         id_buffer: id_buffer.clone(),
+        outline_buffer: outline_buffer.clone(),
     });
 
     // Get main camera transform for ID camera
@@ -115,6 +121,32 @@ fn setup_outline_system(
     ));
 
     info!("Surface ID outline system initialized ({}x{})", width, height);
+}
+
+/// Set up the UI overlay that displays the outline texture
+fn setup_outline_overlay(mut commands: Commands, targets: Res<OutlineRenderTargets>) {
+    // Spawn a fullscreen ImageNode that displays the outline buffer
+    // This composites the outline over the 3D scene via the UI layer
+    commands.spawn((
+        ImageNode {
+            image: targets.outline_buffer.clone(),
+            ..default()
+        },
+        Node {
+            width: Val::Vw(100.0),
+            height: Val::Vh(100.0),
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        // High ZIndex to render above the 3D scene but below webview
+        ZIndex(i32::MAX - 100),
+        Pickable::IGNORE,
+        OutlineOverlay,
+    ));
+
+    info!("Outline UI overlay initialized");
 }
 
 /// Create a render target texture
@@ -246,6 +278,7 @@ fn handle_window_resize(
     mut images: ResMut<Assets<Image>>,
     targets: Option<ResMut<OutlineRenderTargets>>,
     id_camera: Query<Entity, With<IdBufferCamera>>,
+    mut overlay_query: Query<&mut ImageNode, With<OutlineOverlay>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -268,15 +301,28 @@ fn handle_window_resize(
     // Create new ID buffer
     let new_id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
 
+    // Create new outline buffer
+    let new_outline_buffer =
+        create_render_texture(width, height, TextureFormat::Rgba8UnormSrgb, &mut images);
+
     // Update camera target component
     if let Ok(camera_entity) = id_camera.single() {
-        commands.entity(camera_entity).insert(RenderTarget::Image(new_id_buffer.clone().into()));
+        commands
+            .entity(camera_entity)
+            .insert(RenderTarget::Image(new_id_buffer.clone().into()));
     }
 
-    // Remove old texture
+    // Update UI overlay image
+    if let Ok(mut image_node) = overlay_query.single_mut() {
+        image_node.image = new_outline_buffer.clone();
+    }
+
+    // Remove old textures
     images.remove(&targets.id_buffer);
+    images.remove(&targets.outline_buffer);
 
     targets.id_buffer = new_id_buffer;
+    targets.outline_buffer = new_outline_buffer;
 
     info!("Resized outline render targets to {}x{}", width, height);
 }

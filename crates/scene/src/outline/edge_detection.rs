@@ -6,7 +6,6 @@
 use bevy::asset::embedded_asset;
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::FullscreenShader;
-use bevy::image::BevyDefault;
 use bevy::prelude::*;
 use bevy::render::{
     extract_resource::ExtractResourcePlugin,
@@ -17,15 +16,14 @@ use bevy::render::{
     render_resource::{
         binding_types::{sampler, texture_2d, uniform_buffer},
         BindGroupEntries, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
-        Buffer, BufferInitDescriptor, BufferUsages,
-        CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, MultisampleState,
-        Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
-        RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-        SamplerDescriptor, ShaderStages, ShaderType, TextureFormat, TextureSampleType,
+        Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
+        ColorWrites, FragmentState, MultisampleState, Operations, PipelineCache, PrimitiveState,
+        RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
+        SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType, TextureFormat,
+        TextureSampleType,
     },
     renderer::{RenderContext, RenderDevice},
     texture::GpuImage,
-    view::ViewTarget,
     Render, RenderApp, RenderSystems,
 };
 
@@ -91,13 +89,14 @@ pub struct EdgeDetectionUniform {
 pub struct EdgeDetectionNode;
 
 impl ViewNode for EdgeDetectionNode {
-    type ViewQuery = &'static ViewTarget;
+    // We don't actually need the ViewTarget anymore since we render to our own texture
+    type ViewQuery = ();
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        view_target: &ViewTarget,
+        _view_query: (),
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let Some(settings) = world.get_resource::<OutlineSettings>() else {
@@ -119,9 +118,7 @@ impl ViewNode for EdgeDetectionNode {
             return Ok(());
         };
 
-        let post_process = view_target.post_process_write();
-
-        // Create bind group with the source texture (scene) available
+        // Create bind group - only ID buffer needed
         let bind_group = render_context.render_device().create_bind_group(
             "edge_detection_bind_group",
             &pipeline.layout,
@@ -129,16 +126,17 @@ impl ViewNode for EdgeDetectionNode {
                 prepared.uniform_buffer.as_entire_binding(),
                 &prepared.id_texture_view,
                 &pipeline.sampler,
-                post_process.source,
-                &pipeline.sampler,
             )),
         );
 
+        // Render to our own outline_buffer texture, NOT to the ViewTarget
+        // This avoids the ping-pong feedback loop entirely
         let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("edge_detection_pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: post_process.destination,
+                view: &prepared.outline_texture_view,
                 resolve_target: None,
+                // Clear to transparent black each frame
                 ops: Operations::default(),
                 depth_slice: None,
             })],
@@ -168,14 +166,12 @@ impl FromWorld for EdgeDetectionPipeline {
         let render_device = world.resource::<RenderDevice>();
 
         // Create bind group layout entries
-        // Bindings: uniform, id_texture, id_sampler, scene_texture, scene_sampler
+        // Bindings: uniform, id_texture, id_sampler (no scene texture - we use alpha blending)
         let layout_entries = BindGroupLayoutEntries::sequential(
             ShaderStages::FRAGMENT,
             (
                 uniform_buffer::<EdgeDetectionUniform>(false),
                 texture_2d(TextureSampleType::Float { filterable: true }),  // ID buffer
-                sampler(SamplerBindingType::Filtering),
-                texture_2d(TextureSampleType::Float { filterable: true }),  // Scene
                 sampler(SamplerBindingType::Filtering),
             ),
         );
@@ -212,7 +208,9 @@ impl FromWorld for EdgeDetectionPipeline {
                         shader_defs: vec![],
                         entry_point: Some("fragment".into()),
                         targets: vec![Some(ColorTargetState {
-                            format: TextureFormat::bevy_default(),
+                            // Match the outline_buffer format
+                            format: TextureFormat::Rgba8UnormSrgb,
+                            // No blending - we clear and draw fresh each frame
                             blend: None,
                             write_mask: ColorWrites::ALL,
                         })],
@@ -237,6 +235,7 @@ impl FromWorld for EdgeDetectionPipeline {
 pub struct EdgeDetectionPrepared {
     pub uniform_buffer: Buffer,
     pub id_texture_view: bevy::render::render_resource::TextureView,
+    pub outline_texture_view: bevy::render::render_resource::TextureView,
 }
 
 /// Prepare the edge detection data each frame
@@ -256,6 +255,11 @@ fn prepare_edge_detection(
 
     // Get the GPU texture for the ID buffer
     let Some(id_texture) = gpu_images.get(&targets.id_buffer) else {
+        return;
+    };
+
+    // Get the GPU texture for the outline buffer
+    let Some(outline_texture) = gpu_images.get(&targets.outline_buffer) else {
         return;
     };
 
@@ -286,5 +290,6 @@ fn prepare_edge_detection(
     commands.insert_resource(EdgeDetectionPrepared {
         uniform_buffer,
         id_texture_view: id_texture.texture_view.clone(),
+        outline_texture_view: outline_texture.texture_view.clone(),
     });
 }
