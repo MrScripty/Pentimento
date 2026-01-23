@@ -313,7 +313,10 @@ impl CefWebview {
     }
 
     /// Capture the framebuffer if the UI has changed since last capture.
-    pub fn capture_if_dirty(&mut self) -> Option<image::RgbaImage> {
+    ///
+    /// Returns raw BGRA pixel data with dimensions (data, width, height).
+    /// Use with `TextureFormat::Bgra8UnormSrgb` for zero-conversion texture upload.
+    pub fn capture_if_dirty(&mut self) -> Option<(Vec<u8>, u32, u32)> {
         if !self.is_ready() {
             return None;
         }
@@ -331,7 +334,9 @@ impl CefWebview {
     }
 
     /// Force a capture regardless of dirty state
-    pub fn capture(&mut self) -> Option<image::RgbaImage> {
+    ///
+    /// Returns raw BGRA pixel data with dimensions (data, width, height).
+    pub fn capture(&mut self) -> Option<(Vec<u8>, u32, u32)> {
         self.dirty.store(false, Ordering::SeqCst);
         self.inner.capture()
     }

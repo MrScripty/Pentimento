@@ -37,12 +37,12 @@ use cef::{
     KeyEventType, LogSeverity, MouseButtonType, PaintElementType, Rect, RenderHandler, Settings,
     WindowInfo, WrapApp, WrapClient, WrapDisplayHandler, WrapRenderHandler,
 };
-use image::RgbaImage;
 use pentimento_ipc::{KeyboardEvent, MouseButton, MouseEvent, UiToBevy};
 use std::ffi::c_int;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// Global flag indicating whether CEF has been initialized
@@ -63,7 +63,10 @@ pub enum CefState {
 
 /// Shared framebuffer state between RenderHandler and LinuxCefWebview
 struct SharedState {
-    framebuffer: Mutex<Option<RgbaImage>>,
+    /// Raw BGRA pixel data from CEF (no conversion needed)
+    framebuffer: Mutex<Option<Vec<u8>>>,
+    /// Dimensions of the framebuffer
+    framebuffer_size: Mutex<(u32, u32)>,
     dirty: Arc<AtomicBool>,
     size: Mutex<(u32, u32)>,
     /// Channel for sending UI messages to Bevy (for IPC via console messages)
@@ -143,24 +146,34 @@ wrap_render_handler! {
             // Safety: CEF guarantees the buffer is valid for the duration of on_paint
             let bgra = unsafe { std::slice::from_raw_parts(buffer, buffer_size) };
 
-            // Convert BGRA to RGBA
-            let mut rgba = RgbaImage::new(width, height);
-            for (i, pixel) in rgba.pixels_mut().enumerate() {
-                let offset = i * 4;
-                // BGRA -> RGBA
-                *pixel = image::Rgba([
-                    bgra[offset + 2], // R from B
-                    bgra[offset + 1], // G from G
-                    bgra[offset],     // B from R
-                    bgra[offset + 3], // A from A
-                ]);
-            }
+            // PERFORMANCE INSTRUMENTATION: Time the buffer copy (no conversion needed!)
+            let copy_start = Instant::now();
 
-            // Store in shared framebuffer
-            *self.handler.shared.framebuffer.lock().unwrap() = Some(rgba);
+            // Just copy the BGRA buffer directly - GPU will interpret it as BGRA
+            // This avoids the expensive per-pixel BGRA→RGBA conversion
+            let buffer_copy = bgra.to_vec();
+
+            let copy_elapsed = copy_start.elapsed();
+
+            // Store the raw BGRA buffer
+            let lock_start = Instant::now();
+            *self.handler.shared.framebuffer.lock().unwrap() = Some(buffer_copy);
+            *self.handler.shared.framebuffer_size.lock().unwrap() = (width, height);
+            let lock_elapsed = lock_start.elapsed();
+
             self.handler.shared.dirty.store(true, Ordering::SeqCst);
 
-            tracing::trace!("CEF on_paint: {}x{}", width, height);
+            // Log performance metrics
+            let total_elapsed = copy_start.elapsed();
+            if total_elapsed.as_millis() > 2 {
+                tracing::warn!(
+                    "CEF on_paint PERF: {}x{} - copy: {:.2}ms, lock+store: {:.2}ms, total: {:.2}ms",
+                    width, height,
+                    copy_elapsed.as_secs_f64() * 1000.0,
+                    lock_elapsed.as_secs_f64() * 1000.0,
+                    total_elapsed.as_secs_f64() * 1000.0
+                );
+            }
         }
     }
 }
@@ -414,6 +427,7 @@ impl LinuxCefWebview {
         // Create shared state for communication between handlers and this struct
         let shared = Arc::new(SharedState {
             framebuffer: Mutex::new(None),
+            framebuffer_size: Mutex::new((0, 0)),
             dirty,
             size: Mutex::new(size),
             from_ui_tx: from_ui_tx.clone(),
@@ -473,9 +487,10 @@ impl LinuxCefWebview {
         // Process CEF message loop work
         cef::do_message_loop_work();
 
-        // Check if we've received our first paint
+        // Check if we've received our first paint (framebuffer has data)
         if self.state == CefState::Loading {
-            if self.shared.framebuffer.lock().unwrap().is_some() {
+            let has_framebuffer = self.shared.framebuffer.lock().unwrap().is_some();
+            if has_framebuffer {
                 self.state = CefState::Ready;
                 tracing::info!("CEF webview ready");
 
@@ -520,9 +535,25 @@ impl LinuxCefWebview {
         self.state == CefState::Ready
     }
 
-    /// Capture the current framebuffer
-    pub fn capture(&mut self) -> Option<RgbaImage> {
-        self.shared.framebuffer.lock().unwrap().clone()
+    /// Capture the current framebuffer as raw BGRA bytes
+    ///
+    /// Returns the raw BGRA pixel data along with dimensions (width, height).
+    /// The data is in BGRA format as provided by CEF - no conversion is performed.
+    pub fn capture(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+        // PERFORMANCE INSTRUMENTATION: Time the framebuffer clone
+        let start = Instant::now();
+        let buffer = self.shared.framebuffer.lock().unwrap().clone()?;
+        let (width, height) = *self.shared.framebuffer_size.lock().unwrap();
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 1 {
+            tracing::warn!(
+                "CEF capture PERF: clone {}x{} ({:.2}MB) took {:.2}ms",
+                width, height,
+                buffer.len() as f64 / 1_000_000.0,
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+        Some((buffer, width, height))
     }
 
     /// Resize the webview

@@ -9,6 +9,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use pentimento_webview::CefWebview;
+use std::time::Instant;
 
 use crate::embedded_ui::UiAssets;
 
@@ -72,6 +73,7 @@ pub fn setup_ui_cef(world: &mut World) {
     }
 
     // Create an initial transparent texture for the UI overlay
+    // Use BGRA format to match CEF's native output - avoids expensive CPU conversion
     let mut image = Image::new_fill(
         Extent3d {
             width,
@@ -79,8 +81,8 @@ pub fn setup_ui_cef(world: &mut World) {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0, 0, 0, 0], // Transparent
-        TextureFormat::Rgba8UnormSrgb,
+        &[0, 0, 0, 0], // Transparent (BGRA)
+        TextureFormat::Bgra8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
 
@@ -143,21 +145,25 @@ pub fn update_cef_ui_texture(
         status.initialized = true;
     }
 
-    // Try to capture if dirty
-    if let Some(captured) = webview_res.webview.capture_if_dirty() {
-        let cap_width = captured.width();
-        let cap_height = captured.height();
+    // PERFORMANCE INSTRUMENTATION: Time the entire capture-to-texture pipeline
+    let capture_start = Instant::now();
 
-        let non_transparent = captured.pixels().filter(|p| p.0[3] > 0).count();
+    // Try to capture if dirty - returns raw BGRA bytes with dimensions
+    if let Some((bgra_data, cap_width, cap_height)) = webview_res.webview.capture_if_dirty() {
+        let capture_elapsed = capture_start.elapsed();
+
+        // Count non-transparent pixels (alpha is at offset 3 in BGRA)
+        let non_transparent = bgra_data.chunks(4).filter(|p| p[3] > 0).count();
 
         if !status.first_capture_done {
             info!(
-                "First CEF capture! {}x{}, non-transparent pixels: {}",
+                "First CEF capture! {}x{}, non-transparent pixels: {}, format: BGRA (no conversion)",
                 cap_width, cap_height, non_transparent
             );
             status.first_capture_done = true;
         }
 
+        let texture_start = Instant::now();
         if let Some(image) = images.get_mut(&ui_texture.handle) {
             if image.width() != cap_width || image.height() != cap_height {
                 info!(
@@ -174,7 +180,19 @@ pub fn update_cef_ui_texture(
                 });
             }
 
-            image.data = Some(captured.into_raw());
+            // Direct upload of BGRA data - no conversion needed!
+            image.data = Some(bgra_data);
+        }
+        let texture_elapsed = texture_start.elapsed();
+
+        let total_elapsed = capture_start.elapsed();
+        if total_elapsed.as_millis() > 2 {
+            warn!(
+                "CEF texture update PERF: capture: {:.2}ms, texture_update: {:.2}ms, total: {:.2}ms",
+                capture_elapsed.as_secs_f64() * 1000.0,
+                texture_elapsed.as_secs_f64() * 1000.0,
+                total_elapsed.as_secs_f64() * 1000.0
+            );
         }
     }
 }
