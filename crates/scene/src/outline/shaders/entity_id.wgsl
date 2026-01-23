@@ -7,7 +7,9 @@ struct EntityIdUniform {
     entity_color: vec4<f32>,
 }
 
-@group(2) @binding(0)
+// Material bind group is @group(3) in Bevy 0.18
+// Use the MATERIAL_BIND_GROUP placeholder which Bevy replaces at compile time
+@group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> entity_id: EntityIdUniform;
 
 @fragment

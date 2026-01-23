@@ -16,7 +16,8 @@ use bevy::render::{
     },
     render_resource::{
         binding_types::{sampler, texture_2d, uniform_buffer},
-        BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
+        BindGroupEntries, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
+        Buffer, BufferInitDescriptor, BufferUsages,
         CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, MultisampleState,
         Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
         RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
@@ -107,7 +108,7 @@ impl ViewNode for EdgeDetectionNode {
             return Ok(());
         }
 
-        let Some(bind_group) = world.get_resource::<EdgeDetectionBindGroup>() else {
+        let Some(prepared) = world.get_resource::<EdgeDetectionPrepared>() else {
             return Ok(());
         };
 
@@ -119,6 +120,19 @@ impl ViewNode for EdgeDetectionNode {
         };
 
         let post_process = view_target.post_process_write();
+
+        // Create bind group with the source texture (scene) available
+        let bind_group = render_context.render_device().create_bind_group(
+            "edge_detection_bind_group",
+            &pipeline.layout,
+            &BindGroupEntries::sequential((
+                prepared.uniform_buffer.as_entire_binding(),
+                &prepared.id_texture_view,
+                &pipeline.sampler,
+                post_process.source,
+                &pipeline.sampler,
+            )),
+        );
 
         let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("edge_detection_pass"),
@@ -134,7 +148,7 @@ impl ViewNode for EdgeDetectionNode {
         });
 
         render_pass.set_render_pipeline(render_pipeline);
-        render_pass.set_bind_group(0, &bind_group.0, &[]);
+        render_pass.set_bind_group(0, &bind_group, &[]);
         render_pass.draw(0..3, 0..1);
 
         Ok(())
@@ -154,11 +168,14 @@ impl FromWorld for EdgeDetectionPipeline {
         let render_device = world.resource::<RenderDevice>();
 
         // Create bind group layout entries
+        // Bindings: uniform, id_texture, id_sampler, scene_texture, scene_sampler
         let layout_entries = BindGroupLayoutEntries::sequential(
             ShaderStages::FRAGMENT,
             (
                 uniform_buffer::<EdgeDetectionUniform>(false),
-                texture_2d(TextureSampleType::Float { filterable: true }),
+                texture_2d(TextureSampleType::Float { filterable: true }),  // ID buffer
+                sampler(SamplerBindingType::Filtering),
+                texture_2d(TextureSampleType::Float { filterable: true }),  // Scene
                 sampler(SamplerBindingType::Filtering),
             ),
         );
@@ -215,15 +232,17 @@ impl FromWorld for EdgeDetectionPipeline {
     }
 }
 
-/// Bind group for edge detection
+/// Prepared data for edge detection (created during Prepare phase)
 #[derive(Resource)]
-pub struct EdgeDetectionBindGroup(pub BindGroup);
+pub struct EdgeDetectionPrepared {
+    pub uniform_buffer: Buffer,
+    pub id_texture_view: bevy::render::render_resource::TextureView,
+}
 
-/// Prepare the edge detection bind group each frame
+/// Prepare the edge detection data each frame
 fn prepare_edge_detection(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
-    pipeline: Res<EdgeDetectionPipeline>,
     settings: Option<Res<OutlineSettings>>,
     targets: Option<Res<OutlineRenderTargets>>,
     gpu_images: Res<RenderAssets<GpuImage>>,
@@ -258,21 +277,14 @@ fn prepare_edge_detection(
     // Create uniform buffer using encase for proper alignment
     let mut buffer = bevy::render::render_resource::encase::UniformBuffer::new(Vec::new());
     buffer.write(&uniform).unwrap();
-    let uniform_buffer = render_device.create_buffer_with_data(&bevy::render::render_resource::BufferInitDescriptor {
+    let uniform_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
         label: Some("edge_detection_uniform_buffer"),
         contents: buffer.as_ref(),
-        usage: bevy::render::render_resource::BufferUsages::UNIFORM,
+        usage: BufferUsages::UNIFORM,
     });
 
-    let bind_group = render_device.create_bind_group(
-        "edge_detection_bind_group",
-        &pipeline.layout,
-        &BindGroupEntries::sequential((
-            uniform_buffer.as_entire_binding(),
-            &id_texture.texture_view,
-            &pipeline.sampler,
-        )),
-    );
-
-    commands.insert_resource(EdgeDetectionBindGroup(bind_group));
+    commands.insert_resource(EdgeDetectionPrepared {
+        uniform_buffer,
+        id_texture_view: id_texture.texture_view.clone(),
+    });
 }

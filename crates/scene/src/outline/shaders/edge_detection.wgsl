@@ -1,5 +1,6 @@
 // Edge detection shader for Surface ID outline rendering
 // Detects boundaries between different entity IDs and outputs orange outline
+// Composites outline over the scene
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
@@ -19,14 +20,23 @@ var id_texture: texture_2d<f32>;
 @group(0) @binding(2)
 var id_sampler: sampler;
 
+@group(0) @binding(3)
+var scene_texture: texture_2d<f32>;
+
+@group(0) @binding(4)
+var scene_sampler: sampler;
+
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    // Sample the scene first - we'll composite the outline over it
+    let scene_color = textureSample(scene_texture, scene_sampler, in.uv);
+
     let texel_size = 1.0 / uniforms.texture_size;
     let center_id = textureSample(id_texture, id_sampler, in.uv);
 
-    // Early exit: if center pixel has no ID (black/transparent), no outline
+    // Early exit: if center pixel has no ID (black/transparent), return scene
     if center_id.a < 0.5 {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return scene_color;
     }
 
     // Sample neighbors based on thickness
@@ -57,7 +67,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if is_edge {
         return uniforms.outline_color;
     } else {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        // Not an edge - return the scene color
+        return scene_color;
     }
 }
 
