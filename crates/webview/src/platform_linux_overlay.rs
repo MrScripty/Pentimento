@@ -61,6 +61,11 @@ impl LinuxOverlayWebview {
         window.set_decorated(false);
         window.set_app_paintable(true);
         window.set_default_size(size.0 as i32, size.1 as i32);
+        // Prevent the overlay from stealing focus (avoids winit XIM unfocus errors).
+        window.set_accept_focus(false);
+        window.set_focus_on_map(false);
+        window.set_skip_taskbar_hint(true);
+        window.set_skip_pager_hint(true);
 
         // Enable RGBA visual for transparency
         if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
