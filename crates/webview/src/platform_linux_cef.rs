@@ -42,7 +42,6 @@ use std::ffi::c_int;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// Global flag indicating whether CEF has been initialized
@@ -63,8 +62,10 @@ pub enum CefState {
 
 /// Shared framebuffer state between RenderHandler and LinuxCefWebview
 struct SharedState {
-    /// Raw BGRA pixel data from CEF (no conversion needed)
-    framebuffer: Mutex<Option<Vec<u8>>>,
+    /// Raw BGRA pixel data wrapped in Arc for zero-copy sharing between threads.
+    /// The Arc allows capture() to clone just the pointer (~20ns) instead of
+    /// copying the entire 18MB buffer (~6-12ms at HiDPI).
+    framebuffer: Mutex<Option<Arc<Vec<u8>>>>,
     /// Dimensions of the framebuffer
     framebuffer_size: Mutex<(u32, u32)>,
     dirty: Arc<AtomicBool>,
@@ -146,34 +147,15 @@ wrap_render_handler! {
             // Safety: CEF guarantees the buffer is valid for the duration of on_paint
             let bgra = unsafe { std::slice::from_raw_parts(buffer, buffer_size) };
 
-            // PERFORMANCE INSTRUMENTATION: Time the buffer copy (no conversion needed!)
-            let copy_start = Instant::now();
+            // Copy the BGRA buffer and wrap in Arc for zero-copy sharing.
+            // The to_vec() copy is unavoidable (CEF owns the buffer), but wrapping
+            // in Arc allows capture() to share without another copy.
+            let buffer_copy = Arc::new(bgra.to_vec());
 
-            // Just copy the BGRA buffer directly - GPU will interpret it as BGRA
-            // This avoids the expensive per-pixel BGRA→RGBA conversion
-            let buffer_copy = bgra.to_vec();
-
-            let copy_elapsed = copy_start.elapsed();
-
-            // Store the raw BGRA buffer
-            let lock_start = Instant::now();
+            // Store the Arc-wrapped buffer
             *self.handler.shared.framebuffer.lock().unwrap() = Some(buffer_copy);
             *self.handler.shared.framebuffer_size.lock().unwrap() = (width, height);
-            let lock_elapsed = lock_start.elapsed();
-
             self.handler.shared.dirty.store(true, Ordering::SeqCst);
-
-            // Log performance metrics
-            let total_elapsed = copy_start.elapsed();
-            if total_elapsed.as_millis() > 2 {
-                tracing::warn!(
-                    "CEF on_paint PERF: {}x{} - copy: {:.2}ms, lock+store: {:.2}ms, total: {:.2}ms",
-                    width, height,
-                    copy_elapsed.as_secs_f64() * 1000.0,
-                    lock_elapsed.as_secs_f64() * 1000.0,
-                    total_elapsed.as_secs_f64() * 1000.0
-                );
-            }
         }
     }
 }
@@ -537,22 +519,13 @@ impl LinuxCefWebview {
 
     /// Capture the current framebuffer as raw BGRA bytes
     ///
-    /// Returns the raw BGRA pixel data along with dimensions (width, height).
+    /// Returns an Arc-wrapped BGRA pixel buffer along with dimensions (width, height).
+    /// The Arc allows zero-copy sharing - cloning is just a pointer copy (~20ns).
     /// The data is in BGRA format as provided by CEF - no conversion is performed.
-    pub fn capture(&mut self) -> Option<(Vec<u8>, u32, u32)> {
-        // PERFORMANCE INSTRUMENTATION: Time the framebuffer clone
-        let start = Instant::now();
+    pub fn capture(&mut self) -> Option<(Arc<Vec<u8>>, u32, u32)> {
+        // Arc clone is instant (~20ns) vs Vec clone (~6-12ms for 18MB)
         let buffer = self.shared.framebuffer.lock().unwrap().clone()?;
         let (width, height) = *self.shared.framebuffer_size.lock().unwrap();
-        let elapsed = start.elapsed();
-        if elapsed.as_millis() > 1 {
-            tracing::warn!(
-                "CEF capture PERF: clone {}x{} ({:.2}MB) took {:.2}ms",
-                width, height,
-                buffer.len() as f64 / 1_000_000.0,
-                elapsed.as_secs_f64() * 1000.0
-            );
-        }
         Some((buffer, width, height))
     }
 

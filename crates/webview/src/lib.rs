@@ -314,9 +314,10 @@ impl CefWebview {
 
     /// Capture the framebuffer if the UI has changed since last capture.
     ///
-    /// Returns raw BGRA pixel data with dimensions (data, width, height).
+    /// Returns Arc-wrapped BGRA pixel data with dimensions (data, width, height).
+    /// The Arc allows zero-copy sharing - callers can clone cheaply or unwrap for owned data.
     /// Use with `TextureFormat::Bgra8UnormSrgb` for zero-conversion texture upload.
-    pub fn capture_if_dirty(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+    pub fn capture_if_dirty(&mut self) -> Option<(Arc<Vec<u8>>, u32, u32)> {
         if !self.is_ready() {
             return None;
         }
@@ -335,8 +336,8 @@ impl CefWebview {
 
     /// Force a capture regardless of dirty state
     ///
-    /// Returns raw BGRA pixel data with dimensions (data, width, height).
-    pub fn capture(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+    /// Returns Arc-wrapped BGRA pixel data with dimensions (data, width, height).
+    pub fn capture(&mut self) -> Option<(Arc<Vec<u8>>, u32, u32)> {
         self.dirty.store(false, Ordering::SeqCst);
         self.inner.capture()
     }

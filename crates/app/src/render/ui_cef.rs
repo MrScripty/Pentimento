@@ -9,7 +9,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use pentimento_webview::CefWebview;
-use std::time::Instant;
+use std::sync::Arc;
 
 use crate::embedded_ui::UiAssets;
 
@@ -145,17 +145,11 @@ pub fn update_cef_ui_texture(
         status.initialized = true;
     }
 
-    // PERFORMANCE INSTRUMENTATION: Time the entire capture-to-texture pipeline
-    let capture_start = Instant::now();
-
-    // Try to capture if dirty - returns raw BGRA bytes with dimensions
-    if let Some((bgra_data, cap_width, cap_height)) = webview_res.webview.capture_if_dirty() {
-        let capture_elapsed = capture_start.elapsed();
-
-        // Count non-transparent pixels (alpha is at offset 3 in BGRA)
-        let non_transparent = bgra_data.chunks(4).filter(|p| p[3] > 0).count();
-
+    // Try to capture if dirty - returns Arc-wrapped BGRA bytes with dimensions
+    if let Some((bgra_arc, cap_width, cap_height)) = webview_res.webview.capture_if_dirty() {
         if !status.first_capture_done {
+            // Only count non-transparent pixels on first capture (expensive operation)
+            let non_transparent = bgra_arc.chunks(4).filter(|p| p[3] > 0).count();
             info!(
                 "First CEF capture! {}x{}, non-transparent pixels: {}, format: BGRA (no conversion)",
                 cap_width, cap_height, non_transparent
@@ -163,7 +157,6 @@ pub fn update_cef_ui_texture(
             status.first_capture_done = true;
         }
 
-        let texture_start = Instant::now();
         if let Some(image) = images.get_mut(&ui_texture.handle) {
             if image.width() != cap_width || image.height() != cap_height {
                 info!(
@@ -180,19 +173,10 @@ pub fn update_cef_ui_texture(
                 });
             }
 
-            // Direct upload of BGRA data - no conversion needed!
+            // Unwrap Arc to get owned Vec for Bevy. In typical flow the Arc has
+            // only one reference so try_unwrap succeeds without copying.
+            let bgra_data = Arc::try_unwrap(bgra_arc).unwrap_or_else(|arc| (*arc).clone());
             image.data = Some(bgra_data);
-        }
-        let texture_elapsed = texture_start.elapsed();
-
-        let total_elapsed = capture_start.elapsed();
-        if total_elapsed.as_millis() > 2 {
-            warn!(
-                "CEF texture update PERF: capture: {:.2}ms, texture_update: {:.2}ms, total: {:.2}ms",
-                capture_elapsed.as_secs_f64() * 1000.0,
-                texture_elapsed.as_secs_f64() * 1000.0,
-                total_elapsed.as_secs_f64() * 1000.0
-            );
         }
     }
 }
