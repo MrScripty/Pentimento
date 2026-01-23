@@ -50,7 +50,8 @@ impl Plugin for RenderPlugin {
                     // because it handles deferred webview creation
                     .add_systems(Update, ui_overlay::update_overlay_webview)
                     .add_systems(Update, ui_overlay::handle_overlay_resize.after(ui_overlay::update_overlay_webview))
-                    .add_systems(Update, ui_overlay::sync_overlay_position.after(ui_overlay::update_overlay_webview));
+                    .add_systems(Update, ui_overlay::sync_overlay_position.after(ui_overlay::update_overlay_webview))
+                    .add_systems(Update, ui_overlay::sync_overlay_visibility.after(ui_overlay::update_overlay_webview));
 
                 info!("Render plugin initialized with OVERLAY mode");
             }

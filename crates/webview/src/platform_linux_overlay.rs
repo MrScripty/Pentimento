@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 
 use gdk::prelude::*;
 use gdk::cairo;
+use gdkx11::{X11Display, X11Window};
 use gio::Cancellable;
 use gtk::prelude::*;
 use webkit2gtk::{LoadEvent, WebViewExt};
@@ -41,6 +42,8 @@ pub struct LinuxOverlayWebview {
     size: (u32, u32),
     state: OverlayState,
     load_finished: Rc<RefCell<bool>>,
+    /// Parent window XID for state tracking (X11 only)
+    parent_xid: Option<u64>,
 }
 
 impl LinuxOverlayWebview {
@@ -55,9 +58,10 @@ impl LinuxOverlayWebview {
             gtk::init().map_err(|e| WebviewError::GtkInit(e.to_string()))?;
         }
 
-        // Create a transparent popup window
-        // Using Popup type to avoid window decorations
-        let window = gtk::Window::new(gtk::WindowType::Popup);
+        // Create a transparent toplevel window (not popup, so transient relationships work)
+        // We use Toplevel instead of Popup because Popup windows don't properly
+        // respect WM_TRANSIENT_FOR relationships for minimize/restore behavior
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_decorated(false);
         window.set_app_paintable(true);
         window.set_default_size(size.0 as i32, size.1 as i32);
@@ -135,8 +139,8 @@ impl LinuxOverlayWebview {
             }
         });
 
-        // Position the overlay window based on parent handle
-        Self::position_relative_to_parent(&window, parent_handle, size);
+        // Position the overlay window based on parent handle and set up window grouping
+        let parent_xid = Self::setup_window_relationship(&window, parent_handle, size);
 
         // Show the window
         window.show_all();
@@ -161,36 +165,82 @@ impl LinuxOverlayWebview {
             size,
             state: OverlayState::Initializing,
             load_finished,
+            parent_xid,
         })
     }
 
-    /// Position the overlay window relative to the parent window
-    fn position_relative_to_parent(
+    /// Set up the window relationship with the parent (transient, grouping) and position
+    /// Returns the parent window XID for state tracking (X11 only)
+    fn setup_window_relationship(
         window: &gtk::Window,
         parent_handle: RawWindowHandle,
         _size: (u32, u32),
-    ) {
+    ) -> Option<u64> {
+        let mut parent_xid: Option<u64> = None;
+
         // Try to get parent window position based on handle type
         match parent_handle {
             RawWindowHandle::Xlib(handle) => {
-                // For X11, we can query the window position
-                // For now, position at (0, 0) - will be updated by set_position
-                tracing::info!("X11 parent window: {:?}", handle.window);
+                let xid = handle.window as u64;
+                tracing::info!("X11 parent window (Xlib): {:?}", xid);
+                parent_xid = Some(xid);
                 window.move_(0, 0);
+
+                // Set transient hint via GDK after window is realized
+                Self::set_transient_for_x11(window, xid);
             }
             RawWindowHandle::Xcb(handle) => {
-                tracing::info!("XCB parent window: {:?}", handle.window);
+                let xid = handle.window.get() as u64;
+                tracing::info!("X11 parent window (XCB): {:?}", xid);
+                parent_xid = Some(xid);
                 window.move_(0, 0);
+
+                // Set transient hint via GDK after window is realized
+                Self::set_transient_for_x11(window, xid);
             }
             RawWindowHandle::Wayland(_handle) => {
                 // Wayland positioning is more complex due to security model
                 // The compositor controls window positioning
+                // Transient relationships work differently on Wayland
                 tracing::info!("Wayland parent window - positioning controlled by compositor");
             }
             _ => {
                 tracing::warn!("Unknown window handle type for parent positioning");
             }
         }
+
+        parent_xid
+    }
+
+    /// Set the overlay window as transient for the parent X11 window
+    /// This makes the overlay minimize/restore with the parent window
+    fn set_transient_for_x11(window: &gtk::Window, parent_xid: u64) {
+        // We need to realize the window first to get its GDK window
+        window.realize();
+
+        let Some(gdk_window) = window.window() else {
+            tracing::warn!("Could not get GDK window for transient setup");
+            return;
+        };
+
+        // Get the display and try to cast it to X11Display
+        let display = gdk_window.display();
+        let Some(x11_display) = display.downcast_ref::<X11Display>() else {
+            tracing::warn!("Not running on X11 display");
+            return;
+        };
+
+        // Get the parent window as an X11Window and set transient relationship
+        let parent_x11_window = X11Window::foreign_new_for_display(x11_display, parent_xid);
+        let parent_gdk: gdk::Window = parent_x11_window.upcast();
+
+        // Set the transient-for relationship - this tells the WM to minimize together
+        gdk_window.set_transient_for(&parent_gdk);
+
+        // Also set type hint to indicate this is a utility window
+        gdk_window.set_type_hint(gdk::WindowTypeHint::Utility);
+
+        tracing::info!("Overlay set as transient for parent window {}", parent_xid);
     }
 
     /// Update input regions to allow selective passthrough
@@ -266,6 +316,9 @@ impl LinuxOverlayWebview {
             }
         }
 
+        // Sync visibility with parent window state (check every poll)
+        self.check_parent_visibility();
+
         // Update state
         if self.state == OverlayState::Initializing && *self.load_finished.borrow() {
             // Set viewport dimensions via JavaScript to ensure WebKit knows the size
@@ -284,6 +337,58 @@ impl LinuxOverlayWebview {
 
             self.state = OverlayState::Ready;
             tracing::info!("Overlay webview ready");
+        }
+    }
+
+    /// Check parent window visibility via X11 and sync overlay visibility
+    fn check_parent_visibility(&mut self) {
+        let Some(parent_xid) = self.parent_xid else {
+            return; // No parent tracking on non-X11
+        };
+
+        let Some(gdk_window) = self.window.window() else {
+            return;
+        };
+
+        // Get the display and try to cast it to X11Display
+        let display = gdk_window.display();
+        let Some(x11_display) = display.downcast_ref::<X11Display>() else {
+            return; // Not running on X11
+        };
+
+        // Get the parent window as an X11Window using foreign_new_for_display
+        let parent_x11_window = X11Window::foreign_new_for_display(x11_display, parent_xid);
+
+        // Cast to gdk::Window to access state() method
+        let parent_gdk: gdk::Window = parent_x11_window.upcast();
+
+        // Check if parent is iconified (minimized) or withdrawn
+        let parent_state = parent_gdk.state();
+        let is_iconified = parent_state.contains(gdk::WindowState::ICONIFIED);
+        let is_withdrawn = parent_state.contains(gdk::WindowState::WITHDRAWN);
+        let parent_hidden = is_iconified || is_withdrawn;
+
+        // Sync our visibility to match
+        let currently_visible = self.window.is_visible();
+        if parent_hidden && currently_visible {
+            self.window.hide();
+            tracing::debug!("Overlay hidden (parent iconified/withdrawn)");
+        } else if !parent_hidden && !currently_visible {
+            self.window.show();
+            tracing::debug!("Overlay shown (parent visible)");
+        }
+    }
+
+    /// Sync overlay visibility with the given parent window visibility state
+    /// Called externally when the parent window state changes
+    pub fn sync_visibility(&mut self, parent_visible: bool) {
+        let currently_visible = self.window.is_visible();
+        if !parent_visible && currently_visible {
+            self.window.hide();
+            tracing::debug!("Overlay hidden (parent minimized)");
+        } else if parent_visible && !currently_visible {
+            self.window.show();
+            tracing::debug!("Overlay shown (parent restored)");
         }
     }
 

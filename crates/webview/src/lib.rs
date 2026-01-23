@@ -263,6 +263,12 @@ impl OverlayWebview {
     pub fn set_visible(&mut self, visible: bool) {
         self.inner.set_visible(visible);
     }
+
+    /// Sync overlay visibility with parent window state
+    /// Call this when the parent Bevy window is minimized/restored
+    pub fn sync_visibility(&mut self, parent_visible: bool) {
+        self.inner.sync_visibility(parent_visible);
+    }
 }
 
 /// CEF-based offscreen webview that can be captured as a texture

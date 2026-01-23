@@ -4,7 +4,7 @@
 //! The desktop compositor handles blending, avoiding framebuffer capture overhead.
 
 use bevy::prelude::*;
-use bevy::window::{RawHandleWrapper, WindowMoved};
+use bevy::window::{RawHandleWrapper, WindowMoved, WindowOccluded};
 use pentimento_webview::OverlayWebview;
 
 use crate::embedded_ui::UiAssets;
@@ -242,5 +242,34 @@ pub fn sync_overlay_position(
             overlay.webview.set_position(new_x, new_y);
             info!("Overlay synced to position ({}, {})", new_x, new_y);
         }
+    }
+}
+
+/// Sync overlay visibility when Bevy window is minimized/restored (occluded/unoccluded)
+pub fn sync_overlay_visibility(
+    mut occluded_events: MessageReader<WindowOccluded>,
+    overlay_res: Option<NonSendMut<OverlayWebviewResource>>,
+    status: Res<OverlayStatus>,
+) {
+    // Don't process until overlay is ready
+    if !status.initialized {
+        occluded_events.clear();
+        return;
+    }
+
+    let Some(mut overlay) = overlay_res else {
+        occluded_events.clear();
+        return;
+    };
+
+    for event in occluded_events.read() {
+        // When window is occluded (minimized/hidden), hide overlay
+        // When window is visible again, show overlay
+        let parent_visible = !event.occluded;
+        overlay.webview.sync_visibility(parent_visible);
+        info!(
+            "Overlay visibility synced: parent_visible={}",
+            parent_visible
+        );
     }
 }
