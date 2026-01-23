@@ -6,6 +6,7 @@
 //! Similar to ui_composite.rs but uses CEF (Chromium) instead of WebKitGTK.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use pentimento_webview::CefWebview;
@@ -98,6 +99,7 @@ pub fn setup_ui_cef(world: &mut World) {
     world.insert_resource(CefLastWindowSize { width, height });
 
     // Create a full-screen UI node with the texture
+    // Pickable::IGNORE allows raycasts to pass through to 3D meshes for selection
     world.spawn((
         ImageNode {
             image: texture_handle,
@@ -113,6 +115,7 @@ pub fn setup_ui_cef(world: &mut World) {
         },
         ZIndex(i32::MAX),
         CefUiOverlay,
+        Pickable::IGNORE,
     ));
 
     info!("CEF UI overlay created");

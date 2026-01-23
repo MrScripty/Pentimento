@@ -4,6 +4,7 @@
 //! displaying it as a transparent overlay on top of the Bevy 3D scene.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use pentimento_webview::OffscreenWebview;
@@ -113,6 +114,7 @@ pub fn setup_ui_composite(world: &mut World) {
 
     // Create a full-screen UI node with the texture
     // We use a single ImageNode that fills the entire screen
+    // Pickable::IGNORE allows raycasts to pass through to 3D meshes for selection
     world.spawn((
         ImageNode {
             image: texture_handle,
@@ -129,6 +131,7 @@ pub fn setup_ui_composite(world: &mut World) {
         // Make sure it's on top of everything
         ZIndex(i32::MAX),
         UiOverlay,
+        Pickable::IGNORE,
     ));
 
     info!("UI overlay created");
