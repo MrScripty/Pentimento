@@ -8,6 +8,11 @@ description = "Pentimento Bevy app compiled to WASM for Tauri mode"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# Selection works in Chromium (Electron) but crashes in WebKitGTK (Tauri)
+selection = ["pentimento-scene/selection"]
+
 [dependencies]
 pentimento-config = { path = "../config" }
 pentimento-scene = { path = "../scene" }

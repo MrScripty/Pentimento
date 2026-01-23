@@ -9,7 +9,7 @@ description = "Shared 3D scene setup for Pentimento (native and WASM builds)"
 default = []
 # Wireframe requires POLYGON_MODE_LINE GPU feature (native only, not WASM/WebGL)
 wireframe = []
-# Selection requires mesh picking which crashes WebKit/WASM
+# Selection requires mesh picking - works in Chromium but crashes WebKitGTK
 selection = ["bevy/bevy_picking", "bevy/mesh_picking"]
 
 [dependencies]
