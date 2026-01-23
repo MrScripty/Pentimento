@@ -1,208 +1,285 @@
-//! Screen-space selection outline rendering
+//! Surface ID (Cryptomatte) selection outline rendering
 //!
-//! Renders orange outlines around selected 3D objects using UI-based rendering.
-//! Projects 3D object bounds to screen space and draws outlines as UI elements,
-//! ensuring visibility even when a fullscreen UI texture covers the 3D scene.
+//! Renders pixel-accurate orange outlines around selected 3D objects using
+//! a Surface ID / Cryptomatte-style approach:
+//! 1. ID Pass: Render selected objects to a texture with entity IDs as colors
+//! 2. Edge Detection: Post-process shader finds ID boundaries
+//! 3. Composite: Display outline via UI ImageNode (renders above webview)
+//!
+//! This approach is WebGL2-compatible for WASM builds.
 
-use bevy::color::palettes::css::ORANGE;
+use bevy::asset::embedded_asset;
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::ClearColorConfig;
+use bevy::camera::RenderTarget;
+use bevy::camera::visibility::RenderLayers;
+use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
-use bevy::camera::primitives::Aabb;
+use bevy::render::extract_resource::ExtractResource;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+
+mod edge_detection;
+mod id_material;
+mod outline_settings;
+
+pub use id_material::{EntityIdMaterial, RenderToIdBuffer};
+pub use outline_settings::OutlineSettings;
 
 use crate::camera::MainCamera;
 use crate::selection::Selected;
+use edge_detection::EdgeDetectionPlugin;
+use id_material::entity_to_color;
 
-/// Marker component for the outline UI container
-#[derive(Component)]
-pub struct OutlineContainer;
-
-/// Component storing the entity this outline is for
-#[derive(Component)]
-pub struct OutlineFor {
-    pub entity: Entity,
+/// Resource holding the render targets for outline rendering
+#[derive(Resource, Clone, ExtractResource)]
+pub struct OutlineRenderTargets {
+    /// Texture where entity IDs are rendered
+    pub id_buffer: Handle<Image>,
 }
 
-/// Plugin for screen-space selection outlines
+/// Marker for the ID buffer camera
+#[derive(Component)]
+pub struct IdBufferCamera;
+
+/// Marker for the outline UI overlay
+#[derive(Component)]
+pub struct OutlineOverlay;
+
+/// Plugin for Surface ID selection outlines
 pub struct OutlinePlugin;
 
 impl Plugin for OutlinePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_outline_container);
-        app.add_systems(
-            Update,
-            (
-                spawn_outlines_for_selected,
-                remove_outlines_for_deselected,
-                update_outline_positions,
-            )
-                .chain(),
-        );
+        // Embed the entity ID shader
+        embedded_asset!(app, "shaders/entity_id.wgsl");
+
+        app.init_resource::<OutlineSettings>()
+            .add_plugins(MaterialPlugin::<EntityIdMaterial>::default())
+            .add_plugins(EdgeDetectionPlugin)
+            .add_systems(Startup, setup_outline_system)
+            .add_systems(
+                Update,
+                (
+                    sync_id_camera_transform,
+                    sync_id_mirror_transforms,
+                    add_selected_to_id_buffer,
+                    remove_deselected_from_id_buffer,
+                    handle_window_resize,
+                )
+                    .chain(),
+            );
     }
 }
 
-/// Create a container node for outline UI elements
-fn setup_outline_container(mut commands: Commands) {
-    commands.spawn((
-        Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            position_type: PositionType::Absolute,
-            ..default()
-        },
-        // Render on top of everything including other UI
-        ZIndex(i32::MAX),
-        // Don't block picking
-        bevy::picking::prelude::Pickable::IGNORE,
-        OutlineContainer,
-    ));
-}
-
-/// Spawn UI outline nodes for newly selected entities
-fn spawn_outlines_for_selected(
+/// Initialize the outline system with render targets and ID camera
+fn setup_outline_system(
     mut commands: Commands,
-    container_query: Query<Entity, With<OutlineContainer>>,
-    selected_query: Query<Entity, Added<Selected>>,
-    existing_outlines: Query<&OutlineFor>,
+    mut images: ResMut<Assets<Image>>,
+    mut id_materials: ResMut<Assets<EntityIdMaterial>>,
+    windows: Query<&Window>,
+    main_camera: Query<(&Transform, &OrbitCamera), With<MainCamera>>,
 ) {
-    let Ok(container) = container_query.single() else {
+    let Ok(window) = windows.single() else {
+        warn!("No window found for outline system setup");
         return;
     };
 
-    for entity in selected_query.iter() {
-        // Check if outline already exists for this entity
-        let already_has_outline = existing_outlines
-            .iter()
-            .any(|outline_for| outline_for.entity == entity);
+    let width = window.resolution.physical_width().max(1);
+    let height = window.resolution.physical_height().max(1);
 
-        if already_has_outline {
-            continue;
-        }
+    // Create ID buffer render target
+    let id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
 
-        // Spawn outline UI node as child of container
-        let outline_entity = commands
-            .spawn((
-                // Invisible node that will be positioned based on 3D object bounds
-                Node {
-                    position_type: PositionType::Absolute,
-                    border: UiRect::all(Val::Px(2.0)),
-                    ..default()
-                },
-                BorderColor::all(Color::from(ORANGE)),
-                BackgroundColor(Color::NONE),
-                OutlineFor { entity },
-                bevy::picking::prelude::Pickable::IGNORE,
-            ))
-            .id();
+    commands.insert_resource(OutlineRenderTargets {
+        id_buffer: id_buffer.clone(),
+    });
 
-        commands.entity(container).add_child(outline_entity);
+    // Get main camera transform for ID camera
+    let main_transform = main_camera.single().map(|(t, _)| *t).unwrap_or_else(|_| {
+        Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y)
+    });
 
-        info!("Created UI outline for selected entity {:?}", entity);
-    }
+    // Spawn ID buffer camera (renders selected objects to ID texture)
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: -1, // Render before main camera
+            clear_color: ClearColorConfig::Custom(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+            ..default()
+        },
+        RenderTarget::Image(id_buffer.into()),
+        main_transform,
+        // Only render entities on layer 1 (selected objects)
+        RenderLayers::layer(1),
+        IdBufferCamera,
+    ));
+
+    info!("Surface ID outline system initialized ({}x{})", width, height);
 }
 
-/// Remove outline UI nodes for deselected entities
-fn remove_outlines_for_deselected(
-    mut commands: Commands,
-    outline_query: Query<(Entity, &OutlineFor)>,
-    selected_query: Query<&Selected>,
+/// Create a render target texture
+fn create_render_texture(
+    width: u32,
+    height: u32,
+    format: TextureFormat,
+    images: &mut Assets<Image>,
+) -> Handle<Image> {
+    let size = Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+
+    let mut image = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0, 0, 0, 0],
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+
+    images.add(image)
+}
+
+/// Sync ID camera transform with main camera
+fn sync_id_camera_transform(
+    main_camera: Query<&Transform, (With<MainCamera>, Without<IdBufferCamera>)>,
+    mut id_camera: Query<&mut Transform, With<IdBufferCamera>>,
 ) {
-    for (outline_entity, outline_for) in outline_query.iter() {
-        // If the target entity no longer has Selected component, remove the outline
-        if selected_query.get(outline_for.entity).is_err() {
-            commands.entity(outline_entity).despawn();
+    let Ok(main_transform) = main_camera.single() else {
+        return;
+    };
+    let Ok(mut id_transform) = id_camera.single_mut() else {
+        return;
+    };
+
+    *id_transform = *main_transform;
+}
+
+/// When an entity is selected, set up ID buffer rendering
+fn add_selected_to_id_buffer(
+    mut commands: Commands,
+    mut id_materials: ResMut<Assets<EntityIdMaterial>>,
+    added_selected: Query<(Entity, &Mesh3d), Added<Selected>>,
+    meshes: Res<Assets<Mesh>>,
+) {
+    for (entity, mesh_handle) in added_selected.iter() {
+        let entity_color = entity_to_color(entity);
+
+        // Create ID material for this entity
+        let id_material = id_materials.add(EntityIdMaterial {
+            entity_id: id_material::EntityIdUniform { entity_color },
+        });
+
+        // Clone the mesh for the ID pass rendering
+        // We need a separate entity on layer 1 with the ID material
+        if let Some(mesh) = meshes.get(&mesh_handle.0) {
+            commands.spawn((
+                Mesh3d(mesh_handle.0.clone()),
+                MeshMaterial3d(id_material),
+                // Will be synced with the original entity's transform
+                Transform::default(),
+                GlobalTransform::default(),
+                // Only visible to ID camera
+                RenderLayers::layer(1),
+                RenderToIdBuffer { entity_color },
+                // Track which entity this is for
+                IdBufferMirror { source: entity },
+                Pickable::IGNORE,
+            ));
+
             info!(
-                "Removed UI outline for deselected entity {:?}",
-                outline_for.entity
+                "Added entity {:?} to ID buffer with color {:?}",
+                entity, entity_color
             );
         }
     }
 }
 
-/// Update outline positions based on 3D object screen-space bounds
-fn update_outline_positions(
-    mut outline_query: Query<(&mut Node, &OutlineFor)>,
-    transform_query: Query<(&GlobalTransform, &Aabb)>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+/// Component linking an ID buffer mirror to its source entity
+#[derive(Component)]
+pub struct IdBufferMirror {
+    pub source: Entity,
+}
+
+/// Update ID buffer mirror transforms to match their source entities
+fn sync_id_mirror_transforms(
+    source_query: Query<&GlobalTransform, With<Selected>>,
+    mut mirror_query: Query<(&IdBufferMirror, &mut Transform)>,
 ) {
-    let Ok((camera, camera_transform)) = camera_query.single() else {
+    for (mirror, mut transform) in mirror_query.iter_mut() {
+        if let Ok(source_transform) = source_query.get(mirror.source) {
+            // Copy the global transform as local (since mirror has no parent)
+            let (scale, rotation, translation) = source_transform.to_scale_rotation_translation();
+            transform.translation = translation;
+            transform.rotation = rotation;
+            transform.scale = scale;
+        }
+    }
+}
+
+/// Remove ID buffer entities when their source is deselected
+fn remove_deselected_from_id_buffer(
+    mut commands: Commands,
+    mirror_query: Query<(Entity, &IdBufferMirror)>,
+    selected_query: Query<&Selected>,
+) {
+    for (mirror_entity, mirror) in mirror_query.iter() {
+        // If source entity no longer has Selected component, remove the mirror
+        if selected_query.get(mirror.source).is_err() {
+            commands.entity(mirror_entity).despawn();
+            info!(
+                "Removed ID buffer mirror for deselected entity {:?}",
+                mirror.source
+            );
+        }
+    }
+}
+
+/// Handle window resize by recreating render targets
+fn handle_window_resize(
+    mut commands: Commands,
+    windows: Query<&Window, Changed<Window>>,
+    mut images: ResMut<Assets<Image>>,
+    targets: Option<ResMut<OutlineRenderTargets>>,
+    id_camera: Query<Entity, With<IdBufferCamera>>,
+) {
+    let Ok(window) = windows.single() else {
         return;
     };
 
-    for (mut node, outline_for) in outline_query.iter_mut() {
-        let Ok((global_transform, aabb)) = transform_query.get(outline_for.entity) else {
-            // Entity doesn't exist or doesn't have required components
-            continue;
-        };
+    let Some(mut targets) = targets else {
+        return;
+    };
 
-        // Calculate screen-space bounding box
-        if let Some(screen_rect) =
-            calculate_screen_bounds(aabb, global_transform, camera, camera_transform)
-        {
-            node.left = Val::Px(screen_rect.min.x);
-            node.top = Val::Px(screen_rect.min.y);
-            node.width = Val::Px(screen_rect.width());
-            node.height = Val::Px(screen_rect.height());
-        }
-    }
-}
+    let width = window.resolution.physical_width().max(1);
+    let height = window.resolution.physical_height().max(1);
 
-/// Calculate the screen-space bounding rectangle for an AABB
-fn calculate_screen_bounds(
-    aabb: &Aabb,
-    global_transform: &GlobalTransform,
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-) -> Option<Rect> {
-    // Get the 8 corners of the AABB in local space
-    let min = aabb.min();
-    let max = aabb.max();
-
-    let corners = [
-        Vec3::new(min.x, min.y, min.z),
-        Vec3::new(max.x, min.y, min.z),
-        Vec3::new(min.x, max.y, min.z),
-        Vec3::new(max.x, max.y, min.z),
-        Vec3::new(min.x, min.y, max.z),
-        Vec3::new(max.x, min.y, max.z),
-        Vec3::new(min.x, max.y, max.z),
-        Vec3::new(max.x, max.y, max.z),
-    ];
-
-    // Transform corners to world space and project to screen
-    let mut min_screen = Vec2::new(f32::MAX, f32::MAX);
-    let mut max_screen = Vec2::new(f32::MIN, f32::MIN);
-    let mut any_visible = false;
-
-    for corner in corners {
-        let world_pos = global_transform.transform_point(corner);
-
-        // Project to screen space (viewport coordinates)
-        if let Some(ndc) = camera.world_to_ndc(camera_transform, world_pos) {
-            // Only consider points in front of camera
-            if ndc.z >= 0.0 && ndc.z <= 1.0 {
-                if let Some(viewport) = camera.logical_viewport_rect() {
-                    let screen_pos = Vec2::new(
-                        (ndc.x + 1.0) * 0.5 * viewport.width() + viewport.min.x,
-                        (1.0 - ndc.y) * 0.5 * viewport.height() + viewport.min.y,
-                    );
-
-                    min_screen = min_screen.min(screen_pos);
-                    max_screen = max_screen.max(screen_pos);
-                    any_visible = true;
-                }
-            }
+    // Check if resize is needed
+    if let Some(id_image) = images.get(&targets.id_buffer) {
+        if id_image.width() == width && id_image.height() == height {
+            return;
         }
     }
 
-    if any_visible {
-        // Add padding for the border
-        let padding = 4.0;
-        Some(Rect::new(
-            min_screen.x - padding,
-            min_screen.y - padding,
-            max_screen.x + padding,
-            max_screen.y + padding,
-        ))
-    } else {
-        None
+    // Create new ID buffer
+    let new_id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
+
+    // Update camera target component
+    if let Ok(camera_entity) = id_camera.single() {
+        commands.entity(camera_entity).insert(RenderTarget::Image(new_id_buffer.clone().into()));
     }
+
+    // Remove old texture
+    images.remove(&targets.id_buffer);
+
+    targets.id_buffer = new_id_buffer;
+
+    info!("Resized outline render targets to {}x{}", width, height);
 }
+
+// Re-export OrbitCamera for setup
+use crate::camera::OrbitCamera;
