@@ -18,7 +18,7 @@ mod wireframe;
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
 #[cfg(feature = "selection")]
-pub use outline::OutlinePlugin;
+pub use outline::{OutlineCamera, OutlinePlugin};
 #[cfg(feature = "selection")]
 pub use selection::{Selectable, Selected, SelectionPlugin, SelectionState};
 #[cfg(feature = "wireframe")]
@@ -54,13 +54,15 @@ fn setup_scene(
     // TonyMcMapFace requires tonemapping_luts which needs zstd (not available in WASM)
     let orbit_camera = OrbitCamera::default();
     let camera_position = orbit_camera.calculate_position();
-    commands.spawn((
+    let mut camera_entity = commands.spawn((
         Camera3d::default(),
         Transform::from_translation(camera_position).looking_at(orbit_camera.target, Vec3::Y),
         Tonemapping::Reinhard,
         MainCamera,
         orbit_camera,
     ));
+    #[cfg(feature = "selection")]
+    camera_entity.insert(OutlineCamera);
 
     // Sun lighting is handled by LightingPlugin
 

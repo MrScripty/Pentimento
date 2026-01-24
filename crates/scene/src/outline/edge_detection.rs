@@ -100,16 +100,21 @@ pub struct EdgeDetectionUniform {
 pub struct EdgeDetectionNode;
 
 impl ViewNode for EdgeDetectionNode {
-    /// Query ViewTarget to use post_process_write() for proper compositing
-    type ViewQuery = &'static ViewTarget;
+    /// Query ViewTarget + optional OutlineCamera to filter to main camera only
+    type ViewQuery = (&'static ViewTarget, Option<&'static OutlineCamera>);
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        view_target: bevy::ecs::query::QueryItem<'w, 'w, Self::ViewQuery>,
+        (view_target, outline_camera): bevy::ecs::query::QueryItem<'w, 'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
+        // Skip cameras without OutlineCamera marker (like ID buffer camera)
+        if outline_camera.is_none() {
+            return Ok(());
+        }
+
         let Some(settings) = world.get_resource::<OutlineSettings>() else {
             return Ok(());
         };

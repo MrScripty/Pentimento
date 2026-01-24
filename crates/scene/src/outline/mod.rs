@@ -26,6 +26,7 @@ mod outline_settings;
 
 pub use id_material::{EntityIdMaterial, RenderToIdBuffer};
 pub use outline_settings::OutlineSettings;
+// OutlineCamera is defined in this module and is already pub
 
 /// Marker component for cameras that need outline post-processing
 /// This is extracted to the render world and used by EdgeDetectionNode's ViewQuery
@@ -101,11 +102,8 @@ fn setup_outline_system(
         Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y)
     });
 
-    // Add OutlineCamera marker to main camera for post-processing
-    if let Ok((camera_entity, _, _)) = main_camera.single() {
-        commands.entity(camera_entity).insert(OutlineCamera);
-        info!("Added OutlineCamera marker to main camera");
-    }
+    // Note: OutlineCamera marker is added to main camera in setup_scene (lib.rs)
+    // This ensures it exists from spawn time for proper extraction to render world
 
     // Spawn ID buffer camera (renders selected objects to ID texture)
     // Use Reinhard tonemapping for WASM/WebGL2 compatibility (TonyMcMapface requires tonemapping_luts)

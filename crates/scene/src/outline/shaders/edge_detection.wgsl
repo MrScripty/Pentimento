@@ -1,10 +1,8 @@
 // Edge detection shader for Surface ID outline rendering
 // Composites outlines onto the scene using ViewTarget post-processing pattern
 //
-// To prevent feedback loop (erosion/dilation), we:
-// 1. Only draw outlines on pixels that are part of the selected object (have ID)
-// 2. Only draw if the scene pixel doesn't already look like the outline color
-// This ensures outlines are drawn exactly once and don't accumulate.
+// The ID buffer provides current-frame boundary information.
+// Outlines are drawn at boundary positions, scene passes through elsewhere.
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
@@ -34,13 +32,6 @@ var scene_sampler: sampler;
 fn sample_id(uv: vec2<f32>, offset: vec2<f32>) -> vec4<f32> {
     let pixel_size = 1.0 / uniforms.texture_size;
     return textureSample(id_texture, id_sampler, uv + offset * pixel_size);
-}
-
-// Check if a color is similar to the outline color (already has outline)
-fn is_outline_color(color: vec4<f32>) -> bool {
-    let diff = abs(color.rgb - uniforms.outline_color.rgb);
-    let threshold = 0.1;
-    return diff.r < threshold && diff.g < threshold && diff.b < threshold;
 }
 
 // Check if the current pixel is on the edge boundary in the ID buffer
@@ -81,18 +72,13 @@ fn is_boundary_edge(uv: vec2<f32>) -> bool {
 
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    // Sample the scene
     let scene_color = textureSample(scene_texture, scene_sampler, in.uv);
 
-    // Check if this pixel is on the edge of a selected object
+    // Draw outline at current boundary positions only
     if is_boundary_edge(in.uv) {
-        // Only draw outline if scene pixel doesn't already have the outline color
-        // This prevents feedback loop accumulation
-        if !is_outline_color(scene_color) {
-            return uniforms.outline_color;
-        }
+        return uniforms.outline_color;
     }
 
-    // Pass through the scene unchanged
+    // Pass through scene unchanged
     return scene_color;
 }
