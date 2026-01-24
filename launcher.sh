@@ -171,13 +171,13 @@ if [ "$COMPOSITE_MODE" = "electron" ]; then
         cd ..
     fi
 
-    # Build Bevy WASM
+    # Build Bevy WASM (with selection feature for Electron/Chromium)
     echo "Building Bevy WASM..."
     if [ "$RELEASE" = true ]; then
-        cargo build --target wasm32-unknown-unknown --release -p pentimento-wasm
+        cargo build --target wasm32-unknown-unknown --release -p pentimento-wasm --features selection
         WASM_FILE="target/wasm32-unknown-unknown/release/pentimento_wasm.wasm"
     else
-        cargo build --target wasm32-unknown-unknown -p pentimento-wasm
+        cargo build --target wasm32-unknown-unknown -p pentimento-wasm --features selection
         WASM_FILE="target/wasm32-unknown-unknown/debug/pentimento_wasm.wasm"
     fi
 

@@ -26,6 +26,7 @@ bevy = { workspace = true, default-features = false, features = [
     "bevy_winit",
     "bevy_log",
     "bevy_mesh",
+    "bevy_ui",  # Required for ImageNode outline overlay
     "std",
     "webgl2",
 ] }

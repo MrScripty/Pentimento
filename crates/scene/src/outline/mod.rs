@@ -3,18 +3,20 @@
 //! Renders pixel-accurate orange outlines around selected 3D objects using
 //! a Surface ID / Cryptomatte-style approach:
 //! 1. ID Pass: Render selected objects to a texture with entity IDs as colors
-//! 2. Edge Detection: Post-process shader finds ID boundaries
-//! 3. Composite: Display outline via UI ImageNode (renders above webview)
+//! 2. Edge Detection: Post-process shader finds ID boundaries and composites onto scene
 //!
 //! This approach is WebGL2-compatible for WASM builds.
+//! Uses Bevy's standard post-processing pattern with ViewTarget::post_process_write().
 
 use bevy::asset::embedded_asset;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::ClearColorConfig;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
+use bevy::render::extract_component::ExtractComponent;
 use bevy::render::extract_resource::ExtractResource;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
@@ -24,6 +26,11 @@ mod outline_settings;
 
 pub use id_material::{EntityIdMaterial, RenderToIdBuffer};
 pub use outline_settings::OutlineSettings;
+
+/// Marker component for cameras that need outline post-processing
+/// This is extracted to the render world and used by EdgeDetectionNode's ViewQuery
+#[derive(Component, Clone, ExtractComponent)]
+pub struct OutlineCamera;
 
 use crate::camera::MainCamera;
 use crate::selection::Selected;
@@ -35,17 +42,11 @@ use id_material::entity_to_color;
 pub struct OutlineRenderTargets {
     /// Texture where entity IDs are rendered
     pub id_buffer: Handle<Image>,
-    /// Texture where edge detection outputs the outline (composited via UI)
-    pub outline_buffer: Handle<Image>,
 }
 
 /// Marker for the ID buffer camera
 #[derive(Component)]
 pub struct IdBufferCamera;
-
-/// Marker for the outline UI overlay
-#[derive(Component)]
-pub struct OutlineOverlay;
 
 /// Plugin for Surface ID selection outlines
 pub struct OutlinePlugin;
@@ -58,7 +59,7 @@ impl Plugin for OutlinePlugin {
         app.init_resource::<OutlineSettings>()
             .add_plugins(MaterialPlugin::<EntityIdMaterial>::default())
             .add_plugins(EdgeDetectionPlugin)
-            .add_systems(Startup, (setup_outline_system, setup_outline_overlay).chain())
+            .add_systems(Startup, setup_outline_system)
             .add_systems(
                 Update,
                 (
@@ -77,9 +78,8 @@ impl Plugin for OutlinePlugin {
 fn setup_outline_system(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut id_materials: ResMut<Assets<EntityIdMaterial>>,
     windows: Query<&Window>,
-    main_camera: Query<(&Transform, &OrbitCamera), With<MainCamera>>,
+    main_camera: Query<(Entity, &Transform, &OrbitCamera), With<MainCamera>>,
 ) {
     let Ok(window) = windows.single() else {
         warn!("No window found for outline system setup");
@@ -92,20 +92,23 @@ fn setup_outline_system(
     // Create ID buffer render target (entity IDs as colors)
     let id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
 
-    // Create outline buffer render target (edge detection output, composited via UI)
-    let outline_buffer = create_render_texture(width, height, TextureFormat::Rgba8UnormSrgb, &mut images);
-
     commands.insert_resource(OutlineRenderTargets {
         id_buffer: id_buffer.clone(),
-        outline_buffer: outline_buffer.clone(),
     });
 
     // Get main camera transform for ID camera
-    let main_transform = main_camera.single().map(|(t, _)| *t).unwrap_or_else(|_| {
+    let main_transform = main_camera.single().map(|(_, t, _)| *t).unwrap_or_else(|_| {
         Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y)
     });
 
+    // Add OutlineCamera marker to main camera for post-processing
+    if let Ok((camera_entity, _, _)) = main_camera.single() {
+        commands.entity(camera_entity).insert(OutlineCamera);
+        info!("Added OutlineCamera marker to main camera");
+    }
+
     // Spawn ID buffer camera (renders selected objects to ID texture)
+    // Use Reinhard tonemapping for WASM/WebGL2 compatibility (TonyMcMapface requires tonemapping_luts)
     commands.spawn((
         Camera3d::default(),
         Camera {
@@ -118,35 +121,10 @@ fn setup_outline_system(
         // Only render entities on layer 1 (selected objects)
         RenderLayers::layer(1),
         IdBufferCamera,
+        Tonemapping::Reinhard,
     ));
 
     info!("Surface ID outline system initialized ({}x{})", width, height);
-}
-
-/// Set up the UI overlay that displays the outline texture
-fn setup_outline_overlay(mut commands: Commands, targets: Res<OutlineRenderTargets>) {
-    // Spawn a fullscreen ImageNode that displays the outline buffer
-    // This composites the outline over the 3D scene via the UI layer
-    commands.spawn((
-        ImageNode {
-            image: targets.outline_buffer.clone(),
-            ..default()
-        },
-        Node {
-            width: Val::Vw(100.0),
-            height: Val::Vh(100.0),
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            top: Val::Px(0.0),
-            ..default()
-        },
-        // High ZIndex to render above the 3D scene but below webview
-        ZIndex(i32::MAX - 100),
-        Pickable::IGNORE,
-        OutlineOverlay,
-    ));
-
-    info!("Outline UI overlay initialized");
 }
 
 /// Create a render target texture
@@ -167,7 +145,7 @@ fn create_render_texture(
         TextureDimension::D2,
         &[0, 0, 0, 0],
         format,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::all(),
     );
 
     image.texture_descriptor.usage =
@@ -208,13 +186,15 @@ fn add_selected_to_id_buffer(
 
         // Clone the mesh for the ID pass rendering
         // We need a separate entity on layer 1 with the ID material
-        if let Some(mesh) = meshes.get(&mesh_handle.0) {
+        if let Some(_mesh) = meshes.get(&mesh_handle.0) {
             commands.spawn((
                 Mesh3d(mesh_handle.0.clone()),
                 MeshMaterial3d(id_material),
                 // Will be synced with the original entity's transform
                 Transform::default(),
                 GlobalTransform::default(),
+                // Required for mesh to be visible to any camera
+                Visibility::default(),
                 // Only visible to ID camera
                 RenderLayers::layer(1),
                 RenderToIdBuffer { entity_color },
@@ -278,7 +258,6 @@ fn handle_window_resize(
     mut images: ResMut<Assets<Image>>,
     targets: Option<ResMut<OutlineRenderTargets>>,
     id_camera: Query<Entity, With<IdBufferCamera>>,
-    mut overlay_query: Query<&mut ImageNode, With<OutlineOverlay>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -301,10 +280,6 @@ fn handle_window_resize(
     // Create new ID buffer
     let new_id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
 
-    // Create new outline buffer
-    let new_outline_buffer =
-        create_render_texture(width, height, TextureFormat::Rgba8UnormSrgb, &mut images);
-
     // Update camera target component
     if let Ok(camera_entity) = id_camera.single() {
         commands
@@ -312,17 +287,10 @@ fn handle_window_resize(
             .insert(RenderTarget::Image(new_id_buffer.clone().into()));
     }
 
-    // Update UI overlay image
-    if let Ok(mut image_node) = overlay_query.single_mut() {
-        image_node.image = new_outline_buffer.clone();
-    }
-
-    // Remove old textures
+    // Remove old texture
     images.remove(&targets.id_buffer);
-    images.remove(&targets.outline_buffer);
 
     targets.id_buffer = new_id_buffer;
-    targets.outline_buffer = new_outline_buffer;
 
     info!("Resized outline render targets to {}x{}", width, height);
 }

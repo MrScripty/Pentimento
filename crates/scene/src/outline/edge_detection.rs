@@ -1,13 +1,15 @@
 //! Edge detection post-process for Surface ID outline rendering
 //!
 //! This module implements a render graph node that reads the ID buffer
-//! and outputs orange outlines where entity IDs differ between adjacent pixels.
+//! and composites orange outlines onto the scene where entity IDs differ.
+//! Uses the standard Bevy post-processing pattern with ViewTarget::post_process_write().
 
 use bevy::asset::embedded_asset;
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::FullscreenShader;
 use bevy::prelude::*;
 use bevy::render::{
+    extract_component::ExtractComponentPlugin,
     extract_resource::ExtractResourcePlugin,
     render_asset::RenderAssets,
     render_graph::{
@@ -24,10 +26,12 @@ use bevy::render::{
     },
     renderer::{RenderContext, RenderDevice},
     texture::GpuImage,
+    view::ViewTarget,
     Render, RenderApp, RenderSystems,
 };
 
 use super::outline_settings::OutlineSettings;
+use super::OutlineCamera;
 use super::OutlineRenderTargets;
 
 /// Plugin for edge detection post-processing
@@ -38,36 +42,42 @@ impl Plugin for EdgeDetectionPlugin {
         // Embed the shader
         embedded_asset!(app, "shaders/edge_detection.wgsl");
 
+        // Extract OutlineCamera component to render world
+        app.add_plugins(ExtractComponentPlugin::<OutlineCamera>::default());
         app.add_plugins(ExtractResourcePlugin::<OutlineSettings>::default());
         app.add_plugins(ExtractResourcePlugin::<OutlineRenderTargets>::default());
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            bevy::log::warn!("EdgeDetectionPlugin: No RenderApp available!");
             return;
         };
 
+        bevy::log::info!("EdgeDetectionPlugin: Setting up render graph node");
+
+        // Use ViewNodeRunner with ViewQuery filtering to OutlineCamera
+        // This ensures proper per-view execution in Core3d subgraph (required for WASM/WebGL2)
         render_app
-            .add_render_graph_node::<ViewNodeRunner<EdgeDetectionNode>>(
-                Core3d,
+            .add_render_graph_node::<ViewNodeRunner<EdgeDetectionNode>>(Core3d, EdgeDetectionLabel);
+        render_app.add_render_graph_edges(
+            Core3d,
+            (
+                Node3d::Tonemapping,
                 EdgeDetectionLabel,
-            )
-            .add_render_graph_edges(
-                Core3d,
-                (
-                    Node3d::Tonemapping,
-                    EdgeDetectionLabel,
-                    Node3d::EndMainPassPostProcessing,
-                ),
-            );
+                Node3d::EndMainPassPostProcessing,
+            ),
+        );
 
         render_app.add_systems(Render, prepare_edge_detection.in_set(RenderSystems::Prepare));
     }
 
     fn finish(&self, app: &mut App) {
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            bevy::log::warn!("EdgeDetectionPlugin::finish: No RenderApp available!");
             return;
         };
 
         render_app.init_resource::<EdgeDetectionPipeline>();
+        bevy::log::info!("EdgeDetectionPlugin: Pipeline initialized");
     }
 }
 
@@ -85,18 +95,19 @@ pub struct EdgeDetectionUniform {
 }
 
 /// Render graph node for edge detection
+/// Uses the standard Bevy post-processing pattern with ViewTarget
 #[derive(Default)]
 pub struct EdgeDetectionNode;
 
 impl ViewNode for EdgeDetectionNode {
-    // We don't actually need the ViewTarget anymore since we render to our own texture
-    type ViewQuery = ();
+    /// Query ViewTarget to use post_process_write() for proper compositing
+    type ViewQuery = &'static ViewTarget;
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        _view_query: (),
+        view_target: bevy::ecs::query::QueryItem<'w, 'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let Some(settings) = world.get_resource::<OutlineSettings>() else {
@@ -111,14 +122,23 @@ impl ViewNode for EdgeDetectionNode {
             return Ok(());
         };
 
-        let pipeline = world.resource::<EdgeDetectionPipeline>();
+        let Some(pipeline) = world.get_resource::<EdgeDetectionPipeline>() else {
+            return Ok(());
+        };
         let pipeline_cache = world.resource::<PipelineCache>();
 
         let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
             return Ok(());
         };
 
-        // Create bind group - only ID buffer needed
+        // Use ViewTarget's post_process_write() for proper ping-pong buffer handling
+        // This returns source (current scene) and destination (where we write)
+        let post_process = view_target.post_process_write();
+
+        // Create bind group with:
+        // - uniforms
+        // - id_buffer (for edge detection)
+        // - scene source texture (to composite onto)
         let bind_group = render_context.render_device().create_bind_group(
             "edge_detection_bind_group",
             &pipeline.layout,
@@ -126,17 +146,17 @@ impl ViewNode for EdgeDetectionNode {
                 prepared.uniform_buffer.as_entire_binding(),
                 &prepared.id_texture_view,
                 &pipeline.sampler,
+                post_process.source,  // Scene texture to read from
+                &pipeline.sampler,    // Re-use sampler for scene
             )),
         );
 
-        // Render to our own outline_buffer texture, NOT to the ViewTarget
-        // This avoids the ping-pong feedback loop entirely
+        // Render to ViewTarget's destination (composited scene + outlines)
         let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("edge_detection_pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: &prepared.outline_texture_view,
+                view: post_process.destination,  // Write to ViewTarget's destination
                 resolve_target: None,
-                // Clear to transparent black each frame
                 ops: Operations::default(),
                 depth_slice: None,
             })],
@@ -166,13 +186,15 @@ impl FromWorld for EdgeDetectionPipeline {
         let render_device = world.resource::<RenderDevice>();
 
         // Create bind group layout entries
-        // Bindings: uniform, id_texture, id_sampler (no scene texture - we use alpha blending)
+        // Bindings: uniform, id_texture, id_sampler, scene_texture, scene_sampler
         let layout_entries = BindGroupLayoutEntries::sequential(
             ShaderStages::FRAGMENT,
             (
                 uniform_buffer::<EdgeDetectionUniform>(false),
                 texture_2d(TextureSampleType::Float { filterable: true }),  // ID buffer
-                sampler(SamplerBindingType::Filtering),
+                sampler(SamplerBindingType::Filtering),                     // ID sampler
+                texture_2d(TextureSampleType::Float { filterable: true }),  // Scene texture
+                sampler(SamplerBindingType::Filtering),                     // Scene sampler
             ),
         );
 
@@ -208,9 +230,8 @@ impl FromWorld for EdgeDetectionPipeline {
                         shader_defs: vec![],
                         entry_point: Some("fragment".into()),
                         targets: vec![Some(ColorTargetState {
-                            // Match the outline_buffer format
+                            // Use SDR format for WebGL2 compatibility
                             format: TextureFormat::Rgba8UnormSrgb,
-                            // No blending - we clear and draw fresh each frame
                             blend: None,
                             write_mask: ColorWrites::ALL,
                         })],
@@ -235,7 +256,6 @@ impl FromWorld for EdgeDetectionPipeline {
 pub struct EdgeDetectionPrepared {
     pub uniform_buffer: Buffer,
     pub id_texture_view: bevy::render::render_resource::TextureView,
-    pub outline_texture_view: bevy::render::render_resource::TextureView,
 }
 
 /// Prepare the edge detection data each frame
@@ -255,11 +275,6 @@ fn prepare_edge_detection(
 
     // Get the GPU texture for the ID buffer
     let Some(id_texture) = gpu_images.get(&targets.id_buffer) else {
-        return;
-    };
-
-    // Get the GPU texture for the outline buffer
-    let Some(outline_texture) = gpu_images.get(&targets.outline_buffer) else {
         return;
     };
 
@@ -290,6 +305,5 @@ fn prepare_edge_detection(
     commands.insert_resource(EdgeDetectionPrepared {
         uniform_buffer,
         id_texture_view: id_texture.texture_view.clone(),
-        outline_texture_view: outline_texture.texture_view.clone(),
     });
 }
