@@ -9,3 +9,9 @@ dioxus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+
+# Vello for GPU rendering - accessed via Bevy's shared wgpu device
+vello = { workspace = true }
+
+# Re-export wgpu types for the renderer interface
+wgpu = "27"

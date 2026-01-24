@@ -12,6 +12,9 @@ pentimento-ipc = { path = "../ipc" }
 pentimento-diffusion = { path = "../diffusion", optional = true }
 pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
 
+# Dioxus mode dependencies
+pollster = { version = "0.4", optional = true }
+
 bevy = { workspace = true, features = [
     "3d",
     "wayland",
@@ -39,7 +42,7 @@ default = ["wayland", "wireframe", "selection"]
 wayland = []
 x11 = []
 cef = ["pentimento-webview/cef"]
-dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui"]
+dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui", "dep:pollster"]
 local-diffusion = ["pentimento-diffusion/local"]
 wireframe = ["pentimento-scene/wireframe"]
 selection = ["pentimento-scene/selection"]

@@ -49,6 +49,10 @@ futures-util = "0.3"
 dioxus = "0.7"
 dioxus-native = "0.7"
 
+# Vello (GPU-accelerated 2D renderer used by Blitz)
+# Use git version for wgpu 27 compatibility with Bevy 0.18
+vello = { git = "https://github.com/linebender/vello.git", rev = "0718844d2c76426edc5667fbbd3d4cbf8a1deeec" }
+
 [workspace.lints.rust]
 unsafe_code = "warn"
 

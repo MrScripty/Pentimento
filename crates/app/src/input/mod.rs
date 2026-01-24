@@ -184,7 +184,7 @@ fn track_mouse_position(
         #[cfg(feature = "dioxus")]
         CompositeMode::Dioxus => {
             if let Some(mut renderer) = dioxus_renderer {
-                renderer.renderer.send_mouse_event(mouse_event);
+                renderer.send_mouse_event(mouse_event);
                 mouse_state.last_move_sent = now;
             }
         }
@@ -290,7 +290,7 @@ fn forward_mouse_buttons(
                 } else {
                     MouseEvent::ButtonUp { button, x: click_x, y: click_y }
                 };
-                renderer.renderer.send_mouse_event(mouse_event);
+                renderer.send_mouse_event(mouse_event);
             }
         }
         #[cfg(not(feature = "dioxus"))]
@@ -371,7 +371,7 @@ fn forward_mouse_scroll(
             let Some(mut renderer) = dioxus_renderer else { return };
             for event in &events {
                 let (delta_x, delta_y) = convert_delta(event);
-                renderer.renderer.send_mouse_event(MouseEvent::Scroll {
+                renderer.send_mouse_event(MouseEvent::Scroll {
                     delta_x,
                     delta_y: -delta_y,
                     x: scroll_x,
@@ -450,7 +450,7 @@ fn forward_keyboard(
             let Some(mut renderer) = dioxus_renderer else { return };
             for event in &events {
                 let key = bevy_keycode_to_web_key(event.key_code);
-                renderer.renderer.send_keyboard_event(KeyboardEvent {
+                renderer.send_keyboard_event(KeyboardEvent {
                     key,
                     pressed: event.state.is_pressed(),
                     modifiers: modifiers.clone(),

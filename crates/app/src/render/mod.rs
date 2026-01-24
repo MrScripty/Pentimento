@@ -4,7 +4,7 @@
 //! - Capture: Offscreen webview with framebuffer capture (default)
 //! - Overlay: Transparent child window composited by desktop compositor
 //! - Cef: CEF (Chromium) offscreen rendering with framebuffer capture
-//! - Dioxus: Native Rust UI with Dioxus renderer
+//! - Dioxus: Native Rust UI with Vello GPU renderer (zero-copy)
 //! - Tauri: Bevy WASM in Tauri webview (requires separate build)
 
 use bevy::prelude::*;
@@ -85,15 +85,16 @@ impl Plugin for RenderPlugin {
             }
             #[cfg(feature = "dioxus")]
             CompositeMode::Dioxus => {
-                // Dioxus mode setup - native Rust UI
+                // Dioxus mode setup - native Rust UI with Vello GPU rendering
                 app.init_resource::<ui_dioxus::DioxusLastWindowSize>()
                     .init_resource::<ui_dioxus::DioxusRendererStatus>();
 
+                // Main world systems
                 app.add_systems(Startup, ui_dioxus::setup_ui_dioxus)
                     .add_systems(Update, ui_dioxus::update_dioxus_ui_texture)
                     .add_systems(Update, ui_dioxus::handle_dioxus_window_resize);
 
-                info!("Render plugin initialized with DIOXUS mode");
+                info!("Render plugin initialized with DIOXUS mode (Vello GPU renderer)");
             }
             #[cfg(not(feature = "dioxus"))]
             CompositeMode::Dioxus => {
