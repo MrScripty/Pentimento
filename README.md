@@ -19,13 +19,15 @@ just run      # Run release
 |------|--------------|-----------|--------|
 | `--cef` | Native Bevy + offscreen Chromium | CEF | Recommended |
 | `--electron` | WASM Bevy in Electron | Chromium | Recommended for WASM |
-| `--overlay` | Native Bevy + GTK overlay | WebKitGTK | Implementation inconsistent accross platforms |
+| `--dioxus` | Native Bevy + native Rust UI | Dioxus/Blitz | Experimental |
+| `--overlay` | Native Bevy + GTK overlay | WebKitGTK | Implementation inconsistent across platforms |
 | `--capture` | Native Bevy + offscreen WebKitGTK | WebKitGTK | Unmaintained |
 | `--tauri` | WASM Bevy in Tauri | WebKitGTK | Unmaintained |
 
 ```bash
 ./launcher.sh --cef              # Recommended: native Bevy + Chromium
 ./launcher.sh --electron         # WASM mode with Chromium
+./launcher.sh --dioxus           # Native Rust UI (no browser dependency)
 ./launcher.sh --release --cef    # Release build
 ./launcher.sh --dev              # Dev mode (run `cd ui && npm run dev` first)
 ```
@@ -58,7 +60,8 @@ crates/
 ├── app/         # Native Bevy application
 ├── app-wasm/    # WASM Bevy build
 ├── scene/       # Shared 3D scene
-├── webview/     # Offscreen webview (WebKitGTK, CEF)
+├── webview/     # Offscreen webview (WebKitGTK, CEF, Dioxus)
+├── dioxus-ui/   # Native Rust UI components (Dioxus)
 ├── ipc/         # Message protocol
 └── diffusion/   # Texture streaming
 src-electron/    # Electron shell
@@ -68,6 +71,8 @@ ui/              # Svelte frontend
 ## Architecture
 
 **Native modes** (cef, overlay, capture): Bevy owns the window. UI runs in webview, composited as texture or overlay.
+
+**Dioxus mode**: Bevy owns the window. UI is pure Rust using Dioxus with Blitz WGPU renderer, composited as texture. No browser dependency.
 
 **WASM modes** (electron, tauri): Desktop framework owns the window. Bevy compiles to WASM, renders via WebGL2 alongside Svelte.
 

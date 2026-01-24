@@ -10,6 +10,7 @@ pentimento-webview = { path = "../webview" }
 pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
 pentimento-diffusion = { path = "../diffusion", optional = true }
+pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
 
 bevy = { workspace = true, features = [
     "3d",
@@ -38,6 +39,7 @@ default = ["wayland", "wireframe", "selection"]
 wayland = []
 x11 = []
 cef = ["pentimento-webview/cef"]
+dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui"]
 local-diffusion = ["pentimento-diffusion/local"]
 wireframe = ["pentimento-scene/wireframe"]
 selection = ["pentimento-scene/selection"]

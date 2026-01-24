@@ -1,0 +1,11 @@
+[package]
+name = "pentimento-dioxus-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pentimento-ipc = { path = "../ipc" }
+dioxus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

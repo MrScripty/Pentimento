@@ -4,6 +4,7 @@
 //! - Capture: Offscreen webview with framebuffer capture (default)
 //! - Overlay: Transparent child window composited by desktop compositor
 //! - Cef: CEF (Chromium) offscreen rendering with framebuffer capture
+//! - Dioxus: Native Rust UI with Dioxus renderer
 //! - Tauri: Bevy WASM in Tauri webview (requires separate build)
 
 use bevy::prelude::*;
@@ -14,12 +15,16 @@ mod ui_composite;
 mod ui_overlay;
 #[cfg(feature = "cef")]
 mod ui_cef;
+#[cfg(feature = "dioxus")]
+mod ui_dioxus;
 
 // Re-export types needed by the input module
 pub use ui_composite::WebviewResource;
 pub use ui_overlay::OverlayWebviewResource;
 #[cfg(feature = "cef")]
 pub use ui_cef::CefWebviewResource;
+#[cfg(feature = "dioxus")]
+pub use ui_dioxus::DioxusRendererResource;
 
 pub struct RenderPlugin;
 
@@ -77,6 +82,23 @@ impl Plugin for RenderPlugin {
                 // In native builds, this mode is not applicable
                 warn!("Tauri mode requires building for WASM and running inside Tauri");
                 info!("Render plugin: Tauri mode - no native render setup needed");
+            }
+            #[cfg(feature = "dioxus")]
+            CompositeMode::Dioxus => {
+                // Dioxus mode setup - native Rust UI
+                app.init_resource::<ui_dioxus::DioxusLastWindowSize>()
+                    .init_resource::<ui_dioxus::DioxusRendererStatus>();
+
+                app.add_systems(Startup, ui_dioxus::setup_ui_dioxus)
+                    .add_systems(Update, ui_dioxus::update_dioxus_ui_texture)
+                    .add_systems(Update, ui_dioxus::handle_dioxus_window_resize);
+
+                info!("Render plugin initialized with DIOXUS mode");
+            }
+            #[cfg(not(feature = "dioxus"))]
+            CompositeMode::Dioxus => {
+                error!("Dioxus mode requires the 'dioxus' feature. Build with: cargo build --features dioxus");
+                panic!("Dioxus mode not available - rebuild with --features dioxus");
             }
         }
     }

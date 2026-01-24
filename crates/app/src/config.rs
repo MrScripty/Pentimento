@@ -18,6 +18,9 @@ pub enum CompositeMode {
     /// Bevy compiled to WASM running inside Tauri webview
     /// Inverts ownership - Tauri owns the window, Bevy renders to canvas
     Tauri,
+    /// Native Dioxus UI with Blitz WGPU renderer
+    /// Fast startup, low memory, pure Rust alternative to CEF
+    Dioxus,
 }
 
 impl CompositeMode {
@@ -27,6 +30,7 @@ impl CompositeMode {
             Ok("overlay") => Self::Overlay,
             Ok("cef") => Self::Cef,
             Ok("tauri") => Self::Tauri,
+            Ok("dioxus") => Self::Dioxus,
             Ok("capture") | _ => Self::Capture,
         }
     }

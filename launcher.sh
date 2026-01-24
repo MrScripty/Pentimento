@@ -52,6 +52,11 @@ while [[ $# -gt 0 ]]; do
             COMPOSITE_MODE="electron"
             shift
             ;;
+        --dioxus)
+            COMPOSITE_MODE="dioxus"
+            CARGO_FEATURES="--features dioxus"
+            shift
+            ;;
         --help|-h)
             echo "Pentimento Launcher"
             echo ""
@@ -66,6 +71,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --cef       Use CEF (Chromium) compositing mode"
             echo "  --tauri     Use Tauri mode (Bevy WASM in webview) - UNMAINTAINED"
             echo "  --electron  Use Electron mode (Bevy WASM in Chromium)"
+            echo "  --dioxus    Use Dioxus mode (native Rust UI with Blitz renderer)"
             echo "  --help, -h  Show this help message"
             echo ""
             echo "Compositing modes:"
@@ -78,6 +84,8 @@ while [[ $# -gt 0 ]]; do
             echo "  tauri   - Tauri owns window, Bevy runs as WASM (UNMAINTAINED - WebKitGTK bug)"
             echo "  electron - Electron owns window, Bevy runs as WASM, uses Chromium"
             echo "             Stable WebGL2 rendering via Chromium"
+            echo "  dioxus  - Native Rust UI using Dioxus + Blitz (WGPU renderer)"
+            echo "            Fast startup, low memory, pure Rust"
             exit 0
             ;;
         *)

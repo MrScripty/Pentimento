@@ -8,6 +8,7 @@ license.workspace = true
 default = ["webkit"]
 webkit = []
 cef = ["dep:cef", "dep:urlencoding"]
+dioxus = ["dep:pentimento-dioxus-ui"]
 
 [dependencies]
 pentimento-config = { path = "../config" }
@@ -34,6 +35,9 @@ gio = "0.18"
 # CEF (Chromium Embedded Framework) bindings - optional dependency for cef feature
 cef = { version = "143.7", optional = true }
 urlencoding = { version = "2.1", optional = true }
+
+# Dioxus (native Rust UI) - optional dependency for dioxus feature
+pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [

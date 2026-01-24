@@ -1,6 +1,6 @@
 //! Input handling - forwards Bevy input events to the webview
 //!
-//! Supports capture, overlay, and CEF compositing modes.
+//! Supports capture, overlay, CEF, and Dioxus compositing modes.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButtonInput, MouseMotion, MouseWheel};
@@ -15,6 +15,8 @@ use crate::config::{CompositeMode, PentimentoConfig};
 use crate::render::{OverlayWebviewResource, WebviewResource};
 #[cfg(feature = "cef")]
 use crate::render::CefWebviewResource;
+#[cfg(feature = "dioxus")]
+use crate::render::DioxusRendererResource;
 
 /// Minimum interval between mouse move events sent to webview (throttling)
 const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps max
@@ -89,6 +91,7 @@ fn track_mouse_position(
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
     #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
+    #[cfg(feature = "dioxus")] dioxus_renderer: Option<NonSendMut<DioxusRendererResource>>,
     windows: Query<&Window>,
 ) {
     // Always clear motion events - we use cursor position instead
@@ -118,6 +121,12 @@ fn track_mouse_position(
                 (event.position.x * scale_factor, event.position.y * scale_factor)
             }
             CompositeMode::Capture => {
+                let scale_factor = window.resolution.scale_factor();
+                (event.position.x * scale_factor, event.position.y * scale_factor)
+            }
+            #[cfg(feature = "dioxus")]
+            CompositeMode::Dioxus => {
+                // Dioxus renders at physical resolution like CEF
                 let scale_factor = window.resolution.scale_factor();
                 (event.position.x * scale_factor, event.position.y * scale_factor)
             }
@@ -172,6 +181,15 @@ fn track_mouse_position(
         }
         #[cfg(not(feature = "cef"))]
         CompositeMode::Cef => {}
+        #[cfg(feature = "dioxus")]
+        CompositeMode::Dioxus => {
+            if let Some(mut renderer) = dioxus_renderer {
+                renderer.renderer.send_mouse_event(mouse_event);
+                mouse_state.last_move_sent = now;
+            }
+        }
+        #[cfg(not(feature = "dioxus"))]
+        CompositeMode::Dioxus => {}
         CompositeMode::Tauri => {
             // Tauri mode handles input in the browser
         }
@@ -187,6 +205,7 @@ fn forward_mouse_buttons(
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
     #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
+    #[cfg(feature = "dioxus")] dioxus_renderer: Option<NonSendMut<DioxusRendererResource>>,
 ) {
     // Use the tracked position (updated by track_mouse_position which runs first)
     let click_x = mouse_state.webview_x;
@@ -258,6 +277,24 @@ fn forward_mouse_buttons(
         }
         #[cfg(not(feature = "cef"))]
         CompositeMode::Cef => {}
+        #[cfg(feature = "dioxus")]
+        CompositeMode::Dioxus => {
+            let Some(mut renderer) = dioxus_renderer else { return };
+            for event in &events {
+                let Some(button) = convert_button(event.button) else { continue };
+                if event.state.is_pressed() {
+                    info!("Dioxus Click at ({:.1}, {:.1})", click_x, click_y);
+                }
+                let mouse_event = if event.state.is_pressed() {
+                    MouseEvent::ButtonDown { button, x: click_x, y: click_y }
+                } else {
+                    MouseEvent::ButtonUp { button, x: click_x, y: click_y }
+                };
+                renderer.renderer.send_mouse_event(mouse_event);
+            }
+        }
+        #[cfg(not(feature = "dioxus"))]
+        CompositeMode::Dioxus => {}
         CompositeMode::Tauri => {}
     }
 }
@@ -271,6 +308,7 @@ fn forward_mouse_scroll(
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
     #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
+    #[cfg(feature = "dioxus")] dioxus_renderer: Option<NonSendMut<DioxusRendererResource>>,
 ) {
     let scroll_x = mouse_state.webview_x;
     let scroll_y = mouse_state.webview_y;
@@ -328,6 +366,21 @@ fn forward_mouse_scroll(
         }
         #[cfg(not(feature = "cef"))]
         CompositeMode::Cef => {}
+        #[cfg(feature = "dioxus")]
+        CompositeMode::Dioxus => {
+            let Some(mut renderer) = dioxus_renderer else { return };
+            for event in &events {
+                let (delta_x, delta_y) = convert_delta(event);
+                renderer.renderer.send_mouse_event(MouseEvent::Scroll {
+                    delta_x,
+                    delta_y: -delta_y,
+                    x: scroll_x,
+                    y: scroll_y,
+                });
+            }
+        }
+        #[cfg(not(feature = "dioxus"))]
+        CompositeMode::Dioxus => {}
         CompositeMode::Tauri => {}
     }
 }
@@ -340,6 +393,7 @@ fn forward_keyboard(
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
     #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
+    #[cfg(feature = "dioxus")] dioxus_renderer: Option<NonSendMut<DioxusRendererResource>>,
 ) {
     // Build current modifier state
     let modifiers = Modifiers {
@@ -391,6 +445,20 @@ fn forward_keyboard(
         }
         #[cfg(not(feature = "cef"))]
         CompositeMode::Cef => {}
+        #[cfg(feature = "dioxus")]
+        CompositeMode::Dioxus => {
+            let Some(mut renderer) = dioxus_renderer else { return };
+            for event in &events {
+                let key = bevy_keycode_to_web_key(event.key_code);
+                renderer.renderer.send_keyboard_event(KeyboardEvent {
+                    key,
+                    pressed: event.state.is_pressed(),
+                    modifiers: modifiers.clone(),
+                });
+            }
+        }
+        #[cfg(not(feature = "dioxus"))]
+        CompositeMode::Dioxus => {}
         CompositeMode::Tauri => {}
     }
 }

@@ -4,6 +4,7 @@
 //! - Capture mode: Renders webview offscreen and captures framebuffer for texture upload
 //! - Overlay mode: Creates transparent child window that composites via desktop compositor
 //! - CEF mode: Uses Chromium Embedded Framework for offscreen rendering (requires `cef` feature)
+//! - Dioxus mode: Native Rust UI with Dioxus (requires `dioxus` feature)
 
 mod error;
 
@@ -13,6 +14,8 @@ mod platform_linux;
 mod platform_linux_overlay;
 #[cfg(all(target_os = "linux", feature = "cef"))]
 mod platform_linux_cef;
+#[cfg(all(target_os = "linux", feature = "dioxus"))]
+mod platform_linux_dioxus;
 #[cfg(target_os = "windows")]
 mod platform_windows;
 
@@ -22,6 +25,8 @@ pub use error::WebviewError;
 pub use platform_linux_overlay::LinuxOverlayWebview;
 #[cfg(all(target_os = "linux", feature = "cef"))]
 pub use platform_linux_cef::LinuxCefWebview;
+#[cfg(all(target_os = "linux", feature = "dioxus"))]
+pub use platform_linux_dioxus::LinuxDioxusRenderer;
 
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -395,5 +400,99 @@ impl CefWebview {
     /// Open Chrome DevTools for debugging the webview (Ctrl+Shift+I)
     pub fn show_dev_tools(&self) {
         self.inner.show_dev_tools();
+    }
+}
+
+/// Dioxus-based native UI renderer
+///
+/// Uses Dioxus with native Rust rendering instead of a browser engine.
+/// Requires the `dioxus` feature.
+#[cfg(feature = "dioxus")]
+pub struct DioxusWebview {
+    #[cfg(target_os = "linux")]
+    inner: platform_linux_dioxus::LinuxDioxusRenderer,
+
+    dirty: Arc<AtomicBool>,
+    size: (u32, u32),
+}
+
+#[cfg(feature = "dioxus")]
+impl DioxusWebview {
+    /// Create a new Dioxus-based UI renderer
+    pub fn new(size: (u32, u32)) -> Result<Self, WebviewError> {
+        let dirty = Arc::new(AtomicBool::new(false));
+
+        #[cfg(target_os = "linux")]
+        let inner = platform_linux_dioxus::LinuxDioxusRenderer::new(size, dirty.clone())?;
+
+        Ok(Self {
+            inner,
+            dirty,
+            size,
+        })
+    }
+
+    /// Poll for events. Call this each frame from Bevy's main loop.
+    pub fn poll(&mut self) {
+        self.inner.poll();
+    }
+
+    /// Capture the framebuffer if the UI has changed since last capture.
+    ///
+    /// Returns RGBA pixel data with dimensions (data, width, height).
+    pub fn capture_if_dirty(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+        if !self.is_ready() {
+            return None;
+        }
+
+        self.inner.capture_if_dirty()
+    }
+
+    /// Check if the renderer is ready for capture operations
+    pub fn is_ready(&self) -> bool {
+        self.inner.is_ready()
+    }
+
+    /// Force a capture regardless of dirty state
+    pub fn capture(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+        self.dirty.store(false, Ordering::SeqCst);
+        self.inner.capture()
+    }
+
+    /// Mark the UI as dirty, triggering a capture on next poll
+    pub fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::SeqCst);
+    }
+
+    /// Get the current size of the renderer
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// Resize the renderer
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.size = (width, height);
+        self.inner.resize(width, height);
+        self.mark_dirty();
+    }
+
+    /// Forward a mouse event to Dioxus
+    pub fn send_mouse_event(&mut self, event: MouseEvent) {
+        self.inner.inject_mouse(event);
+    }
+
+    /// Forward a keyboard event to Dioxus
+    pub fn send_keyboard_event(&mut self, event: KeyboardEvent) {
+        self.inner.inject_keyboard(event);
+    }
+
+    /// Send a message to the Dioxus UI
+    pub fn send_to_ui(&mut self, msg: BevyToUi) {
+        self.inner.send_to_ui(msg);
+    }
+
+    /// Try to receive a message from the Dioxus UI (non-blocking)
+    pub fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {
+        self.inner.try_recv_from_ui()
     }
 }

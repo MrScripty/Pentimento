@@ -9,6 +9,7 @@ members = [
     "crates/ipc",
     "crates/diffusion",
     "crates/cef-helper",
+    "crates/dioxus-ui",
     "src-tauri",
 ]
 
@@ -43,6 +44,10 @@ candle-transformers = "0.8"
 # Networking
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
+
+# Dioxus (native UI with Blitz WGPU renderer)
+dioxus = "0.7"
+dioxus-native = "0.7"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
