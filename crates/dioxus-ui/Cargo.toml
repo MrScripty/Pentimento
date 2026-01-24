@@ -10,6 +10,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+# Bevy for render world integration
+bevy = { workspace = true }
+
 # Vello for GPU rendering - accessed via Bevy's shared wgpu device
 vello = { workspace = true }
 

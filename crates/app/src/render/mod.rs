@@ -85,16 +85,11 @@ impl Plugin for RenderPlugin {
             }
             #[cfg(feature = "dioxus")]
             CompositeMode::Dioxus => {
-                // Dioxus mode setup - native Rust UI with Vello GPU rendering
-                app.init_resource::<ui_dioxus::DioxusLastWindowSize>()
-                    .init_resource::<ui_dioxus::DioxusRendererStatus>();
+                // Dioxus mode setup - native Rust UI with Vello GPU zero-copy rendering
+                // The DioxusRenderPlugin handles all setup including render world integration
+                app.add_plugins(ui_dioxus::DioxusRenderPlugin);
 
-                // Main world systems
-                app.add_systems(Startup, ui_dioxus::setup_ui_dioxus)
-                    .add_systems(Update, ui_dioxus::update_dioxus_ui_texture)
-                    .add_systems(Update, ui_dioxus::handle_dioxus_window_resize);
-
-                info!("Render plugin initialized with DIOXUS mode (Vello GPU renderer)");
+                info!("Render plugin initialized with DIOXUS mode (Vello zero-copy GPU renderer)");
             }
             #[cfg(not(feature = "dioxus"))]
             CompositeMode::Dioxus => {

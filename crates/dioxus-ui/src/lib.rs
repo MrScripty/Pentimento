@@ -20,8 +20,11 @@ mod state;
 
 pub use app::PentimentoApp;
 pub use bridge::{DioxusBridge, DioxusBridgeHandle};
-pub use renderer::{UiRenderState, VelloRenderer, VelloRendererError};
+pub use renderer::{SharedVelloRenderer, UiRenderState, VelloRenderer, VelloRendererError};
 pub use state::UiState;
 
-// Re-export wgpu types needed for the renderer interface
+// Re-export types needed for the renderer interface
+pub use vello::kurbo;
+pub use vello::peniko;
+pub use vello::{AaConfig, RenderParams, Scene};
 pub use wgpu;

@@ -8,7 +8,13 @@
 //! The renderer accepts an external wgpu Device/Queue from Bevy, allowing
 //! both Bevy and the UI to share the same GPU context. Vello renders to
 //! a shared texture which Bevy then samples in its shader pipeline.
+//!
+//! # Thread Safety
+//!
+//! `SharedVelloRenderer` wraps Vello's Renderer in `Arc<Mutex<...>>` to make
+//! it Send+Sync for use in Bevy's render world.
 
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 use vello::kurbo::{Affine, RoundedRect};
 use vello::peniko::{Brush, Color, Fill};
@@ -256,6 +262,58 @@ impl std::fmt::Display for VelloRendererError {
 }
 
 impl std::error::Error for VelloRendererError {}
+
+/// Thread-safe Vello renderer wrapper for Bevy's render world.
+///
+/// Wraps Vello's `Renderer` in `Arc<Mutex<...>>` to be Send+Sync for use
+/// across render threads. The mutex is only held during rendering, which
+/// happens once per frame with no contention.
+#[derive(Clone)]
+pub struct SharedVelloRenderer(Arc<Mutex<Renderer>>);
+
+impl SharedVelloRenderer {
+    /// Create a new thread-safe Vello renderer.
+    ///
+    /// This should be called in Bevy's plugin `finish()` method after
+    /// `RenderDevice` is available.
+    pub fn new(device: &wgpu::Device) -> Result<Self, VelloRendererError> {
+        info!("Creating SharedVelloRenderer for render world");
+        let renderer = Renderer::new(
+            device,
+            RendererOptions {
+                antialiasing_support: vello::AaSupport::area_only(),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| VelloRendererError::RendererCreation(format!("{:?}", e)))?;
+
+        Ok(Self(Arc::new(Mutex::new(renderer))))
+    }
+
+    /// Render a scene directly to a texture view.
+    ///
+    /// This is the zero-copy path: Vello renders directly to Bevy's GpuImage
+    /// texture without any CPU-side buffer copies.
+    pub fn render_to_texture(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &Scene,
+        texture_view: &wgpu::TextureView,
+        params: &RenderParams,
+    ) -> Result<(), VelloRendererError> {
+        debug!(
+            "SharedVelloRenderer::render_to_texture {}x{}",
+            params.width, params.height
+        );
+
+        self.0
+            .lock()
+            .unwrap()
+            .render_to_texture(device, queue, scene, texture_view, params)
+            .map_err(|e| VelloRendererError::RenderFailed(format!("{:?}", e)))
+    }
+}
 
 #[cfg(test)]
 mod tests {
