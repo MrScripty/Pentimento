@@ -21,7 +21,7 @@ body {
 }
 
 .panel {
-    background: rgba(30, 30, 30, 0.85);
+    background: rgba(30, 30, 30, 0.95);
     backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
 }

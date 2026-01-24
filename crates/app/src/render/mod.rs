@@ -16,6 +16,8 @@ mod ui_overlay;
 #[cfg(feature = "cef")]
 mod ui_cef;
 #[cfg(feature = "dioxus")]
+mod ui_blend_material;
+#[cfg(feature = "dioxus")]
 mod ui_dioxus;
 
 // Re-export types needed by the input module

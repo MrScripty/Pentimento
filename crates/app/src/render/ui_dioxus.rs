@@ -31,6 +31,8 @@ use pentimento_dioxus_ui::{
 };
 use pentimento_ipc::MouseEvent;
 
+use super::ui_blend_material::{UiBlendMaterial, UiBlendMaterialPlugin};
+
 // ============================================================================
 // Main World Resources
 // ============================================================================
@@ -124,6 +126,7 @@ impl Plugin for DioxusRenderPlugin {
         // Main world setup
         app.init_resource::<DioxusUiState>()
             .init_resource::<DioxusInputState>()
+            .add_plugins(UiBlendMaterialPlugin)
             .add_plugins(ExtractResourcePlugin::<DioxusUiState>::default())
             .add_plugins(ExtractResourcePlugin::<DioxusRenderTargetId>::default())
             .add_systems(Startup, setup_dioxus_texture)
@@ -227,12 +230,17 @@ fn setup_dioxus_texture(world: &mut World) {
         ..default()
     });
 
-    // Create a full-screen UI node with the texture
+    // Create the blend material for proper alpha compositing
+    let material_handle = world
+        .resource_mut::<Assets<UiBlendMaterial>>()
+        .add(UiBlendMaterial {
+            texture: handle,
+        });
+
+    // Create a full-screen UI node with the custom blend material
+    // MaterialNode ensures proper alpha blending over the 3D scene
     world.spawn((
-        ImageNode {
-            image: handle,
-            ..default()
-        },
+        MaterialNode(material_handle),
         Node {
             width: Val::Vw(100.0),
             height: Val::Vh(100.0),
@@ -246,7 +254,7 @@ fn setup_dioxus_texture(world: &mut World) {
         Pickable::IGNORE,
     ));
 
-    info!("Dioxus UI overlay created");
+    info!("Dioxus UI overlay created with UiBlendMaterial");
 }
 
 /// Update UI state from game state (runs every frame in main world).
@@ -388,8 +396,8 @@ fn draw_toolbar(scene: &mut Scene, width: f64) {
 
     let toolbar_height = 48.0;
 
-    // Background - semi-transparent dark gray (85% opacity = 216/255)
-    let bg_color = Color::from_rgba8(30, 30, 30, 216);
+    // Background - semi-transparent dark gray (90% opacity = 230/255)
+    let bg_color = Color::from_rgba8(30, 30, 30, 230);
     let rect = RoundedRect::from_rect(kurbo::Rect::new(0.0, 0.0, width, toolbar_height), 0.0);
     scene.fill(
         Fill::NonZero,
@@ -434,8 +442,8 @@ fn draw_side_panel(scene: &mut Scene, width: f64, height: f64) {
     let panel_top = 56.0;
     let panel_margin = 8.0;
 
-    // Panel background (85% opacity)
-    let bg_color = Color::from_rgba8(30, 30, 30, 216);
+    // Panel background (90% opacity)
+    let bg_color = Color::from_rgba8(30, 30, 30, 230);
     let rect = RoundedRect::from_rect(
         kurbo::Rect::new(
             width - panel_width - panel_margin,

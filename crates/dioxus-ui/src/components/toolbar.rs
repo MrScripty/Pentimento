@@ -17,7 +17,7 @@ const TOOLBAR_CSS: &str = r#"
     justify-content: space-between;
     padding: 0 16px;
     z-index: 100;
-    background: rgba(30, 30, 30, 0.85);
+    background: rgba(30, 30, 30, 0.95);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }

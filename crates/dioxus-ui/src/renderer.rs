@@ -120,8 +120,8 @@ impl VelloRenderer {
         let toolbar_height = 48.0;
         let width = self.width as f64;
 
-        // Background - semi-transparent dark gray (85% opacity = 216/255)
-        let bg_color = Color::from_rgba8(30, 30, 30, 216);
+        // Background - semi-transparent dark gray (90% opacity = 230/255)
+        let bg_color = Color::from_rgba8(30, 30, 30, 230);
         let rect = RoundedRect::from_rect(
             vello::kurbo::Rect::new(0.0, 0.0, width, toolbar_height),
             0.0,
@@ -171,8 +171,8 @@ impl VelloRenderer {
         let width = self.width as f64;
         let height = self.height as f64;
 
-        // Panel background (85% opacity)
-        let bg_color = Color::from_rgba8(30, 30, 30, 216);
+        // Panel background (90% opacity)
+        let bg_color = Color::from_rgba8(30, 30, 30, 230);
         let rect = RoundedRect::from_rect(
             vello::kurbo::Rect::new(
                 width - panel_width - panel_margin,
