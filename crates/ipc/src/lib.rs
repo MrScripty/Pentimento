@@ -52,6 +52,22 @@ pub enum BevyToUi {
 
     /// Error notification
     Error { code: String, message: String },
+
+    /// Show/hide add object menu (triggered by Shift+A)
+    ShowAddObjectMenu {
+        show: bool,
+        /// Screen position for menu (if show is true)
+        position: Option<[f32; 2]>,
+    },
+
+    /// Object was added to scene
+    ObjectAdded { object: SceneObject },
+
+    /// Gizmo mode changed (for UI sync)
+    GizmoModeChanged { mode: GizmoMode },
+
+    /// Ambient occlusion settings changed
+    AmbientOcclusionChanged { settings: AmbientOcclusionSettings },
 }
 
 /// Messages from Svelte UI to Bevy
@@ -87,6 +103,15 @@ pub enum UiToBevy {
 
     /// Node graph connection changed
     NodeGraphUpdate(NodeGraphState),
+
+    /// Add a new object to the scene
+    AddObject(AddObjectRequest),
+
+    /// Ambient occlusion settings changed
+    UpdateAmbientOcclusion(AmbientOcclusionSettings),
+
+    /// Gizmo command (from keyboard hotkeys)
+    GizmoCommand(GizmoCommand),
 }
 
 // ============================================================================
@@ -285,6 +310,12 @@ pub struct LightingSettings {
     pub ambient_color: [f32; 3],
     /// Ambient light intensity (0.0-1.0 typical range)
     pub ambient_intensity: f32,
+    /// Time of day in hours (0.0 - 24.0) for sun position calculation
+    pub time_of_day: f32,
+    /// Cloudiness factor (0.0 = clear, 1.0 = fully overcast)
+    pub cloudiness: f32,
+    /// Whether to auto-calculate sun direction from time_of_day
+    pub use_time_of_day: bool,
 }
 
 impl Default for LightingSettings {
@@ -300,6 +331,106 @@ impl Default for LightingSettings {
             ambient_color: [0.6, 0.7, 1.0],
             // Moderate ambient fill
             ambient_intensity: 500.0,
+            // Default to noon
+            time_of_day: 12.0,
+            // Clear sky
+            cloudiness: 0.0,
+            // Use time-based sun positioning
+            use_time_of_day: true,
+        }
+    }
+}
+
+// ============================================================================
+// Gizmo Types
+// ============================================================================
+
+/// Transform gizmo operation mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GizmoMode {
+    #[default]
+    None,
+    Translate,
+    Rotate,
+    Scale,
+}
+
+/// Axis constraint for gizmo operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GizmoAxis {
+    #[default]
+    None,
+    X,
+    Y,
+    Z,
+    /// Constrain to XY plane (exclude Z)
+    XY,
+    /// Constrain to XZ plane (exclude Y)
+    XZ,
+    /// Constrain to YZ plane (exclude X)
+    YZ,
+}
+
+/// Commands for controlling the transform gizmo
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GizmoCommand {
+    /// Set the active gizmo mode (G/S/R keys)
+    SetMode(GizmoMode),
+    /// Constrain to specific axis (X/Y/Z keys)
+    ConstrainAxis(GizmoAxis),
+    /// Cancel current transform operation (Escape)
+    Cancel,
+    /// Confirm current transform operation (Enter/LMB)
+    Confirm,
+}
+
+// ============================================================================
+// Add Object Types
+// ============================================================================
+
+/// Primitive mesh types for object creation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrimitiveType {
+    Cube,
+    Sphere,
+    Cylinder,
+    Plane,
+    Torus,
+    Cone,
+    Capsule,
+}
+
+/// Request to add a new object to the scene
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddObjectRequest {
+    pub primitive_type: PrimitiveType,
+    /// Optional world position (defaults to origin)
+    pub position: Option<[f32; 3]>,
+    /// Optional custom name
+    pub name: Option<String>,
+}
+
+// ============================================================================
+// Ambient Occlusion Types
+// ============================================================================
+
+/// Screen-space ambient occlusion settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmbientOcclusionSettings {
+    /// Enable/disable SSAO
+    pub enabled: bool,
+    /// Quality level: 0=Low, 1=Medium, 2=High, 3=Ultra
+    pub quality_level: u8,
+    /// Constant object thickness for ray marching (0.0625 - 4.0)
+    pub constant_object_thickness: f32,
+}
+
+impl Default for AmbientOcclusionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quality_level: 2, // High
+            constant_object_thickness: 0.25,
         }
     }
 }
