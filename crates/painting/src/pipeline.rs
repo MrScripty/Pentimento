@@ -9,6 +9,8 @@
 //! The pipeline is designed to be used from Bevy systems but does not
 //! depend on Bevy itself.
 
+use tracing::{debug, info};
+
 use crate::brush::{BrushEngine, BrushPreset, DabOutput};
 use crate::log::{DabParams, StrokeConfig, StrokeLog, StrokeRecorder};
 use crate::tiles::{TileCoord, TiledSurface};
@@ -107,7 +109,10 @@ impl PaintingPipeline {
     pub fn stroke_to(&mut self, x: f32, y: f32, pressure: f32) {
         let stroke_id = match self.current_stroke_id {
             Some(id) => id,
-            None => return, // No active stroke
+            None => {
+                debug!("stroke_to: no active stroke, ignoring");
+                return;
+            }
         };
         let space_id = match self.current_space_id {
             Some(id) => id,
@@ -116,6 +121,10 @@ impl PaintingPipeline {
 
         // Generate dabs from brush engine
         let dabs = self.brush.stroke_to(x, y, pressure);
+        info!(
+            "PaintingPipeline::stroke_to({:.1}, {:.1}, {:.2}) generated {} dabs",
+            x, y, pressure, dabs.len()
+        );
 
         // Initialize recorder on first dab if needed
         if self.recorder.is_none() && !dabs.is_empty() {
@@ -155,7 +164,11 @@ impl PaintingPipeline {
     /// Apply a dab to the surface
     fn apply_dab(&mut self, dab: &DabOutput) {
         let radius = dab.size / 2.0;
-        self.surface.apply_dab(
+        debug!(
+            "  apply_dab: pos=({:.1}, {:.1}), radius={:.1}, opacity={:.2}, hardness={:.2}",
+            dab.x, dab.y, radius, dab.opacity, dab.hardness
+        );
+        let result = self.surface.apply_dab(
             dab.x,
             dab.y,
             radius,
@@ -163,6 +176,11 @@ impl PaintingPipeline {
             dab.opacity,
             dab.hardness,
         );
+        if let Some((x, y, w, h)) = result {
+            debug!("    -> affected region: ({}, {}) {}x{}", x, y, w, h);
+        } else {
+            debug!("    -> dab outside surface bounds");
+        }
     }
 
     /// Record a dab to the stroke recorder

@@ -4,6 +4,8 @@
 //! points and generates dabs for painting. This is a placeholder for
 //! future libmypaint FFI integration.
 
+use tracing::debug;
+
 /// Brush preset configuration
 #[derive(Debug, Clone)]
 pub struct BrushPreset {
@@ -151,6 +153,10 @@ impl BrushEngine {
 
             // Generate first dab at starting position
             let size = self.preset.size_for_pressure(pressure);
+            debug!(
+                "BrushEngine::stroke_to: FIRST dab at ({:.1}, {:.1}), size={:.1}",
+                x, y, size
+            );
             dabs.push(DabOutput {
                 x,
                 y,
@@ -233,6 +239,13 @@ impl BrushEngine {
         // Update state for next call
         self.last_pos = Some((x, y));
         self.last_pressure = pressure;
+
+        if !dabs.is_empty() {
+            debug!(
+                "BrushEngine::stroke_to: generated {} dabs along path from ({:.1}, {:.1}) to ({:.1}, {:.1})",
+                dabs.len(), last_x, last_y, x, y
+            );
+        }
 
         dabs
     }

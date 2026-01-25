@@ -1,5 +1,7 @@
 //! Tile management and dirty tracking for CPU surfaces
 
+use tracing::debug;
+
 use crate::constants::DEFAULT_TILE_SIZE;
 use crate::surface::CpuSurface;
 use std::collections::HashSet;
@@ -89,12 +91,20 @@ impl TiledSurface {
         let tile_x_end = (x_end.saturating_sub(1)) / self.tile_size;
         let tile_y_end = (y_end.saturating_sub(1)) / self.tile_size;
 
+        let tiles_before = self.dirty_tiles.len();
+
         // Mark all tiles in the range
         for ty in tile_y_start..=tile_y_end {
             for tx in tile_x_start..=tile_x_end {
                 self.dirty_tiles.insert(TileCoord { x: tx, y: ty });
             }
         }
+
+        let tiles_after = self.dirty_tiles.len();
+        debug!(
+            "mark_region_dirty: ({}, {}) {}x{} -> {} new tiles (total {})",
+            x, y, w, h, tiles_after - tiles_before, tiles_after
+        );
     }
 
     /// Get all dirty tiles and clear the dirty set
@@ -174,7 +184,13 @@ impl TiledSurface {
         opacity: f32,
         hardness: f32,
     ) -> Option<(u32, u32, u32, u32)> {
+        debug!(
+            "TiledSurface::apply_dab: center=({:.1}, {:.1}), radius={:.1}, color={:?}, opacity={:.2}, hardness={:.2}",
+            center_x, center_y, radius, color, opacity, hardness
+        );
+
         if radius <= 0.0 || opacity <= 0.0 {
+            debug!("  -> skipped: radius or opacity <= 0");
             return None;
         }
 
