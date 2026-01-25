@@ -99,6 +99,7 @@ const TOOLBAR_CSS: &str = r#"
 }
 
 .tool-group {
+    position: relative;  /* Required for Blitz hit testing */
     display: flex;
     gap: 2px;
     background: rgba(0, 0, 0, 0.3);
@@ -118,6 +119,7 @@ const TOOLBAR_CSS: &str = r#"
     align-items: center;
     justify-content: center;
     transition: all 0.15s;
+    font-size: 16px;  /* Icon styling moved here */
 }
 
 .tool-button:hover {
@@ -125,14 +127,21 @@ const TOOLBAR_CSS: &str = r#"
     color: white;
 }
 
-.tool-button.selected {
+.tool-button-selected {
     background: rgba(100, 150, 255, 0.3);
+    border: none;
     color: white;
-}
-
-.icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 16px;
 }
+
+/* .icon class removed - icons styled directly on .tool-button */
 
 .stats {
     display: flex;
@@ -244,29 +253,91 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
 
             div { class: "toolbar-center",
                 div { class: "tool-group",
-                    button {
-                        class: if selected_tool() == "select" { "tool-button selected" } else { "tool-button" },
-                        title: "Select",
-                        onclick: move |_| selected_tool.set("select".to_string()),
-                        span { class: "icon", "↖" }
+                    // Use structural changes (if blocks) instead of attribute changes
+                    // Blitz handles DOM add/remove but not attribute updates
+                    if selected_tool() == "select" {
+                        button {
+                            class: "tool-button-selected",
+                            title: "Select",
+                            onclick: move |_| {
+                                tracing::info!("Select tool clicked");
+                                selected_tool.set("select".to_string());
+                            },
+                            "↖"
+                        }
+                    } else {
+                        button {
+                            class: "tool-button",
+                            title: "Select",
+                            onclick: move |_| {
+                                tracing::info!("Select tool clicked");
+                                selected_tool.set("select".to_string());
+                            },
+                            "↖"
+                        }
                     }
-                    button {
-                        class: if selected_tool() == "move" { "tool-button selected" } else { "tool-button" },
-                        title: "Move",
-                        onclick: move |_| selected_tool.set("move".to_string()),
-                        span { class: "icon", "✥" }
+                    if selected_tool() == "move" {
+                        button {
+                            class: "tool-button-selected",
+                            title: "Move",
+                            onclick: move |_| {
+                                tracing::info!("Move tool clicked");
+                                selected_tool.set("move".to_string());
+                            },
+                            "✥"
+                        }
+                    } else {
+                        button {
+                            class: "tool-button",
+                            title: "Move",
+                            onclick: move |_| {
+                                tracing::info!("Move tool clicked");
+                                selected_tool.set("move".to_string());
+                            },
+                            "✥"
+                        }
                     }
-                    button {
-                        class: if selected_tool() == "rotate" { "tool-button selected" } else { "tool-button" },
-                        title: "Rotate",
-                        onclick: move |_| selected_tool.set("rotate".to_string()),
-                        span { class: "icon", "↻" }
+                    if selected_tool() == "rotate" {
+                        button {
+                            class: "tool-button-selected",
+                            title: "Rotate",
+                            onclick: move |_| {
+                                tracing::info!("Rotate tool clicked");
+                                selected_tool.set("rotate".to_string());
+                            },
+                            "↻"
+                        }
+                    } else {
+                        button {
+                            class: "tool-button",
+                            title: "Rotate",
+                            onclick: move |_| {
+                                tracing::info!("Rotate tool clicked");
+                                selected_tool.set("rotate".to_string());
+                            },
+                            "↻"
+                        }
                     }
-                    button {
-                        class: if selected_tool() == "scale" { "tool-button selected" } else { "tool-button" },
-                        title: "Scale",
-                        onclick: move |_| selected_tool.set("scale".to_string()),
-                        span { class: "icon", "⤢" }
+                    if selected_tool() == "scale" {
+                        button {
+                            class: "tool-button-selected",
+                            title: "Scale",
+                            onclick: move |_| {
+                                tracing::info!("Scale tool clicked");
+                                selected_tool.set("scale".to_string());
+                            },
+                            "⤢"
+                        }
+                    } else {
+                        button {
+                            class: "tool-button",
+                            title: "Scale",
+                            onclick: move |_| {
+                                tracing::info!("Scale tool clicked");
+                                selected_tool.set("scale".to_string());
+                            },
+                            "⤢"
+                        }
                     }
                 }
             }
