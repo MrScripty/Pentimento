@@ -307,15 +307,16 @@ fn process_paint_events(
 
 /// Upload dirty tiles to GPU
 ///
-/// This system reuses the existing Image handle and batches dirty tiles into a
-/// single merged region upload, avoiding memory churn and reducing the number
-/// of copy operations.
+/// This system reuses the existing Image handle but replaces all image data.
+/// It also touches the material to trigger Bevy to rebind the GPU texture,
+/// which is necessary because StandardMaterial may cache the texture binding.
 fn upload_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
     mut images: ResMut<Assets<Image>>,
-    canvas_query: Query<(&CanvasPlane, &CanvasTexture)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    canvas_query: Query<(&CanvasPlane, &CanvasTexture, &MeshMaterial3d<StandardMaterial>)>,
 ) {
-    for (canvas_plane, canvas_texture) in canvas_query.iter() {
+    for (canvas_plane, canvas_texture, material_handle) in canvas_query.iter() {
         let Some(pipeline) = painting_res.get_pipeline_mut(canvas_plane.plane_id) else {
             continue;
         };
@@ -326,24 +327,37 @@ fn upload_dirty_tiles(
             continue;
         }
 
-        // Compute the bounding box of all dirty tiles for batched upload
-        let Some((region_x, region_y, region_w, region_h)) =
-            pipeline.compute_tiles_bounding_box(&dirty_tiles)
-        else {
-            continue;
-        };
+        // Compute the bounding box for logging purposes
+        let region_info = pipeline.compute_tiles_bounding_box(&dirty_tiles);
 
-        debug!(
-            "upload_dirty_tiles: plane={}, {} tiles -> merged region ({}, {}) {}x{}",
-            canvas_plane.plane_id,
-            dirty_tiles.len(),
-            region_x,
-            region_y,
-            region_w,
-            region_h
+        if let Some((region_x, region_y, region_w, region_h)) = region_info {
+            info!(
+                "upload_dirty_tiles: plane={}, {} tiles in region ({}, {}) {}x{}",
+                canvas_plane.plane_id,
+                dirty_tiles.len(),
+                region_x,
+                region_y,
+                region_w,
+                region_h
+            );
+        }
+
+        // Get full surface data and convert to RGBA8
+        let surface_bytes = pipeline.surface_as_bytes();
+        let full_rgba8 = surface_to_rgba8(surface_bytes);
+
+        // Diagnostic: count non-white pixels to verify data is changing
+        let non_white_count = full_rgba8
+            .chunks(4)
+            .filter(|p| p[0] < 250 || p[1] < 250 || p[2] < 250)
+            .count();
+        info!(
+            "  Surface has {} non-white pixels out of {}",
+            non_white_count,
+            full_rgba8.len() / 4
         );
 
-        // Get the existing image and update it in-place
+        // Get the existing image and replace its data
         let Some(image) = images.get_mut(&canvas_texture.image_handle) else {
             warn!(
                 "Could not find image for canvas plane {}",
@@ -352,30 +366,21 @@ fn upload_dirty_tiles(
             continue;
         };
 
-        // Get the merged region data and convert to RGBA8
-        let region_data = pipeline.get_region_data(region_x, region_y, region_w, region_h);
-        let region_rgba8 = tile_data_to_rgba8(&region_data);
+        // Replace the image data entirely
+        image.data = Some(full_rgba8);
 
-        let image_width = canvas_plane.width;
-
-        // Copy the entire merged region into the image at once
-        if let Some(ref mut data) = image.data {
-            for row in 0..region_h {
-                let src_start = (row * region_w) as usize * 4;
-                let src_end = src_start + (region_w as usize * 4);
-                let dst_y = region_y + row;
-                let dst_start = ((dst_y * image_width + region_x) as usize) * 4;
-                let dst_end = dst_start + (region_w as usize * 4);
-
-                if src_end <= region_rgba8.len() && dst_end <= data.len() {
-                    data[dst_start..dst_end].copy_from_slice(&region_rgba8[src_start..src_end]);
-                }
-            }
+        // CRITICAL: Touch the material to trigger Bevy to rebind the GPU texture
+        // The original working code updated the material every frame with a new handle.
+        // Even though we're reusing the same handle, touching the material forces
+        // Bevy to re-resolve the texture binding.
+        if let Some(material) = materials.get_mut(&material_handle.0) {
+            material.base_color_texture = Some(canvas_texture.image_handle.clone());
+            info!("  Updated material texture binding");
         }
 
-        debug!(
-            "  Updated merged region in-place ({}x{})",
-            region_w, region_h
+        info!(
+            "  Replaced image data for GPU upload ({}x{})",
+            canvas_plane.width, canvas_plane.height
         );
     }
 }
