@@ -8,6 +8,8 @@
 use bevy::input::mouse::{MouseButton, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 
+use crate::canvas_plane::ActiveCanvasPlane;
+
 /// Marker component for the main camera
 #[derive(Component)]
 pub struct MainCamera;
@@ -102,7 +104,14 @@ fn camera_orbit_system(
     key_input: Res<ButtonInput<KeyCode>>,
     mut motion_events: MessageReader<MouseMotion>,
     mut camera_query: Query<&mut OrbitCamera>,
+    active_plane: Res<ActiveCanvasPlane>,
 ) {
+    // Don't allow camera movement when locked to a canvas plane
+    if active_plane.camera_locked {
+        motion_events.clear();
+        return;
+    }
+
     // Only orbit on middle mouse without shift
     if !mouse_button.pressed(MouseButton::Middle) {
         motion_events.clear();
@@ -144,7 +153,14 @@ fn camera_pan_system(
     key_input: Res<ButtonInput<KeyCode>>,
     mut motion_events: MessageReader<MouseMotion>,
     mut camera_query: Query<(&mut OrbitCamera, &Transform)>,
+    active_plane: Res<ActiveCanvasPlane>,
 ) {
+    // Don't allow camera movement when locked to a canvas plane
+    if active_plane.camera_locked {
+        motion_events.clear();
+        return;
+    }
+
     if !mouse_button.pressed(MouseButton::Middle) {
         motion_events.clear();
         return;
@@ -185,7 +201,14 @@ fn camera_pan_system(
 fn camera_zoom_system(
     mut scroll_events: MessageReader<MouseWheel>,
     mut camera_query: Query<&mut OrbitCamera>,
+    active_plane: Res<ActiveCanvasPlane>,
 ) {
+    // Don't allow camera movement when locked to a canvas plane
+    if active_plane.camera_locked {
+        scroll_events.clear();
+        return;
+    }
+
     let mut scroll_delta = 0.0;
     for event in scroll_events.read() {
         scroll_delta += event.y;
