@@ -18,3 +18,21 @@ vello = { workspace = true }
 
 # Re-export wgpu types for the renderer interface
 wgpu = "27"
+
+# Blitz rendering pipeline (use git for anyrender 0.7 compatibility)
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
+dioxus-native-dom = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
+
+# AnyRender - the 2D drawing abstraction
+anyrender = "0.7"
+anyrender_vello = "0.7"
+
+# Layout (used by blitz-dom)
+taffy = "0.9"
+
+# Curve/path types
+peniko = "0.6"
+kurbo = "0.13"
+keyboard-types = "0.7"

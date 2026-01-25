@@ -1,6 +1,7 @@
 //! Side panel component - replicates the Svelte SidePanel.svelte
 
 use dioxus::prelude::*;
+use pentimento_ipc::{AmbientOcclusionSettings, LightingSettings};
 
 use crate::bridge::DioxusBridge;
 
@@ -43,6 +44,11 @@ const SIDE_PANEL_CSS: &str = r#"
     margin: 0;
 }
 
+.disabled-notice {
+    font-style: italic;
+    cursor: help;
+}
+
 .property-group {
     margin-bottom: 16px;
 }
@@ -60,6 +66,10 @@ const SIDE_PANEL_CSS: &str = r#"
     align-items: center;
     gap: 8px;
     margin-bottom: 8px;
+}
+
+.checkbox-property {
+    grid-template-columns: 80px auto 1fr;
 }
 
 .property-label {
@@ -85,6 +95,27 @@ const SIDE_PANEL_CSS: &str = r#"
     cursor: pointer;
 }
 
+.checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.select {
+    width: 100%;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: white;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.select option {
+    background: #2a2a2a;
+}
+
 .property-value {
     font-size: 11px;
     font-family: monospace;
@@ -104,13 +135,32 @@ pub struct MaterialProps {
 pub struct SidePanelProps {
     pub selected_objects: Vec<String>,
     pub bridge: DioxusBridge,
+    #[props(default = false)]
+    pub is_wasm: bool,
+}
+
+fn format_time(hours: f32) -> String {
+    let h = hours.floor() as i32;
+    let m = ((hours - hours.floor()) * 60.0).floor() as i32;
+    format!("{:02}:{:02}", h, m)
 }
 
 #[component]
 pub fn SidePanel(props: SidePanelProps) -> Element {
+    // Material properties
     let mut metallic = use_signal(|| 0.5f32);
     let mut roughness = use_signal(|| 0.3f32);
 
+    // Lighting settings
+    let mut time_of_day = use_signal(|| 12.0f32);
+    let mut cloudiness = use_signal(|| 0.0f32);
+
+    // Ambient occlusion settings
+    let mut ao_enabled = use_signal(|| false);
+    let mut ao_quality = use_signal(|| 2u8);
+    let mut ao_intensity = use_signal(|| 0.25f32);
+
+    // Material handlers
     let bridge = props.bridge.clone();
     let selected = props.selected_objects.clone();
     let handle_metallic_change = move |evt: Event<FormData>| {
@@ -141,9 +191,82 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
         }
     };
 
+    // Lighting handlers
+    let bridge = props.bridge.clone();
+    let handle_time_change = move |evt: Event<FormData>| {
+        if let Ok(value) = evt.value().parse::<f32>() {
+            time_of_day.set(value);
+            bridge.update_lighting(LightingSettings {
+                sun_direction: [-0.5, -0.7, -0.5],
+                sun_color: [1.0, 0.98, 0.95],
+                sun_intensity: 10000.0,
+                ambient_color: [0.6, 0.7, 1.0],
+                ambient_intensity: 500.0,
+                time_of_day: value,
+                cloudiness: cloudiness(),
+                use_time_of_day: true,
+            });
+        }
+    };
+
+    let bridge = props.bridge.clone();
+    let handle_cloudiness_change = move |evt: Event<FormData>| {
+        if let Ok(value) = evt.value().parse::<f32>() {
+            let normalized = value / 100.0;
+            cloudiness.set(normalized);
+            bridge.update_lighting(LightingSettings {
+                sun_direction: [-0.5, -0.7, -0.5],
+                sun_color: [1.0, 0.98, 0.95],
+                sun_intensity: 10000.0,
+                ambient_color: [0.6, 0.7, 1.0],
+                ambient_intensity: 500.0,
+                time_of_day: time_of_day(),
+                cloudiness: normalized,
+                use_time_of_day: true,
+            });
+        }
+    };
+
+    // AO handlers
+    let bridge = props.bridge.clone();
+    let handle_ao_enabled_change = move |evt: Event<FormData>| {
+        let checked = evt.value() == "true";
+        ao_enabled.set(checked);
+        bridge.update_ambient_occlusion(AmbientOcclusionSettings {
+            enabled: checked,
+            quality_level: ao_quality(),
+            constant_object_thickness: ao_intensity(),
+        });
+    };
+
+    let bridge = props.bridge.clone();
+    let handle_ao_quality_change = move |evt: Event<FormData>| {
+        if let Ok(value) = evt.value().parse::<u8>() {
+            ao_quality.set(value);
+            bridge.update_ambient_occlusion(AmbientOcclusionSettings {
+                enabled: ao_enabled(),
+                quality_level: value,
+                constant_object_thickness: ao_intensity(),
+            });
+        }
+    };
+
+    let bridge = props.bridge.clone();
+    let handle_ao_intensity_change = move |evt: Event<FormData>| {
+        if let Ok(value) = evt.value().parse::<f32>() {
+            ao_intensity.set(value);
+            bridge.update_ambient_occlusion(AmbientOcclusionSettings {
+                enabled: ao_enabled(),
+                quality_level: ao_quality(),
+                constant_object_thickness: value,
+            });
+        }
+    };
+
     rsx! {
         style { {SIDE_PANEL_CSS} }
         aside { class: "side-panel panel",
+            // Properties section
             section { class: "section",
                 h2 { class: "section-title", "Properties" }
 
@@ -184,6 +307,100 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
                 }
             }
 
+            // Lighting section
+            section { class: "section",
+                h2 { class: "section-title", "Lighting" }
+
+                div { class: "property-group",
+                    h3 { class: "group-title", "Sun / Sky" }
+
+                    div { class: "property",
+                        label { class: "property-label", "Time of Day" }
+                        input {
+                            r#type: "range",
+                            min: "0",
+                            max: "24",
+                            step: "0.1",
+                            value: "{time_of_day}",
+                            oninput: handle_time_change,
+                            class: "slider"
+                        }
+                        span { class: "property-value", "{format_time(time_of_day())}" }
+                    }
+
+                    div { class: "property",
+                        label { class: "property-label", "Cloudiness" }
+                        input {
+                            r#type: "range",
+                            min: "0",
+                            max: "100",
+                            step: "1",
+                            value: "{cloudiness() * 100.0}",
+                            oninput: handle_cloudiness_change,
+                            class: "slider"
+                        }
+                        span { class: "property-value", "{(cloudiness() * 100.0) as i32}%" }
+                    }
+                }
+            }
+
+            // Ambient Occlusion section
+            section { class: "section",
+                h2 { class: "section-title", "Ambient Occlusion" }
+
+                if props.is_wasm {
+                    p {
+                        class: "placeholder disabled-notice",
+                        title: "SSAO is not supported in WebGL2/WASM mode",
+                        "Not supported in browser"
+                    }
+                } else {
+                    div { class: "property-group",
+                        div { class: "property checkbox-property",
+                            label { class: "property-label", "Enable SSAO" }
+                            input {
+                                r#type: "checkbox",
+                                checked: "{ao_enabled}",
+                                onchange: handle_ao_enabled_change,
+                                class: "checkbox"
+                            }
+                            span {}
+                        }
+
+                        if ao_enabled() {
+                            div { class: "property",
+                                label { class: "property-label", "Quality" }
+                                select {
+                                    value: "{ao_quality}",
+                                    onchange: handle_ao_quality_change,
+                                    class: "select",
+                                    option { value: "0", "Low" }
+                                    option { value: "1", "Medium" }
+                                    option { value: "2", "High" }
+                                    option { value: "3", "Ultra" }
+                                }
+                                span {}
+                            }
+
+                            div { class: "property",
+                                label { class: "property-label", "Intensity" }
+                                input {
+                                    r#type: "range",
+                                    min: "0.0625",
+                                    max: "4",
+                                    step: "0.0625",
+                                    value: "{ao_intensity}",
+                                    oninput: handle_ao_intensity_change,
+                                    class: "slider"
+                                }
+                                span { class: "property-value", "{ao_intensity:.2}" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Diffusion section
             section { class: "section",
                 h2 { class: "section-title", "Diffusion" }
                 p { class: "placeholder", "Connect to a diffusion server to generate textures" }

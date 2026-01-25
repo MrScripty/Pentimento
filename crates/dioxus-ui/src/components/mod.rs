@@ -1,7 +1,9 @@
 //! UI Components
 
-mod toolbar;
+mod add_object_menu;
 mod side_panel;
+mod toolbar;
 
-pub use toolbar::Toolbar;
+pub use add_object_menu::AddObjectMenu;
 pub use side_panel::SidePanel;
+pub use toolbar::Toolbar;

@@ -3,8 +3,8 @@
 //! Uses Rust channels instead of console.log interception like CEF mode.
 
 use pentimento_ipc::{
-    BevyToUi, CameraCommand, DiffusionRequest, LightingSettings, MaterialCommand, ObjectCommand,
-    UiToBevy,
+    AddObjectRequest, AmbientOcclusionSettings, BevyToUi, CameraCommand, DiffusionRequest,
+    LightingSettings, MaterialCommand, ObjectCommand, PrimitiveType, UiToBevy,
 };
 use std::sync::mpsc;
 
@@ -122,6 +122,27 @@ impl DioxusBridge {
 
     pub fn update_lighting(&self, settings: LightingSettings) {
         self.send(UiToBevy::UpdateLighting(settings));
+    }
+
+    pub fn update_ambient_occlusion(&self, settings: AmbientOcclusionSettings) {
+        self.send(UiToBevy::UpdateAmbientOcclusion(settings));
+    }
+
+    // ========================================================================
+    // Add object commands
+    // ========================================================================
+
+    pub fn add_object(
+        &self,
+        primitive_type: PrimitiveType,
+        position: Option<[f32; 3]>,
+        name: Option<String>,
+    ) {
+        self.send(UiToBevy::AddObject(AddObjectRequest {
+            primitive_type,
+            position,
+            name,
+        }));
     }
 
     // ========================================================================
