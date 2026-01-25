@@ -307,8 +307,9 @@ fn process_paint_events(
 
 /// Upload dirty tiles to GPU
 ///
-/// This system reuses the existing Image handle and updates tile regions in-place,
-/// avoiding the memory churn of creating a new image every frame.
+/// This system reuses the existing Image handle and batches dirty tiles into a
+/// single merged region upload, avoiding memory churn and reducing the number
+/// of copy operations.
 fn upload_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
     mut images: ResMut<Assets<Image>>,
@@ -325,10 +326,21 @@ fn upload_dirty_tiles(
             continue;
         }
 
+        // Compute the bounding box of all dirty tiles for batched upload
+        let Some((region_x, region_y, region_w, region_h)) =
+            pipeline.compute_tiles_bounding_box(&dirty_tiles)
+        else {
+            continue;
+        };
+
         debug!(
-            "upload_dirty_tiles: plane={}, dirty_tiles={}",
+            "upload_dirty_tiles: plane={}, {} tiles -> merged region ({}, {}) {}x{}",
             canvas_plane.plane_id,
-            dirty_tiles.len()
+            dirty_tiles.len(),
+            region_x,
+            region_y,
+            region_w,
+            region_h
         );
 
         // Get the existing image and update it in-place
@@ -340,37 +352,30 @@ fn upload_dirty_tiles(
             continue;
         };
 
+        // Get the merged region data and convert to RGBA8
+        let region_data = pipeline.get_region_data(region_x, region_y, region_w, region_h);
+        let region_rgba8 = tile_data_to_rgba8(&region_data);
+
         let image_width = canvas_plane.width;
 
-        // Update only the dirty tile regions
-        for tile_coord in &dirty_tiles {
-            let (tile_x, tile_y, tile_w, tile_h) = pipeline.get_tile_bounds(*tile_coord);
-            let tile_data = pipeline.get_tile_data(*tile_coord);
+        // Copy the entire merged region into the image at once
+        if let Some(ref mut data) = image.data {
+            for row in 0..region_h {
+                let src_start = (row * region_w) as usize * 4;
+                let src_end = src_start + (region_w as usize * 4);
+                let dst_y = region_y + row;
+                let dst_start = ((dst_y * image_width + region_x) as usize) * 4;
+                let dst_end = dst_start + (region_w as usize * 4);
 
-            // Convert tile f32 data to RGBA8
-            let tile_rgba8 = tile_data_to_rgba8(&tile_data);
-
-            // Copy tile data into the image at the correct location
-            if let Some(ref mut data) = image.data {
-                for row in 0..tile_h {
-                    let src_start = (row * tile_w) as usize * 4;
-                    let src_end = src_start + (tile_w as usize * 4);
-                    let dst_y = tile_y + row;
-                    let dst_start = ((dst_y * image_width + tile_x) as usize) * 4;
-                    let dst_end = dst_start + (tile_w as usize * 4);
-
-                    if src_end <= tile_rgba8.len() && dst_end <= data.len() {
-                        data[dst_start..dst_end].copy_from_slice(&tile_rgba8[src_start..src_end]);
-                    }
+                if src_end <= region_rgba8.len() && dst_end <= data.len() {
+                    data[dst_start..dst_end].copy_from_slice(&region_rgba8[src_start..src_end]);
                 }
             }
         }
 
         debug!(
-            "  Updated {} dirty tiles in-place ({}x{})",
-            dirty_tiles.len(),
-            canvas_plane.width,
-            canvas_plane.height
+            "  Updated merged region in-place ({}x{})",
+            region_w, region_h
         );
     }
 }

@@ -267,6 +267,21 @@ impl PaintingPipeline {
         self.surface.tile_size()
     }
 
+    /// Get pixel data for a rectangular region
+    ///
+    /// Returns Vec of [f32; 4] pixels in row-major order.
+    /// The region is clamped to surface bounds.
+    pub fn get_region_data(&self, x: u32, y: u32, width: u32, height: u32) -> Vec<[f32; 4]> {
+        self.surface.get_region_data(x, y, width, height)
+    }
+
+    /// Compute bounding box of given tile coordinates in pixel coordinates
+    ///
+    /// Returns (x, y, width, height) or None if no tiles provided.
+    pub fn compute_tiles_bounding_box(&self, tiles: &[TileCoord]) -> Option<(u32, u32, u32, u32)> {
+        self.surface.compute_tiles_bounding_box(tiles)
+    }
+
     /// Get reference to stroke log
     pub fn log(&self) -> &StrokeLog {
         &self.log

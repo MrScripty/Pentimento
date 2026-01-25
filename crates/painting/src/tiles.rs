@@ -172,6 +172,63 @@ impl TiledSurface {
         &mut self.surface
     }
 
+    /// Get pixel data for a rectangular region
+    /// Returns Vec of [f32; 4] pixels in row-major order
+    /// The region is clamped to surface bounds
+    pub fn get_region_data(&self, x: u32, y: u32, width: u32, height: u32) -> Vec<[f32; 4]> {
+        // Clamp to surface bounds
+        let x_end = (x + width).min(self.surface.width);
+        let y_end = (y + height).min(self.surface.height);
+        let actual_width = x_end.saturating_sub(x);
+        let actual_height = y_end.saturating_sub(y);
+
+        if actual_width == 0 || actual_height == 0 {
+            return Vec::new();
+        }
+
+        let mut data = Vec::with_capacity((actual_width * actual_height) as usize);
+
+        for row in y..y_end {
+            for col in x..x_end {
+                if let Some(pixel) = self.surface.get_pixel(col, row) {
+                    data.push(pixel);
+                }
+            }
+        }
+
+        data
+    }
+
+    /// Compute bounding box of given tile coordinates in pixel coordinates
+    /// Returns (x, y, width, height) or None if no tiles provided
+    pub fn compute_tiles_bounding_box(&self, tiles: &[TileCoord]) -> Option<(u32, u32, u32, u32)> {
+        if tiles.is_empty() {
+            return None;
+        }
+
+        let mut min_x = u32::MAX;
+        let mut min_y = u32::MAX;
+        let mut max_x = 0u32;
+        let mut max_y = 0u32;
+
+        for tile in tiles {
+            let (tile_x, tile_y, tile_w, tile_h) = self.get_tile_bounds(*tile);
+            min_x = min_x.min(tile_x);
+            min_y = min_y.min(tile_y);
+            max_x = max_x.max(tile_x + tile_w);
+            max_y = max_y.max(tile_y + tile_h);
+        }
+
+        let width = max_x.saturating_sub(min_x);
+        let height = max_y.saturating_sub(min_y);
+
+        if width > 0 && height > 0 {
+            Some((min_x, min_y, width, height))
+        } else {
+            None
+        }
+    }
+
     /// Apply a dab to the surface (basic circle stamp)
     /// Returns bounding box of affected region (x, y, width, height)
     /// Returns None if the dab is completely outside the surface
