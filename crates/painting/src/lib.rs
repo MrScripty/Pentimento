@@ -7,16 +7,22 @@
 //! - [`surface`] - CPU 16-bit RGBA surface for painting
 //! - [`tiles`] - Tile management with dirty tracking
 //! - [`log`] - Stroke log storage and Iroh-ready hooks
+//! - [`brush`] - Brush engine for dab generation
+//! - [`pipeline`] - Complete painting pipeline
 
+pub mod brush;
 pub mod constants;
 pub mod log;
+pub mod pipeline;
 pub mod surface;
 pub mod tiles;
 pub mod types;
 pub mod validation;
 
+pub use brush::*;
 pub use constants::*;
 pub use log::*;
+pub use pipeline::*;
 pub use surface::*;
 pub use tiles::*;
 pub use types::*;

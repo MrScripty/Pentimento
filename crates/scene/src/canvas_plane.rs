@@ -8,6 +8,8 @@
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
 
+use crate::painting_system::CanvasTexture;
+
 /// Component marking an entity as a paintable canvas plane
 #[derive(Component)]
 pub struct CanvasPlane {
@@ -90,6 +92,7 @@ impl Plugin for CanvasPlanePlugin {
                 (
                     handle_canvas_plane_events,
                     handle_camera_lock_input.after(handle_canvas_plane_events),
+                    update_canvas_materials,
                 ),
             );
     }
@@ -207,5 +210,35 @@ fn handle_camera_lock_input(
     // Tab key toggles camera lock when a plane is selected
     if key_input.just_pressed(KeyCode::Tab) && active_plane.entity.is_some() {
         events.write(CanvasPlaneEvent::ToggleCameraLock);
+    }
+}
+
+/// Marker component indicating the material has been updated with the canvas texture
+#[derive(Component)]
+pub struct CanvasMaterialUpdated;
+
+/// Update canvas plane materials to use the painting texture
+fn update_canvas_materials(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<
+        (Entity, &CanvasTexture, &MeshMaterial3d<StandardMaterial>),
+        Without<CanvasMaterialUpdated>,
+    >,
+) {
+    for (entity, canvas_texture, mesh_material) in query.iter() {
+        // Update the material to use the canvas texture
+        if let Some(material) = materials.get_mut(&mesh_material.0) {
+            material.base_color_texture = Some(canvas_texture.image_handle.clone());
+            material.base_color = Color::WHITE;
+            material.alpha_mode = AlphaMode::Opaque;
+            material.unlit = true;
+            material.double_sided = true;
+
+            // Mark as updated to avoid processing again
+            commands.entity(entity).insert(CanvasMaterialUpdated);
+
+            info!("Updated canvas plane material with painting texture");
+        }
     }
 }

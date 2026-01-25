@@ -13,6 +13,7 @@ mod canvas_plane;
 mod gizmo;
 mod lighting;
 mod paint_mode;
+mod painting_system;
 #[cfg(feature = "selection")]
 mod outline;
 #[cfg(feature = "selection")]
@@ -24,11 +25,13 @@ pub use add_object::{AddObjectEvent, AddObjectPlugin};
 pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
 pub use canvas_plane::{
-    ActiveCanvasPlane, CanvasPlane, CanvasPlaneEvent, CanvasPlaneIdGenerator, CanvasPlanePlugin,
+    ActiveCanvasPlane, CanvasMaterialUpdated, CanvasPlane, CanvasPlaneEvent,
+    CanvasPlaneIdGenerator, CanvasPlanePlugin,
 };
 pub use gizmo::{GizmoPlugin, GizmoState};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
 pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
+pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
 #[cfg(feature = "selection")]
@@ -47,6 +50,7 @@ impl Plugin for ScenePlugin {
         app.add_plugins(GizmoPlugin);
         app.add_plugins(CanvasPlanePlugin);
         app.add_plugins(PaintModePlugin);
+        app.add_plugins(PaintingSystemPlugin);
 
         app.add_systems(Startup, setup_scene);
 
