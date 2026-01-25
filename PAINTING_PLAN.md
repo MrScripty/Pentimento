@@ -298,7 +298,26 @@ On validation failure:
 - [x] Simple brush engine (`brush.rs`) with spacing-based dab interpolation
 - [x] Painting pipeline (`pipeline.rs`) connecting brush → surface → log
 - [x] GPU upload system (`painting_system.rs`) with dirty tile tracking
-- [x] CanvasPlane material with Rgba32Float texture
+- [x] CanvasPlane material with Rgba8UnormSrgb texture (changed from Rgba32Float)
+
+#### Phase 5: Bug Fixes ✅
+Key issues fixed to get painting working:
+
+1. **TextureUsages::TEXTURE_BINDING missing** - GPU textures couldn't be sampled
+   by shaders without this flag. Added to both initial setup and dirty uploads.
+
+2. **UV coordinate calculation** - Fixed ray_plane_intersection to use Rectangle
+   mesh normals (-Z forward) instead of Plane3d (Y up), and properly scale UVs
+   using world_width/world_height dimensions.
+
+3. **Canvas plane orientation** - Rectangle mesh faces +Z, but looking_at makes
+   -Z point at target. Added 180° Y rotation so canvas faces the camera.
+
+4. **Linear to sRGB conversion** - CPU surface stores linear RGB but GPU expects
+   sRGB for Rgba8UnormSrgb format. Added gamma correction in `surface_to_rgba8()`.
+
+5. **Camera lock during painting** - Added checks in orbit/pan/zoom systems to
+   prevent camera movement when `ActiveCanvasPlane.camera_locked` is true.
 
 #### Phase 4: UI ✅
 - [x] Shift+A menu with "Paint" option (Dioxus + Svelte)
@@ -308,7 +327,33 @@ On validation failure:
 - [x] `EditMode` state and `EditModeChanged` IPC message
 - [x] Tab key exits paint mode and unlocks camera
 
+### Known Issues
+
+#### Performance
+The current GPU upload approach creates a **new Image asset every frame** with
+dirty tiles. This bypasses Bevy's change detection but is inefficient:
+- Creates memory churn (allocate new image, deallocate old)
+- Full surface upload instead of tile-based partial updates
+- No batching of dirty tiles across frames
+
+**Recommended optimizations:**
+1. Use `wgpu::Queue::write_texture()` for partial tile uploads
+2. Keep a single Image handle and update its data in place
+3. Batch small dirty regions into larger uploads
+4. Consider double-buffering for smoother updates
+
+#### Brush Feel
+The simple `BrushEngine` uses basic spacing interpolation. For production:
+- Integrate libmypaint for proper brush dynamics
+- Add pressure sensitivity support (tablet input)
+- Implement smoothing/stabilization for mouse input
+
 ### Remaining Work
+
+#### Performance Optimization (High Priority)
+- [ ] Partial tile upload via `wgpu::Queue::write_texture()`
+- [ ] Reuse Image handle instead of creating new one each frame
+- [ ] Batch dirty tile uploads
 
 #### libmypaint Integration (Deferred)
 - [ ] FFI bindings for libmypaint
