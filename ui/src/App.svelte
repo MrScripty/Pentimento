@@ -2,6 +2,7 @@
     import Toolbar from '$lib/components/Toolbar.svelte';
     import SidePanel from '$lib/components/SidePanel.svelte';
     import AddObjectMenu from '$lib/components/AddObjectMenu.svelte';
+    import PaintToolbar from '$lib/components/PaintToolbar.svelte';
     import { bridge } from '$lib/bridge';
     import { onMount } from 'svelte';
 
@@ -9,6 +10,9 @@
         fps: 0,
         frameTime: 0,
     });
+
+    // Edit mode state
+    let editMode = $state<'None' | 'Paint'>('None');
 
     // Add object menu state
     let showAddMenu = $state(false);
@@ -45,11 +49,16 @@
     onMount(() => {
         // Subscribe to messages from Bevy
         const unsubscribe = bridge.subscribe((msg) => {
-            if (msg.type === 'RenderStats') {
-                renderStats = {
-                    fps: msg.data.fps,
-                    frameTime: msg.data.frame_time_ms,
-                };
+            switch (msg.type) {
+                case 'RenderStats':
+                    renderStats = {
+                        fps: msg.data.fps,
+                        frameTime: msg.data.frame_time_ms,
+                    };
+                    break;
+                case 'EditModeChanged':
+                    editMode = msg.data.mode;
+                    break;
             }
         });
 
@@ -67,6 +76,7 @@
         position={addMenuPosition}
         onClose={() => (showAddMenu = false)}
     />
+    <PaintToolbar visible={editMode === 'Paint'} />
 </div>
 
 <style>
@@ -88,7 +98,8 @@
     .app :global(.interactive),
     .app :global(.toolbar),
     .app :global(.side-panel),
-    .app :global(.add-menu-backdrop) {
+    .app :global(.add-menu-backdrop),
+    .app :global(.paint-toolbar) {
         pointer-events: auto;
     }
 </style>

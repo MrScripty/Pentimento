@@ -2,8 +2,10 @@
 
 use dioxus::prelude::*;
 
+use pentimento_ipc::EditMode;
+
 use crate::bridge::DioxusBridge;
-use crate::components::{AddObjectMenu, SidePanel, Toolbar};
+use crate::components::{AddObjectMenu, PaintToolbar, SidePanel, Toolbar};
 use crate::state::RenderStats;
 
 const APP_CSS: &str = r#"
@@ -69,6 +71,9 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
     let mut show_add_menu = use_signal(|| false);
     let mut add_menu_position = use_signal(|| (200.0f32, 200.0f32));
 
+    // Edit mode state
+    let edit_mode = use_signal(|| EditMode::None);
+
     // Handle keyboard events for Shift+A
     let handle_keydown = move |evt: Event<KeyboardData>| {
         if evt.data().modifiers().shift() && evt.data().key() == Key::Character("A".to_string()) {
@@ -93,6 +98,10 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
             position: add_menu_position(),
             bridge: props.bridge.clone(),
             on_close: move |_| show_add_menu.set(false)
+        }
+        PaintToolbar {
+            visible: edit_mode() == EditMode::Paint,
+            bridge: props.bridge.clone()
         }
     }
 }

@@ -24,6 +24,11 @@
         onClose();
     }
 
+    function addPaintCanvas() {
+        bridge.addPaintCanvas();
+        onClose();
+    }
+
     function handleKeydown(e: KeyboardEvent) {
         if (e.key === 'Escape') {
             onClose();
@@ -53,6 +58,10 @@
                         {prim.label}
                     </button>
                 {/each}
+                <div class="menu-divider"></div>
+                <button class="menu-item" onclick={addPaintCanvas}>
+                    Paint
+                </button>
             </div>
         </div>
     </div>
@@ -105,5 +114,11 @@
 
     .menu-item:hover {
         background: rgba(255, 255, 255, 0.1);
+    }
+
+    .menu-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.1);
+        margin: 8px 0;
     }
 </style>

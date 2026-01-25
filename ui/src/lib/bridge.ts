@@ -273,6 +273,17 @@ class BevyBridge {
             }
         });
     }
+
+    // Add paint canvas
+    addPaintCanvas(options?: { width?: number; height?: number }): void {
+        this.send({
+            type: 'AddPaintCanvas',
+            data: {
+                width: options?.width ?? null,
+                height: options?.height ?? null,
+            }
+        });
+    }
 }
 
 export const bridge = new BevyBridge();

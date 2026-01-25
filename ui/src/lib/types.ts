@@ -2,6 +2,9 @@
  * TypeScript types matching the Rust IPC protocol
  */
 
+// Edit mode
+export type EditMode = 'None' | 'Paint';
+
 // Messages from Bevy to UI
 export type BevyToUi =
     | { type: 'Initialize'; data: { scene_info: SceneInfo; settings: AppSettings } }
@@ -13,6 +16,7 @@ export type BevyToUi =
     | { type: 'RenderStats'; data: { fps: number; frame_time_ms: number; draw_calls: number; triangles: number } }
     | { type: 'MouseEnter'; data: { region_id: string } }
     | { type: 'MouseLeave'; data: { region_id: string } }
+    | { type: 'EditModeChanged'; data: { mode: EditMode } }
     | { type: 'Error'; data: { code: string; message: string } };
 
 // Messages from UI to Bevy
@@ -25,7 +29,11 @@ export type UiToBevy =
     | { type: 'StartDiffusion'; data: DiffusionRequest }
     | { type: 'CancelDiffusion'; data: { task_id: string } }
     | { type: 'UpdateSettings'; data: AppSettings }
-    | { type: 'NodeGraphUpdate'; data: NodeGraphState };
+    | { type: 'NodeGraphUpdate'; data: NodeGraphState }
+    | { type: 'UpdateLighting'; data: LightingSettings }
+    | { type: 'UpdateAmbientOcclusion'; data: AmbientOcclusionSettings }
+    | { type: 'AddObject'; data: AddObjectRequest }
+    | { type: 'AddPaintCanvas'; data: { width: number | null; height: number | null } };
 
 // Scene types
 export interface SceneInfo {
@@ -165,4 +173,30 @@ export interface NodeConnection {
     from_output: string;
     to_node: string;
     to_input: string;
+}
+
+// Lighting settings
+export interface LightingSettings {
+    sun_direction: [number, number, number];
+    sun_color: [number, number, number];
+    sun_intensity: number;
+    ambient_color: [number, number, number];
+    ambient_intensity: number;
+    time_of_day: number;
+    cloudiness: number;
+    use_time_of_day: boolean;
+}
+
+// Ambient occlusion settings
+export interface AmbientOcclusionSettings {
+    enabled: boolean;
+    quality_level: number;
+    constant_object_thickness: number;
+}
+
+// Add object request
+export interface AddObjectRequest {
+    primitive_type: string;
+    position: [number, number, number] | null;
+    name: string | null;
 }

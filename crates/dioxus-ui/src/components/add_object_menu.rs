@@ -53,6 +53,12 @@ const ADD_MENU_CSS: &str = r#"
 .menu-item:hover {
     background: rgba(255, 255, 255, 0.1);
 }
+
+.menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 8px 0;
+}
 "#;
 
 #[derive(Props, Clone, PartialEq)]
@@ -106,6 +112,21 @@ pub fn AddObjectMenu(props: AddObjectMenuProps) -> Element {
                                         },
                                         "{name}"
                                     }
+                                }
+                            }
+                        }
+                        div { class: "menu-divider" }
+                        {
+                            let bridge = props.bridge.clone();
+                            let on_close = props.on_close.clone();
+                            rsx! {
+                                button {
+                                    class: "menu-item",
+                                    onclick: move |_| {
+                                        bridge.add_paint_canvas(None, None);
+                                        on_close.call(());
+                                    },
+                                    "Paint"
                                 }
                             }
                         }
