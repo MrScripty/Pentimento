@@ -329,21 +329,15 @@ Key issues fixed to get painting working:
 
 ### Known Issues
 
-#### Performance (Partially Addressed)
-The GPU upload system has been optimized:
+#### Performance (Complete)
+The GPU upload system has been fully optimized:
 - ✅ Image handle is reused (no handle/material churn from creating new images)
-- ✅ Dirty tiles are batched into a single merged bounding box region
-- ⚠️ Full image data is still replaced each frame (partial upload not yet working)
-- ⚠️ Material must be "touched" each frame to trigger GPU rebinding
+- ✅ Dirty tiles are tracked per-tile (128x128 regions)
+- ✅ True partial tile upload via `wgpu::Queue::write_texture()`
+- ✅ Bypasses Bevy's asset system entirely for GPU-level partial updates
 
-**Why full replacement is needed:**
-Bevy's `StandardMaterial` caches the GPU texture binding. Simply modifying
-`image.data` doesn't trigger the material to rebind. Touching the material
-with `material.base_color_texture = Some(same_handle)` forces rebinding.
-
-**Potential future optimizations:**
-- Use `wgpu::Queue::write_texture()` directly for true partial tile uploads
-- This bypasses Bevy's asset system entirely and allows GPU-level partial updates
+**Performance gain:** ~68x reduction in upload size for typical single-tile updates
+(65 KB per tile vs 4.4 MB for full 1048x1048 canvas)
 
 #### Brush Feel
 The simple `BrushEngine` uses basic spacing interpolation. For production:
@@ -353,10 +347,10 @@ The simple `BrushEngine` uses basic spacing interpolation. For production:
 
 ### Remaining Work
 
-#### Performance Optimization (Partially Complete)
+#### Performance Optimization (Complete)
 - [x] Reuse Image handle instead of creating new one each frame
-- [x] Batch dirty tile calculations into merged bounding box regions
-- [ ] True partial tile upload via `wgpu::Queue::write_texture()` (future)
+- [x] Dirty tile tracking per 128x128 tile regions
+- [x] True partial tile upload via `wgpu::Queue::write_texture()`
 
 #### libmypaint Integration (Deferred)
 - [ ] FFI bindings for libmypaint
