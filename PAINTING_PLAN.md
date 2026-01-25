@@ -279,25 +279,103 @@ On validation failure:
 
 ---
 
-## Implementation Checklist
+## Implementation Progress
 
-### Phase 1: Foundation (Sequential)
+### Completed
 
-1. Create `crates/painting/` crate.
-2. Define Rust structs for `StrokeHeader`, `Dab`, `StrokePacket`.
-3. Add constants: `MAX_CANVAS_SIZE`, `COORD_SCALE`, `SIZE_SCALE`, `MAX_XY_DELTA`.
-4. Implement validation functions (`validate_dab`, `can_delta`).
+#### Phase 1: Foundation ✅
+- [x] Created `crates/painting/` crate
+- [x] Defined `StrokeHeader`, `Dab`, `StrokePacket` structs in `types.rs`
+- [x] Added constants in `constants.rs`
+- [x] Implemented validation functions in `validation.rs`
 
-### Phase 2: Parallel Workstreams
+#### Phase 2: Parallel Workstreams ✅
+- [x] **2A**: Stroke log (`log.rs`) with `StrokeLog`, `StrokeRecorder`, Iroh-ready hooks
+- [x] **2B**: CanvasPlane entity (`canvas_plane.rs`) + Tab camera lock + paint mode
+- [x] **2C**: CPU tiled 16-bit surface (`surface.rs`, `tiles.rs`) + dirty tracking
 
-- **2A**: Stroke log storage and Iroh-ready hooks.
-- **2B**: CanvasPlane entity + Tab camera lock + paint tool mode.
-- **2C**: CPU tiled 16-bit surface + dirty tile tracking.
+#### Phase 3: Integration ✅
+- [x] Simple brush engine (`brush.rs`) with spacing-based dab interpolation
+- [x] Painting pipeline (`pipeline.rs`) connecting brush → surface → log
+- [x] GPU upload system (`painting_system.rs`) with dirty tile tracking
+- [x] CanvasPlane material with Rgba32Float texture
 
-### Phase 3: Integration (Sequential)
+#### Phase 4: UI ✅
+- [x] Shift+A menu with "Paint" option (Dioxus + Svelte)
+- [x] `CreateInFrontOfCamera` event spawns plane facing camera
+- [x] Auto camera lock and paint mode on canvas creation
+- [x] Paint toolbar component (Dioxus + Svelte)
+- [x] `EditMode` state and `EditModeChanged` IPC message
+- [x] Tab key exits paint mode and unlocks camera
 
-1. Integrate libmypaint FFI bindings.
-2. Wire input → libmypaint → dabs → stroke log.
-3. Implement dirty tiles → GPU upload → Bevy Image.
-4. Create CanvasPlane material that samples the texture.
-5. Render the CanvasPlane in the Bevy scene.
+### Remaining Work
+
+#### libmypaint Integration (Deferred)
+- [ ] FFI bindings for libmypaint
+- [ ] Replace simple `BrushEngine` with libmypaint
+- [ ] Brush preset loading
+
+#### Polish
+- [ ] Color picker in paint toolbar
+- [ ] Brush size adjustment
+- [ ] Eraser tool
+- [ ] Undo/redo (deferred per plan)
+
+---
+
+## Files Created
+
+### crates/painting/
+- `Cargo.toml` - Package manifest
+- `src/lib.rs` - Module exports
+- `src/constants.rs` - MAX_CANVAS_SIZE, COORD_SCALE, etc.
+- `src/types.rs` - StrokeHeader, Dab, StrokePacket, SpaceKind, BlendMode
+- `src/validation.rs` - validate_dab, can_delta, coordinate conversions
+- `src/log.rs` - StrokeLog, StrokeRecorder, StrokeLogEvent
+- `src/surface.rs` - CpuSurface with [f32; 4] pixels
+- `src/tiles.rs` - TiledSurface with dirty tracking, apply_dab
+- `src/brush.rs` - BrushPreset, BrushEngine, DabOutput
+- `src/pipeline.rs` - PaintingPipeline
+
+### crates/scene/
+- `src/canvas_plane.rs` - CanvasPlane, ActiveCanvasPlane, CanvasPlaneEvent
+- `src/paint_mode.rs` - PaintMode, PaintEvent, ray-plane intersection
+- `src/painting_system.rs` - PaintingResource, CanvasTexture, GPU upload
+- `src/edit_mode.rs` - EditModeState, EditModeEvent, EditModePlugin
+
+### crates/ipc/
+- Added `EditMode` enum (None, Paint)
+- Added `AddPaintCanvasRequest` struct
+- Added `BevyToUi::EditModeChanged` message
+- Added `UiToBevy::AddPaintCanvas` message
+
+### crates/dioxus-ui/
+- `src/components/paint_toolbar.rs` - PaintToolbar component
+- Modified `add_object_menu.rs` - Added "Paint" option
+- Modified `bridge.rs` - Added `add_paint_canvas` method
+- Modified `app.rs` - Added edit_mode state and PaintToolbar
+
+### ui/ (Svelte)
+- `src/lib/components/PaintToolbar.svelte` - Paint toolbar
+- Modified `AddObjectMenu.svelte` - Added "Paint" option
+- Modified `bridge.ts` - Added `addPaintCanvas` method
+- Modified `App.svelte` - Added editMode state and PaintToolbar
+- Modified `types.ts` - Added EditMode and IPC types
+
+---
+
+## User Flow
+
+```
+Shift+A → Menu shows "Paint" option
+    ↓
+Click "Paint" → CanvasPlane created in front of camera
+    ↓
+Camera locks, paint mode enabled
+    ↓
+Paint toolbar appears ("Press Tab to exit")
+    ↓
+Left-click and drag → Paints on canvas
+    ↓
+Tab → Exit paint mode, unlock camera, hide toolbar
+```
