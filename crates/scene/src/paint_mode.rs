@@ -1,0 +1,295 @@
+//! Paint mode state and input handling
+//!
+//! This module provides the paint mode resource and handles input for
+//! stroke creation. When paint mode is active and a canvas plane is selected,
+//! left mouse button starts/continues a stroke, generating PaintEvents.
+//!
+//! The actual dab generation is handled elsewhere (Phase 3) - this module
+//! just emits PaintEvents with world-space positions.
+
+use bevy::ecs::message::Message;
+use bevy::input::mouse::MouseButton;
+use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+
+use crate::camera::MainCamera;
+use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
+
+/// Resource tracking paint tool state
+#[derive(Resource, Default)]
+pub struct PaintMode {
+    /// Whether paint mode is currently active
+    pub active: bool,
+    /// Current stroke state, if a stroke is in progress
+    pub current_stroke: Option<StrokeState>,
+}
+
+/// State for an in-progress stroke
+pub struct StrokeState {
+    /// Unique stroke identifier
+    pub stroke_id: u64,
+    /// Space ID (plane_id) this stroke is targeting
+    pub space_id: u32,
+    /// Timestamp when stroke started (milliseconds)
+    pub start_time: u64,
+    /// Last world-space position for delta calculation
+    pub last_world_pos: Option<Vec3>,
+    /// Last frame time for speed calculation
+    pub last_time: f64,
+}
+
+/// Resource for generating unique stroke IDs
+#[derive(Resource, Default)]
+pub struct StrokeIdGenerator {
+    next_id: u64,
+}
+
+impl StrokeIdGenerator {
+    /// Generate the next unique stroke ID
+    pub fn next(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}
+
+/// Message for painting actions
+#[derive(Message, Debug, Clone)]
+pub enum PaintEvent {
+    /// A stroke has started on a plane
+    StrokeStart {
+        /// The canvas plane entity
+        plane_entity: Entity,
+        /// World-space position where stroke started
+        world_pos: Vec3,
+        /// UV position on the plane (0-1 range)
+        uv_pos: Vec2,
+        /// Unique stroke ID
+        stroke_id: u64,
+        /// Space ID (plane_id)
+        space_id: u32,
+    },
+    /// Stroke continues with a new position
+    StrokeMove {
+        /// World-space position
+        world_pos: Vec3,
+        /// UV position on the plane (0-1 range)
+        uv_pos: Vec2,
+        /// Pressure value (0.0-1.0, defaults to 1.0 for mouse)
+        pressure: f32,
+        /// Speed in world units per second
+        speed: f32,
+    },
+    /// Stroke has ended normally
+    StrokeEnd,
+    /// Stroke was cancelled (e.g., Escape key)
+    StrokeCancel,
+}
+
+/// Plugin for paint mode functionality
+pub struct PaintModePlugin;
+
+impl Plugin for PaintModePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PaintMode>()
+            .init_resource::<StrokeIdGenerator>()
+            .add_message::<PaintEvent>()
+            .add_systems(
+                Update,
+                (
+                    handle_paint_mode_toggle,
+                    handle_paint_input.after(handle_paint_mode_toggle),
+                ),
+            );
+    }
+}
+
+/// Handle paint mode toggle (P key)
+fn handle_paint_mode_toggle(
+    key_input: Res<ButtonInput<KeyCode>>,
+    mut paint_mode: ResMut<PaintMode>,
+    mut paint_events: MessageWriter<PaintEvent>,
+) {
+    if key_input.just_pressed(KeyCode::KeyP) {
+        paint_mode.active = !paint_mode.active;
+        info!(
+            "Paint mode {}",
+            if paint_mode.active {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+
+        // Cancel any in-progress stroke when toggling off
+        if !paint_mode.active && paint_mode.current_stroke.is_some() {
+            paint_events.write(PaintEvent::StrokeCancel);
+            paint_mode.current_stroke = None;
+        }
+    }
+
+    // Escape cancels current stroke
+    if key_input.just_pressed(KeyCode::Escape) && paint_mode.current_stroke.is_some() {
+        paint_events.write(PaintEvent::StrokeCancel);
+        paint_mode.current_stroke = None;
+        info!("Stroke cancelled");
+    }
+}
+
+/// Handle paint input (left mouse button for strokes)
+fn handle_paint_input(
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    plane_query: Query<(&GlobalTransform, &CanvasPlane)>,
+    active_plane: Res<ActiveCanvasPlane>,
+    mut paint_mode: ResMut<PaintMode>,
+    mut stroke_id_gen: ResMut<StrokeIdGenerator>,
+    mut paint_events: MessageWriter<PaintEvent>,
+    time: Res<Time>,
+) {
+    // Only process if paint mode is active and a plane is selected
+    if !paint_mode.active {
+        return;
+    }
+
+    let Some(plane_entity) = active_plane.entity else {
+        return;
+    };
+
+    // Get camera for ray casting
+    let Ok((camera, camera_transform)) = camera_query.single() else {
+        return;
+    };
+
+    // Get plane transform and component
+    let Ok((plane_transform, canvas_plane)) = plane_query.get(plane_entity) else {
+        return;
+    };
+
+    // Get cursor position
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+
+    // Cast ray from camera through cursor
+    let ray = camera.viewport_to_world(camera_transform, cursor_pos);
+    let Some(ray) = ray.ok() else {
+        return;
+    };
+
+    // Intersect ray with plane
+    let plane_intersection = ray_plane_intersection(ray, plane_transform);
+
+    let current_time = time.elapsed_secs_f64();
+
+    // Handle left mouse button
+    if mouse_button.just_pressed(MouseButton::Left) {
+        if let Some((world_pos, uv_pos)) = plane_intersection {
+            // Start new stroke
+            let stroke_id = stroke_id_gen.next();
+            let space_id = canvas_plane.plane_id;
+
+            paint_mode.current_stroke = Some(StrokeState {
+                stroke_id,
+                space_id,
+                start_time: (current_time * 1000.0) as u64,
+                last_world_pos: Some(world_pos),
+                last_time: current_time,
+            });
+
+            paint_events.write(PaintEvent::StrokeStart {
+                plane_entity,
+                world_pos,
+                uv_pos,
+                stroke_id,
+                space_id,
+            });
+
+            info!(
+                "Stroke started: id={}, pos={:?}, uv={:?}",
+                stroke_id, world_pos, uv_pos
+            );
+        }
+    } else if mouse_button.pressed(MouseButton::Left) {
+        // Continue stroke
+        if let Some(ref mut stroke_state) = paint_mode.current_stroke {
+            if let Some((world_pos, uv_pos)) = plane_intersection {
+                // Calculate speed from position delta and time delta
+                let speed = if let Some(last_pos) = stroke_state.last_world_pos {
+                    let distance = world_pos.distance(last_pos);
+                    let dt = (current_time - stroke_state.last_time) as f32;
+                    if dt > 0.0 {
+                        distance / dt
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                // Update stroke state
+                stroke_state.last_world_pos = Some(world_pos);
+                stroke_state.last_time = current_time;
+
+                paint_events.write(PaintEvent::StrokeMove {
+                    world_pos,
+                    uv_pos,
+                    pressure: 1.0, // Default pressure for mouse
+                    speed,
+                });
+            }
+        }
+    } else if mouse_button.just_released(MouseButton::Left) {
+        // End stroke
+        if paint_mode.current_stroke.is_some() {
+            paint_events.write(PaintEvent::StrokeEnd);
+            paint_mode.current_stroke = None;
+            info!("Stroke ended");
+        }
+    }
+}
+
+/// Perform ray-plane intersection
+///
+/// Returns the world-space intersection point and UV coordinates on the plane.
+/// The plane is assumed to be a Bevy Plane3d (XZ plane in local space, Y is normal).
+fn ray_plane_intersection(ray: Ray3d, plane_transform: &GlobalTransform) -> Option<(Vec3, Vec2)> {
+    // Plane normal in world space (local Y axis)
+    let plane_normal = plane_transform.up();
+    let plane_origin = plane_transform.translation();
+
+    // Ray-plane intersection: t = (plane_origin - ray_origin) . normal / (ray_direction . normal)
+    let denom = ray.direction.dot(*plane_normal);
+
+    // Check if ray is parallel to plane
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+
+    let t = (plane_origin - ray.origin).dot(*plane_normal) / denom;
+
+    // Check if intersection is in front of ray
+    if t < 0.0 {
+        return None;
+    }
+
+    let world_pos = ray.origin + *ray.direction * t;
+
+    // Convert to local space to get UV coordinates
+    let local_pos = plane_transform
+        .affine()
+        .inverse()
+        .transform_point3(world_pos);
+
+    // Plane3d is in XZ plane, so UV is based on X and Z
+    // Assuming plane is centered at origin with size 1x1, UV is (x + 0.5, z + 0.5)
+    // For actual planes, we need to know the size, but for now assume normalized [-0.5, 0.5]
+    let uv = Vec2::new(local_pos.x + 0.5, local_pos.z + 0.5);
+
+    Some((world_pos, uv))
+}

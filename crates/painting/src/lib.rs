@@ -4,11 +4,20 @@
 //! - [`types::StrokePacket`] - A complete stroke with header and dabs
 //! - [`types::Dab`] - A single brush dab (GPU-compatible with bytemuck)
 //! - [`validation`] - Helpers for coordinate conversion and validation
+//! - [`surface`] - CPU 16-bit RGBA surface for painting
+//! - [`tiles`] - Tile management with dirty tracking
+//! - [`log`] - Stroke log storage and Iroh-ready hooks
 
 pub mod constants;
+pub mod log;
+pub mod surface;
+pub mod tiles;
 pub mod types;
 pub mod validation;
 
 pub use constants::*;
+pub use log::*;
+pub use surface::*;
+pub use tiles::*;
 pub use types::*;
 pub use validation::*;

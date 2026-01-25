@@ -9,8 +9,10 @@ use bevy::prelude::*;
 mod add_object;
 mod ambient_occlusion;
 mod camera;
+mod canvas_plane;
 mod gizmo;
 mod lighting;
+mod paint_mode;
 #[cfg(feature = "selection")]
 mod outline;
 #[cfg(feature = "selection")]
@@ -21,8 +23,12 @@ mod wireframe;
 pub use add_object::{AddObjectEvent, AddObjectPlugin};
 pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
+pub use canvas_plane::{
+    ActiveCanvasPlane, CanvasPlane, CanvasPlaneEvent, CanvasPlaneIdGenerator, CanvasPlanePlugin,
+};
 pub use gizmo::{GizmoPlugin, GizmoState};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
+pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
 #[cfg(feature = "selection")]
@@ -39,6 +45,8 @@ impl Plugin for ScenePlugin {
         app.add_plugins(AmbientOcclusionPlugin);
         app.add_plugins(AddObjectPlugin);
         app.add_plugins(GizmoPlugin);
+        app.add_plugins(CanvasPlanePlugin);
+        app.add_plugins(PaintModePlugin);
 
         app.add_systems(Startup, setup_scene);
 
