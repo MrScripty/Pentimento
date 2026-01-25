@@ -110,6 +110,23 @@ fn surface_to_rgba8(surface_bytes: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Convert tile f32 RGBA data to u8 RGBA for partial GPU upload
+/// Input: &[[f32; 4]] per pixel (from TiledSurface::get_tile_data)
+/// Output: Vec<u8> containing [u8; 4] per pixel
+fn tile_data_to_rgba8(tile_data: &[[f32; 4]]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(tile_data.len() * 4);
+
+    for pixel in tile_data {
+        // Convert f32 (0.0-1.0) to u8 (0-255) with sRGB gamma
+        output.push(linear_to_srgb_u8(pixel[0]));
+        output.push(linear_to_srgb_u8(pixel[1]));
+        output.push(linear_to_srgb_u8(pixel[2]));
+        output.push((pixel[3].clamp(0.0, 1.0) * 255.0) as u8); // Alpha stays linear
+    }
+
+    output
+}
+
 /// Convert linear float to sRGB u8
 #[inline]
 fn linear_to_srgb_u8(linear: f32) -> u8 {
@@ -289,17 +306,15 @@ fn process_paint_events(
 }
 
 /// Upload dirty tiles to GPU
+///
+/// This system reuses the existing Image handle and updates tile regions in-place,
+/// avoiding the memory churn of creating a new image every frame.
 fn upload_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut canvas_query: Query<(
-        &CanvasPlane,
-        &mut CanvasTexture,
-        &MeshMaterial3d<StandardMaterial>,
-    )>,
+    canvas_query: Query<(&CanvasPlane, &CanvasTexture)>,
 ) {
-    for (canvas_plane, mut canvas_texture, material_handle) in canvas_query.iter_mut() {
+    for (canvas_plane, canvas_texture) in canvas_query.iter() {
         let Some(pipeline) = painting_res.get_pipeline_mut(canvas_plane.plane_id) else {
             continue;
         };
@@ -310,60 +325,49 @@ fn upload_dirty_tiles(
             continue;
         }
 
-        info!(
+        debug!(
             "upload_dirty_tiles: plane={}, dirty_tiles={}",
             canvas_plane.plane_id,
             dirty_tiles.len()
         );
 
-        // Get full surface data and convert to RGBA8
-        let surface_bytes = pipeline.surface_as_bytes();
-        let rgba8_data = surface_to_rgba8(surface_bytes);
+        // Get the existing image and update it in-place
+        let Some(image) = images.get_mut(&canvas_texture.image_handle) else {
+            warn!(
+                "Could not find image for canvas plane {}",
+                canvas_plane.plane_id
+            );
+            continue;
+        };
 
-        // Log pixel count for debugging
-        let non_white_count = rgba8_data
-            .chunks(4)
-            .filter(|p| p[0] < 250 || p[1] < 250 || p[2] < 250)
-            .count();
-        info!(
-            "  Surface has {} non-white pixels out of {}",
-            non_white_count,
-            rgba8_data.len() / 4
-        );
+        let image_width = canvas_plane.width;
 
-        // Create a completely NEW image with NEW handle
-        // This bypasses any change detection issues
-        let mut new_image = Image::new(
-            Extent3d {
-                width: canvas_plane.width,
-                height: canvas_plane.height,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            rgba8_data,
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        );
+        // Update only the dirty tile regions
+        for tile_coord in &dirty_tiles {
+            let (tile_x, tile_y, tile_w, tile_h) = pipeline.get_tile_bounds(*tile_coord);
+            let tile_data = pipeline.get_tile_data(*tile_coord);
 
-        // Set texture usages for painting - REQUIRED for shader sampling
-        new_image.texture_descriptor.usage =
-            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC;
+            // Convert tile f32 data to RGBA8
+            let tile_rgba8 = tile_data_to_rgba8(&tile_data);
 
-        // Remove old image and add new one
-        images.remove(&canvas_texture.image_handle);
-        let new_handle = images.add(new_image);
+            // Copy tile data into the image at the correct location
+            if let Some(ref mut data) = image.data {
+                for row in 0..tile_h {
+                    let src_start = (row * tile_w) as usize * 4;
+                    let src_end = src_start + (tile_w as usize * 4);
+                    let dst_y = tile_y + row;
+                    let dst_start = ((dst_y * image_width + tile_x) as usize) * 4;
+                    let dst_end = dst_start + (tile_w as usize * 4);
 
-        // Update the material to use the new texture
-        if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.base_color_texture = Some(new_handle.clone());
-            info!("  Updated material with new texture handle");
+                    if src_end <= tile_rgba8.len() && dst_end <= data.len() {
+                        data[dst_start..dst_end].copy_from_slice(&tile_rgba8[src_start..src_end]);
+                    }
+                }
+            }
         }
 
-        // Update the component to track the new handle
-        canvas_texture.image_handle = new_handle;
-
-        info!(
-            "  Created new image for {} dirty tiles ({}x{})",
+        debug!(
+            "  Updated {} dirty tiles in-place ({}x{})",
             dirty_tiles.len(),
             canvas_plane.width,
             canvas_plane.height
