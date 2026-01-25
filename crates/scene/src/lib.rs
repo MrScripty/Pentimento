@@ -6,7 +6,10 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 
+mod add_object;
+mod ambient_occlusion;
 mod camera;
+mod gizmo;
 mod lighting;
 #[cfg(feature = "selection")]
 mod outline;
@@ -15,7 +18,10 @@ mod selection;
 #[cfg(feature = "wireframe")]
 mod wireframe;
 
+pub use add_object::{AddObjectEvent, AddObjectPlugin};
+pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
+pub use gizmo::{GizmoPlugin, GizmoState};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
@@ -30,6 +36,9 @@ impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(CameraControllerPlugin);
         app.add_plugins(LightingPlugin);
+        app.add_plugins(AmbientOcclusionPlugin);
+        app.add_plugins(AddObjectPlugin);
+        app.add_plugins(GizmoPlugin);
 
         app.add_systems(Startup, setup_scene);
 

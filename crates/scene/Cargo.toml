@@ -21,4 +21,5 @@ bevy = { workspace = true, default-features = false, features = [
     "bevy_render",
     "bevy_asset",
     "bevy_log",
+    "bevy_gizmos",
 ] }
