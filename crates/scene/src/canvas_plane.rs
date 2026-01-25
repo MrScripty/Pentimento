@@ -7,10 +7,14 @@
 
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
+use pentimento_ipc::{BevyToUi, EditMode};
 
-use crate::camera::MainCamera;
+use crate::camera::{MainCamera, OrbitCamera};
 use crate::paint_mode::PaintMode;
 use crate::painting_system::CanvasTexture;
+use crate::OutboundUiMessages;
+#[cfg(feature = "selection")]
+use crate::selection::{Selectable, Selected};
 
 /// Component marking an entity as a paintable canvas plane
 #[derive(Component)]
@@ -23,19 +27,37 @@ pub struct CanvasPlane {
     pub height: u32,
     /// Whether this plane is currently selected for painting
     pub active: bool,
+    /// World-space width of the plane (for UV calculation)
+    pub world_width: f32,
+    /// World-space height of the plane (for UV calculation)
+    pub world_height: f32,
+    /// Camera position when paint mode was entered (for returning to paint view)
+    pub paint_camera_pos: Option<Vec3>,
+    /// Camera target (plane center) when paint mode was entered
+    pub paint_camera_target: Option<Vec3>,
 }
 
 impl CanvasPlane {
     /// Maximum resolution for a canvas plane
     pub const MAX_RESOLUTION: u32 = 1048;
 
-    /// Create a new canvas plane with the given ID and resolution
-    pub fn new(plane_id: u32, width: u32, height: u32) -> Self {
+    /// Create a new canvas plane with the given ID, resolution, and world dimensions
+    pub fn new(
+        plane_id: u32,
+        width: u32,
+        height: u32,
+        world_width: f32,
+        world_height: f32,
+    ) -> Self {
         Self {
             plane_id,
             width: width.min(Self::MAX_RESOLUTION),
             height: height.min(Self::MAX_RESOLUTION),
             active: false,
+            world_width,
+            world_height,
+            paint_camera_pos: None,
+            paint_camera_target: None,
         }
     }
 }
@@ -99,6 +121,12 @@ impl Plugin for CanvasPlanePlugin {
                     update_canvas_materials,
                 ),
             );
+
+        #[cfg(feature = "selection")]
+        app.add_systems(
+            Update,
+            sync_active_plane_with_selection.after(handle_canvas_plane_events),
+        );
     }
 }
 
@@ -112,7 +140,9 @@ fn handle_canvas_plane_events(
     mut id_generator: ResMut<CanvasPlaneIdGenerator>,
     mut canvas_query: Query<&mut CanvasPlane>,
     camera_query: Query<&GlobalTransform, With<MainCamera>>,
+    mut orbit_camera_query: Query<&mut OrbitCamera>,
     mut paint_mode: ResMut<PaintMode>,
+    mut outbound: ResMut<OutboundUiMessages>,
 ) {
     for event in events.read() {
         match event {
@@ -148,10 +178,15 @@ fn handle_canvas_plane_events(
                         Mesh3d(meshes.add(mesh)),
                         MeshMaterial3d(materials.add(material)),
                         Transform::from_translation(*position),
-                        CanvasPlane::new(plane_id, *width, *height),
+                        CanvasPlane::new(plane_id, *width, *height, plane_width, plane_height),
                         Name::new(format!("CanvasPlane_{}", plane_id)),
                     ))
                     .id();
+
+                #[cfg(feature = "selection")]
+                commands.entity(entity).insert(Selectable {
+                    id: format!("canvas_{}", plane_id),
+                });
 
                 info!(
                     "Created canvas plane {} at {:?} with resolution {}x{}",
@@ -174,45 +209,68 @@ fn handle_canvas_plane_events(
                 let camera_pos = camera_transform.translation();
                 let forward = camera_transform.forward();
 
-                // Position the plane 2 units in front of the camera
-                let plane_pos = camera_pos + *forward * 2.0;
+                // Position the plane in front of the camera
+                let distance = 2.0;
+                let plane_pos = camera_pos + *forward * distance;
 
                 let plane_id = id_generator.next();
 
-                // Calculate plane size based on resolution (1 unit = 100 pixels for reasonable scale)
-                let scale_factor = 0.01;
-                let plane_width = *width as f32 * scale_factor;
-                let plane_height = *height as f32 * scale_factor;
+                // Calculate plane size to fill camera's field of view
+                // Default Bevy FOV is 45 degrees (vertical)
+                let fov = std::f32::consts::FRAC_PI_4;
+                let half_height = (fov / 2.0).tan() * distance;
+                // Use canvas aspect ratio for the plane
+                let aspect_ratio = *width as f32 / *height as f32;
+                let half_width = half_height * aspect_ratio;
+                let plane_width = half_width * 2.0;
+                let plane_height = half_height * 2.0;
 
-                // Create a quad mesh for the canvas plane
-                let mesh = Plane3d::default()
-                    .mesh()
-                    .size(plane_width, plane_height)
-                    .build();
+                // Create a vertical quad mesh (Rectangle is in XY plane)
+                let mesh = Rectangle::new(plane_width, plane_height);
 
-                // Placeholder material - white with some transparency to indicate paintable area
+                // Fully transparent material - only the painted texture will show
                 let material = StandardMaterial {
-                    base_color: Color::srgba(0.95, 0.95, 0.95, 0.9),
+                    base_color: Color::srgba(1.0, 1.0, 1.0, 0.0),
                     alpha_mode: AlphaMode::Blend,
                     unlit: true,
                     double_sided: true,
                     ..default()
                 };
 
-                // Create a rotation that makes the plane face the camera
-                // The plane's local Y axis (normal) should point toward the camera
-                let transform =
+                // Create transform facing the camera
+                // Rectangle mesh is in XY plane with front face at +Z
+                // looking_at makes -Z point toward target, so we rotate 180° around Y
+                // to make the +Z face (front) point toward the camera
+                let mut transform =
                     Transform::from_translation(plane_pos).looking_at(camera_pos, Vec3::Y);
+                transform.rotate_local_y(std::f32::consts::PI);
+
+                // Create canvas plane with world dimensions
+                let mut canvas_plane = CanvasPlane::new(
+                    plane_id,
+                    *width,
+                    *height,
+                    plane_width,
+                    plane_height,
+                );
+                // Store camera position for returning to paint view
+                canvas_plane.paint_camera_pos = Some(camera_pos);
+                canvas_plane.paint_camera_target = Some(plane_pos);
 
                 let entity = commands
                     .spawn((
                         Mesh3d(meshes.add(mesh)),
                         MeshMaterial3d(materials.add(material)),
                         transform,
-                        CanvasPlane::new(plane_id, *width, *height),
+                        canvas_plane,
                         Name::new(format!("CanvasPlane_{}", plane_id)),
                     ))
                     .id();
+
+                #[cfg(feature = "selection")]
+                commands.entity(entity).insert(Selectable {
+                    id: format!("canvas_{}", plane_id),
+                });
 
                 info!(
                     "Created canvas plane {} in front of camera at {:?} with resolution {}x{}",
@@ -223,12 +281,9 @@ fn handle_canvas_plane_events(
                 active_plane.entity = Some(entity);
                 active_plane.camera_locked = true;
 
-                if let Ok(mut plane) = canvas_query.get_mut(entity) {
-                    plane.active = true;
-                }
-
-                // Enable paint mode
+                // Enable paint mode and notify UI
                 paint_mode.active = true;
+                outbound.send(BevyToUi::EditModeChanged { mode: EditMode::Paint });
                 info!("Entered paint mode with camera locked");
             }
             CanvasPlaneEvent::Select(entity) => {
@@ -258,23 +313,39 @@ fn handle_canvas_plane_events(
                 info!("Deselected canvas plane");
             }
             CanvasPlaneEvent::ToggleCameraLock => {
-                if active_plane.entity.is_some() {
+                if let Some(plane_entity) = active_plane.entity {
                     let was_locked = active_plane.camera_locked;
                     active_plane.camera_locked = !was_locked;
 
-                    // When unlocking, also deactivate paint mode
+                    // When unlocking, deactivate paint mode and notify UI
                     if was_locked && !active_plane.camera_locked {
                         paint_mode.active = false;
+                        outbound.send(BevyToUi::EditModeChanged { mode: EditMode::None });
                         info!("Camera lock disabled, exiting paint mode");
-                    } else {
-                        info!(
-                            "Camera lock {}",
-                            if active_plane.camera_locked {
-                                "enabled"
-                            } else {
-                                "disabled"
+                    } else if !was_locked && active_plane.camera_locked {
+                        // When locking, restore camera to paint position and activate paint mode
+                        if let Ok(canvas_plane) = canvas_query.get(plane_entity) {
+                            if let (Some(cam_pos), Some(cam_target)) =
+                                (canvas_plane.paint_camera_pos, canvas_plane.paint_camera_target)
+                            {
+                                // Update OrbitCamera to match stored position
+                                for mut orbit in orbit_camera_query.iter_mut() {
+                                    orbit.target = cam_target;
+                                    // Calculate distance, yaw, pitch from position
+                                    let offset = cam_pos - cam_target;
+                                    orbit.distance = offset.length();
+                                    orbit.yaw = offset.x.atan2(offset.z);
+                                    orbit.pitch = (offset.y / orbit.distance).asin();
+                                    info!(
+                                        "Restored camera: distance={}, yaw={}, pitch={}",
+                                        orbit.distance, orbit.yaw, orbit.pitch
+                                    );
+                                }
                             }
-                        );
+                        }
+                        paint_mode.active = true;
+                        outbound.send(BevyToUi::EditModeChanged { mode: EditMode::Paint });
+                        info!("Camera lock enabled, entering paint mode");
                     }
                 }
             }
@@ -312,7 +383,8 @@ fn update_canvas_materials(
         if let Some(material) = materials.get_mut(&mesh_material.0) {
             material.base_color_texture = Some(canvas_texture.image_handle.clone());
             material.base_color = Color::WHITE;
-            material.alpha_mode = AlphaMode::Opaque;
+            // Keep alpha blending so transparent parts of the texture are see-through
+            material.alpha_mode = AlphaMode::Blend;
             material.unlit = true;
             material.double_sided = true;
 
@@ -320,6 +392,36 @@ fn update_canvas_materials(
             commands.entity(entity).insert(CanvasMaterialUpdated);
 
             info!("Updated canvas plane material with painting texture");
+        }
+    }
+}
+
+/// Sync ActiveCanvasPlane with the selection system
+///
+/// When a canvas plane is selected (via the normal selection system),
+/// update ActiveCanvasPlane to point to it. When a canvas plane is
+/// deselected, clear ActiveCanvasPlane.
+#[cfg(feature = "selection")]
+fn sync_active_plane_with_selection(
+    mut active_plane: ResMut<ActiveCanvasPlane>,
+    added_selected: Query<Entity, (With<CanvasPlane>, Added<Selected>)>,
+    mut removed_selected: RemovedComponents<Selected>,
+    canvas_query: Query<Entity, With<CanvasPlane>>,
+) {
+    // When a canvas plane is selected, make it the active plane
+    for entity in added_selected.iter() {
+        active_plane.entity = Some(entity);
+        active_plane.camera_locked = false; // Not locked until Tab pressed
+        info!("Canvas plane selected via click, set as active plane");
+    }
+
+    // When a canvas plane is deselected, clear active plane if it matches
+    for entity in removed_selected.read() {
+        // Check if this entity is a canvas plane and is the active one
+        if canvas_query.get(entity).is_ok() && active_plane.entity == Some(entity) {
+            active_plane.entity = None;
+            active_plane.camera_locked = false;
+            info!("Canvas plane deselected, cleared active plane");
         }
     }
 }

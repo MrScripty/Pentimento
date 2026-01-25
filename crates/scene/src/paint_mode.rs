@@ -182,8 +182,13 @@ fn handle_paint_input(
         return;
     };
 
-    // Intersect ray with plane
-    let plane_intersection = ray_plane_intersection(ray, plane_transform);
+    // Intersect ray with plane, using world dimensions for proper UV calculation
+    let plane_intersection = ray_plane_intersection(
+        ray,
+        plane_transform,
+        canvas_plane.world_width,
+        canvas_plane.world_height,
+    );
 
     let current_time = time.elapsed_secs_f64();
 
@@ -257,10 +262,16 @@ fn handle_paint_input(
 /// Perform ray-plane intersection
 ///
 /// Returns the world-space intersection point and UV coordinates on the plane.
-/// The plane is assumed to be a Bevy Plane3d (XZ plane in local space, Y is normal).
-fn ray_plane_intersection(ray: Ray3d, plane_transform: &GlobalTransform) -> Option<(Vec3, Vec2)> {
-    // Plane normal in world space (local Y axis)
-    let plane_normal = plane_transform.up();
+/// The plane is a Rectangle mesh (XY plane in local space, -Z is forward/normal).
+fn ray_plane_intersection(
+    ray: Ray3d,
+    plane_transform: &GlobalTransform,
+    world_width: f32,
+    world_height: f32,
+) -> Option<(Vec3, Vec2)> {
+    // Rectangle mesh is in XY plane, facing -Z (toward camera via looking_at)
+    // So the plane normal in world space is the plane's forward direction (local -Z)
+    let plane_normal = plane_transform.forward();
     let plane_origin = plane_transform.translation();
 
     // Ray-plane intersection: t = (plane_origin - ray_origin) . normal / (ray_direction . normal)
@@ -286,10 +297,13 @@ fn ray_plane_intersection(ray: Ray3d, plane_transform: &GlobalTransform) -> Opti
         .inverse()
         .transform_point3(world_pos);
 
-    // Plane3d is in XZ plane, so UV is based on X and Z
-    // Assuming plane is centered at origin with size 1x1, UV is (x + 0.5, z + 0.5)
-    // For actual planes, we need to know the size, but for now assume normalized [-0.5, 0.5]
-    let uv = Vec2::new(local_pos.x + 0.5, local_pos.z + 0.5);
+    // Rectangle is in XY plane, UV is based on X and Y
+    // local_pos ranges from [-world_width/2, world_width/2] and [-world_height/2, world_height/2]
+    // Normalize to UV [0, 1] range, with Y inverted for texture coordinates
+    let uv = Vec2::new(
+        local_pos.x / world_width + 0.5,
+        -local_pos.y / world_height + 0.5,
+    );
 
     Some((world_pos, uv))
 }

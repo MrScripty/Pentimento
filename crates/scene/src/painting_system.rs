@@ -16,7 +16,7 @@ use crate::paint_mode::PaintEvent;
 /// Resource holding painting pipelines for each canvas plane
 ///
 /// Each canvas plane gets its own painting pipeline, indexed by plane_id.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct PaintingResource {
     /// Mapping from plane_id to pipeline
     pipelines: HashMap<u32, PaintingPipeline>,
@@ -24,6 +24,12 @@ pub struct PaintingResource {
     pub brush_color: [f32; 4],
     /// Current brush preset
     pub brush_preset: BrushPreset,
+}
+
+impl Default for PaintingResource {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PaintingResource {
@@ -84,6 +90,38 @@ pub struct CanvasTexture {
     pub needs_full_upload: bool,
 }
 
+/// Convert f32 RGBA surface data to u8 RGBA for GPU upload
+/// Input: &[u8] containing [f32; 4] per pixel (from CpuSurface::as_bytes)
+/// Output: Vec<u8> containing [u8; 4] per pixel
+fn surface_to_rgba8(surface_bytes: &[u8]) -> Vec<u8> {
+    // surface_bytes is &[u8] but contains f32 data
+    let f32_slice: &[[f32; 4]] = bytemuck::cast_slice(surface_bytes);
+    let mut output = Vec::with_capacity(f32_slice.len() * 4);
+
+    for pixel in f32_slice {
+        // Convert f32 (0.0-1.0) to u8 (0-255) with sRGB gamma
+        // Apply gamma correction: linear to sRGB
+        output.push(linear_to_srgb_u8(pixel[0]));
+        output.push(linear_to_srgb_u8(pixel[1]));
+        output.push(linear_to_srgb_u8(pixel[2]));
+        output.push((pixel[3].clamp(0.0, 1.0) * 255.0) as u8); // Alpha stays linear
+    }
+
+    output
+}
+
+/// Convert linear float to sRGB u8
+#[inline]
+fn linear_to_srgb_u8(linear: f32) -> u8 {
+    let linear = linear.clamp(0.0, 1.0);
+    let srgb = if linear <= 0.0031308 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb * 255.0) as u8
+}
+
 /// Plugin for the painting system
 pub struct PaintingSystemPlugin;
 
@@ -106,43 +144,50 @@ impl Plugin for PaintingSystemPlugin {
 fn setup_canvas_textures(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    query: Query<(Entity, &CanvasPlane), Without<CanvasTexture>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<(Entity, &CanvasPlane, &MeshMaterial3d<StandardMaterial>), Without<CanvasTexture>>,
     mut painting_res: ResMut<PaintingResource>,
 ) {
-    for (entity, canvas_plane) in query.iter() {
+    for (entity, canvas_plane, material_handle) in query.iter() {
         let width = canvas_plane.width;
         let height = canvas_plane.height;
 
         // Create the painting pipeline for this plane
         let pipeline = painting_res.get_or_create_pipeline(canvas_plane.plane_id, width, height);
 
-        // Get the surface data to initialize the image
+        // Get the surface data and convert to RGBA8
         let surface_bytes = pipeline.surface_as_bytes();
+        let rgba8_data = surface_to_rgba8(surface_bytes);
 
-        // Create Bevy Image with Rgba32Float format
-        // This matches our [f32; 4] pixel format directly
-        let mut image = Image::new_fill(
+        // Create Bevy Image with Rgba8UnormSrgb format
+        // This is the standard format with best compatibility
+        let mut image = Image::new(
             Extent3d {
                 width,
                 height,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
-            // Initialize with white (matches pipeline.clear([1.0, 1.0, 1.0, 1.0]))
-            bytemuck::bytes_of(&[1.0f32, 1.0f32, 1.0f32, 1.0f32]),
-            TextureFormat::Rgba32Float,
-            RenderAssetUsages::all(),
+            rgba8_data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
 
         // Set texture usages for painting
         image.texture_descriptor.usage =
-            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
-
-        // Set the image data to the full surface data
-        // In Bevy 0.18, image.data is Option<Vec<u8>>
-        image.data = Some(surface_bytes.to_vec());
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC;
 
         let handle = images.add(image);
+
+        // Update the material to use this texture
+        if let Some(material) = materials.get_mut(&material_handle.0) {
+            material.base_color_texture = Some(handle.clone());
+            material.base_color = Color::WHITE; // Full color so texture shows through
+            info!(
+                "Set texture on material for canvas plane {}",
+                canvas_plane.plane_id
+            );
+        }
 
         // Insert the CanvasTexture component
         commands.entity(entity).insert(CanvasTexture {
@@ -180,18 +225,30 @@ fn process_paint_events(
             } => {
                 // Get canvas plane dimensions
                 if let Ok(canvas_plane) = canvas_query.get(*plane_entity) {
+                    // Convert UV to pixel coordinates
+                    let x = uv_pos.x * canvas_plane.width as f32;
+                    let y = uv_pos.y * canvas_plane.height as f32;
+                    let brush_color = painting_res.brush_color;
+                    let plane_id = canvas_plane.plane_id;
+
+                    info!(
+                        "StrokeStart: plane={}, pixel=({:.1}, {:.1}), uv={:?}, color={:?}",
+                        plane_id, x, y, uv_pos, brush_color
+                    );
+
                     let pipeline = painting_res.get_or_create_pipeline(
-                        canvas_plane.plane_id,
+                        plane_id,
                         canvas_plane.width,
                         canvas_plane.height,
                     );
 
-                    // Convert UV to pixel coordinates
-                    let x = uv_pos.x * canvas_plane.width as f32;
-                    let y = uv_pos.y * canvas_plane.height as f32;
-
                     pipeline.begin_stroke(*space_id, *stroke_id, 0);
                     pipeline.stroke_to(x, y, 1.0); // First point
+
+                    info!(
+                        "  After stroke_to: has_dirty_tiles={}",
+                        pipeline.has_dirty_tiles()
+                    );
                 }
             }
             PaintEvent::StrokeMove {
@@ -205,6 +262,10 @@ fn process_paint_events(
                     if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
                         let x = uv_pos.x * width as f32;
                         let y = uv_pos.y * height as f32;
+                        debug!(
+                            "StrokeMove: pixel=({:.1}, {:.1}), pressure={}",
+                            x, y, pressure
+                        );
                         pipeline.stroke_to(x, y, *pressure);
                     }
                 }
@@ -231,21 +292,17 @@ fn process_paint_events(
 fn upload_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
     mut images: ResMut<Assets<Image>>,
-    canvas_query: Query<(&CanvasPlane, &CanvasTexture)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut canvas_query: Query<(
+        &CanvasPlane,
+        &mut CanvasTexture,
+        &MeshMaterial3d<StandardMaterial>,
+    )>,
 ) {
-    for (canvas_plane, canvas_texture) in canvas_query.iter() {
+    for (canvas_plane, mut canvas_texture, material_handle) in canvas_query.iter_mut() {
         let Some(pipeline) = painting_res.get_pipeline_mut(canvas_plane.plane_id) else {
             continue;
         };
-
-        // Check if we need full upload
-        if canvas_texture.needs_full_upload {
-            if let Some(image) = images.get_mut(&canvas_texture.image_handle) {
-                let surface_bytes = pipeline.surface_as_bytes();
-                image.data = Some(surface_bytes.to_vec());
-            }
-            continue;
-        }
 
         // Get dirty tiles
         let dirty_tiles = pipeline.take_dirty_tiles();
@@ -253,44 +310,64 @@ fn upload_dirty_tiles(
             continue;
         }
 
-        // Update each dirty tile in the image
-        if let Some(image) = images.get_mut(&canvas_texture.image_handle) {
-            let Some(ref mut image_data) = image.data else {
-                // Initialize image data if it's None
-                let surface_bytes = pipeline.surface_as_bytes();
-                image.data = Some(surface_bytes.to_vec());
-                continue;
-            };
+        info!(
+            "upload_dirty_tiles: plane={}, dirty_tiles={}",
+            canvas_plane.plane_id,
+            dirty_tiles.len()
+        );
 
-            let surface_width = canvas_plane.width;
-            let bytes_per_pixel = 16; // 4 f32s * 4 bytes
+        // Get full surface data and convert to RGBA8
+        let surface_bytes = pipeline.surface_as_bytes();
+        let rgba8_data = surface_to_rgba8(surface_bytes);
 
-            for tile_coord in dirty_tiles {
-                let tile_data = pipeline.get_tile_data(tile_coord);
-                let (tile_x, tile_y, tile_w, tile_h) = pipeline.get_tile_bounds(tile_coord);
+        // Log pixel count for debugging
+        let non_white_count = rgba8_data
+            .chunks(4)
+            .filter(|p| p[0] < 250 || p[1] < 250 || p[2] < 250)
+            .count();
+        info!(
+            "  Surface has {} non-white pixels out of {}",
+            non_white_count,
+            rgba8_data.len() / 4
+        );
 
-                // Copy tile data to image
-                // Image data is stored row by row
-                for local_y in 0..tile_h {
-                    let global_y = tile_y + local_y;
-                    let src_start = (local_y * tile_w) as usize;
-                    let src_end = src_start + tile_w as usize;
+        // Create a completely NEW image with NEW handle
+        // This bypasses any change detection issues
+        let mut new_image = Image::new(
+            Extent3d {
+                width: canvas_plane.width,
+                height: canvas_plane.height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            rgba8_data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
 
-                    if src_end <= tile_data.len() {
-                        let src_slice = &tile_data[src_start..src_end];
-                        let src_bytes: &[u8] = bytemuck::cast_slice(src_slice);
+        // Set texture usages for painting - REQUIRED for shader sampling
+        new_image.texture_descriptor.usage =
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC;
 
-                        let dst_start =
-                            ((global_y * surface_width + tile_x) as usize) * bytes_per_pixel;
-                        let dst_end = dst_start + (tile_w as usize * bytes_per_pixel);
+        // Remove old image and add new one
+        images.remove(&canvas_texture.image_handle);
+        let new_handle = images.add(new_image);
 
-                        if dst_end <= image_data.len() {
-                            image_data[dst_start..dst_end].copy_from_slice(src_bytes);
-                        }
-                    }
-                }
-            }
+        // Update the material to use the new texture
+        if let Some(material) = materials.get_mut(&material_handle.0) {
+            material.base_color_texture = Some(new_handle.clone());
+            info!("  Updated material with new texture handle");
         }
+
+        // Update the component to track the new handle
+        canvas_texture.image_handle = new_handle;
+
+        info!(
+            "  Created new image for {} dirty tiles ({}x{})",
+            dirty_tiles.len(),
+            canvas_plane.width,
+            canvas_plane.height
+        );
     }
 }
 
