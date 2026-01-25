@@ -290,6 +290,7 @@ pub struct CefWebview {
 
     // IPC channels
     to_ui_tx: mpsc::UnboundedSender<BevyToUi>,
+    to_ui_rx: mpsc::UnboundedReceiver<BevyToUi>,
     from_ui_rx: mpsc::UnboundedReceiver<UiToBevy>,
 }
 
@@ -298,7 +299,7 @@ impl CefWebview {
     /// Create a new CEF offscreen webview with the given HTML content
     pub fn new(html_content: &str, size: (u32, u32)) -> Result<Self, WebviewError> {
         let dirty = Arc::new(AtomicBool::new(false));
-        let (to_ui_tx, _to_ui_rx) = mpsc::unbounded_channel();
+        let (to_ui_tx, to_ui_rx) = mpsc::unbounded_channel();
         let (from_ui_tx, from_ui_rx) = mpsc::unbounded_channel();
 
         #[cfg(target_os = "linux")]
@@ -314,13 +315,27 @@ impl CefWebview {
             dirty,
             size,
             to_ui_tx,
+            to_ui_rx,
             from_ui_rx,
         })
     }
 
     /// Poll for events. Call this each frame from Bevy's main loop.
+    /// Also injects any pending messages into JavaScript.
     pub fn poll(&mut self) {
         self.inner.poll();
+
+        // Inject any pending messages into JavaScript via the bridge's receiver function
+        while let Ok(msg) = self.to_ui_rx.try_recv() {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                // Call the bridge's receive function (set up by Svelte in native mode)
+                let js = format!(
+                    r#"if (window.__PENTIMENTO_RECEIVE__) {{ window.__PENTIMENTO_RECEIVE__('{}'); }}"#,
+                    json.replace('\\', "\\\\").replace('\'', "\\'")
+                );
+                let _ = self.inner.eval(&js);
+            }
+        }
     }
 
     /// Capture the framebuffer if the UI has changed since last capture.

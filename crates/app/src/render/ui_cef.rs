@@ -11,7 +11,7 @@ use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use pentimento_ipc::UiToBevy;
-use pentimento_scene::AddObjectEvent;
+use pentimento_scene::{AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages};
 use pentimento_webview::CefWebview;
 use std::sync::Arc;
 
@@ -239,7 +239,25 @@ pub fn handle_cef_window_resize(
 
 /// Process IPC messages from the CEF webview
 pub fn handle_cef_ipc_messages(world: &mut World) {
-    // Collect messages first (avoid borrow conflicts)
+    // Send outbound messages to the UI first
+    let outbound_msgs = {
+        let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() else {
+            return;
+        };
+        outbound.drain()
+    };
+
+    if !outbound_msgs.is_empty() {
+        if let Some(webview_res) = world.get_non_send_resource_mut::<CefWebviewResource>() {
+            for msg in outbound_msgs {
+                if let Err(e) = webview_res.webview.send_to_ui(msg) {
+                    warn!("Failed to send message to CEF UI: {:?}", e);
+                }
+            }
+        }
+    }
+
+    // Collect inbound messages (avoid borrow conflicts)
     let messages: Vec<UiToBevy> = {
         let Some(mut webview_res) = world.get_non_send_resource_mut::<CefWebviewResource>() else {
             return;
@@ -258,6 +276,15 @@ pub fn handle_cef_ipc_messages(world: &mut World) {
                 if let Some(mut events) = world.get_resource_mut::<Messages<AddObjectEvent>>() {
                     events.write(AddObjectEvent(request));
                     info!("Dispatched AddObjectEvent from CEF UI");
+                }
+            }
+            UiToBevy::AddPaintCanvas(request) => {
+                if let Some(mut events) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
+                    events.write(CanvasPlaneEvent::CreateInFrontOfCamera {
+                        width: request.width.unwrap_or(1024),
+                        height: request.height.unwrap_or(1024),
+                    });
+                    info!("Dispatched CanvasPlaneEvent::CreateInFrontOfCamera from CEF UI");
                 }
             }
             UiToBevy::UiDirty => {

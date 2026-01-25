@@ -5,6 +5,7 @@
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
+use pentimento_ipc::BevyToUi;
 
 mod add_object;
 mod ambient_occlusion;
@@ -41,10 +42,31 @@ pub use selection::{Selectable, Selected, SelectionPlugin, SelectionState};
 #[cfg(feature = "wireframe")]
 pub use wireframe::{WireframeOverlayPlugin, WireframeSettings};
 
+/// Resource for queuing messages to send to the UI
+/// The rendering layer (app crate) should drain this and send to the webview
+#[derive(Resource, Default)]
+pub struct OutboundUiMessages {
+    pub messages: Vec<BevyToUi>,
+}
+
+impl OutboundUiMessages {
+    /// Queue a message to be sent to the UI
+    pub fn send(&mut self, msg: BevyToUi) {
+        self.messages.push(msg);
+    }
+
+    /// Take all queued messages, leaving the queue empty
+    pub fn drain(&mut self) -> Vec<BevyToUi> {
+        std::mem::take(&mut self.messages)
+    }
+}
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<OutboundUiMessages>();
+
         app.add_plugins(CameraControllerPlugin);
         app.add_plugins(LightingPlugin);
         app.add_plugins(AmbientOcclusionPlugin);
