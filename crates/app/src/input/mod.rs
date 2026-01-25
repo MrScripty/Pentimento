@@ -126,9 +126,9 @@ fn track_mouse_position(
             }
             #[cfg(feature = "dioxus")]
             CompositeMode::Dioxus => {
-                // Dioxus renders at physical resolution like CEF
-                let scale_factor = window.resolution.scale_factor();
-                (event.position.x * scale_factor, event.position.y * scale_factor)
+                // Blitz expects logical (CSS) pixels, not physical pixels.
+                // Bevy's CursorMoved events are already in logical coordinates.
+                (event.position.x, event.position.y)
             }
             _ => {
                 // Fallback for other modes (Tauri handles its own input)
@@ -282,9 +282,6 @@ fn forward_mouse_buttons(
             let Some(mut renderer) = dioxus_renderer else { return };
             for event in &events {
                 let Some(button) = convert_button(event.button) else { continue };
-                if event.state.is_pressed() {
-                    info!("Dioxus Click at ({:.1}, {:.1})", click_x, click_y);
-                }
                 let mouse_event = if event.state.is_pressed() {
                     MouseEvent::ButtonDown { button, x: click_x, y: click_y }
                 } else {
