@@ -215,6 +215,64 @@ class BevyBridge {
     cancelDiffusion(taskId: string): void {
         this.send({ type: 'CancelDiffusion', data: { task_id: taskId } });
     }
+
+    // Lighting controls
+    updateLighting(settings: {
+        sunDirection?: [number, number, number];
+        sunColor?: [number, number, number];
+        sunIntensity?: number;
+        ambientColor?: [number, number, number];
+        ambientIntensity?: number;
+        timeOfDay?: number;
+        cloudiness?: number;
+        useTimeOfDay?: boolean;
+    }): void {
+        this.send({
+            type: 'UpdateLighting',
+            data: {
+                sun_direction: settings.sunDirection ?? [-0.5, -0.7, -0.5],
+                sun_color: settings.sunColor ?? [1.0, 0.98, 0.95],
+                sun_intensity: settings.sunIntensity ?? 10000.0,
+                ambient_color: settings.ambientColor ?? [0.6, 0.7, 1.0],
+                ambient_intensity: settings.ambientIntensity ?? 500.0,
+                time_of_day: settings.timeOfDay ?? 12.0,
+                cloudiness: settings.cloudiness ?? 0.0,
+                use_time_of_day: settings.useTimeOfDay ?? true,
+            }
+        });
+    }
+
+    // Ambient occlusion controls
+    updateAmbientOcclusion(settings: {
+        enabled: boolean;
+        qualityLevel: number;
+        constantObjectThickness: number;
+    }): void {
+        this.send({
+            type: 'UpdateAmbientOcclusion',
+            data: {
+                enabled: settings.enabled,
+                quality_level: settings.qualityLevel,
+                constant_object_thickness: settings.constantObjectThickness,
+            }
+        });
+    }
+
+    // Add object to scene
+    addObject(request: {
+        primitiveType: string;
+        position?: [number, number, number];
+        name?: string;
+    }): void {
+        this.send({
+            type: 'AddObject',
+            data: {
+                primitive_type: request.primitiveType,
+                position: request.position ?? null,
+                name: request.name ?? null,
+            }
+        });
+    }
 }
 
 export const bridge = new BevyBridge();

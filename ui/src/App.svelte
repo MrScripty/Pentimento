@@ -1,6 +1,7 @@
 <script lang="ts">
     import Toolbar from '$lib/components/Toolbar.svelte';
     import SidePanel from '$lib/components/SidePanel.svelte';
+    import AddObjectMenu from '$lib/components/AddObjectMenu.svelte';
     import { bridge } from '$lib/bridge';
     import { onMount } from 'svelte';
 
@@ -8,6 +9,38 @@
         fps: 0,
         frameTime: 0,
     });
+
+    // Add object menu state
+    let showAddMenu = $state(false);
+    let addMenuPosition = $state({ x: 0, y: 0 });
+
+    function handleKeydown(e: KeyboardEvent) {
+        // Shift+A opens the add object menu at cursor position
+        if (e.shiftKey && e.key === 'A') {
+            e.preventDefault();
+            // Position menu at center of screen (we don't have cursor position here)
+            addMenuPosition = {
+                x: window.innerWidth / 2 - 75,
+                y: window.innerHeight / 2 - 100,
+            };
+            showAddMenu = true;
+        }
+    }
+
+    function handleMousemove(e: MouseEvent) {
+        // Track mouse position for menu placement
+        if (!showAddMenu) {
+            addMenuPosition = { x: e.clientX, y: e.clientY };
+        }
+    }
+
+    function handleAddMenuKeydown(e: KeyboardEvent) {
+        // Shift+A opens the add object menu at last known cursor position
+        if (e.shiftKey && e.key === 'A') {
+            e.preventDefault();
+            showAddMenu = true;
+        }
+    }
 
     onMount(() => {
         // Subscribe to messages from Bevy
@@ -24,9 +57,16 @@
     });
 </script>
 
+<svelte:window onkeydown={handleAddMenuKeydown} onmousemove={handleMousemove} />
+
 <div class="app">
     <Toolbar {renderStats} />
     <SidePanel />
+    <AddObjectMenu
+        show={showAddMenu}
+        position={addMenuPosition}
+        onClose={() => (showAddMenu = false)}
+    />
 </div>
 
 <style>
@@ -47,7 +87,8 @@
     .app :global([role="button"]),
     .app :global(.interactive),
     .app :global(.toolbar),
-    .app :global(.side-panel) {
+    .app :global(.side-panel),
+    .app :global(.add-menu-backdrop) {
         pointer-events: auto;
     }
 </style>

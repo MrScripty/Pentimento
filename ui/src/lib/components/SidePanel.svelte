@@ -9,6 +9,25 @@
         roughness: 0.3,
     });
 
+    // Lighting settings
+    let lightingSettings = $state({
+        timeOfDay: 12.0,
+        cloudiness: 0.0,
+        sunIntensity: 10000.0,
+        ambientIntensity: 500.0,
+    });
+
+    // Ambient occlusion settings
+    let aoSettings = $state({
+        enabled: false,
+        qualityLevel: 2,
+        constantObjectThickness: 0.25,
+    });
+
+    // Check if running in WASM mode (SSAO not supported)
+    const isWasm = typeof window !== 'undefined' &&
+        ('__TAURI__' in window || '__TAURI_INTERNALS__' in window || '__ELECTRON__' in window);
+
     onMount(() => {
         const unsubscribe = bridge.subscribe((msg) => {
             if (msg.type === 'SelectionChanged') {
@@ -39,6 +58,66 @@
         if (selectedObjects.length > 0) {
             bridge.updateMaterialProperty(selectedObjects[0], 'roughness', value);
         }
+    }
+
+    function handleTimeOfDayChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber;
+        lightingSettings.timeOfDay = value;
+        bridge.updateLighting({
+            timeOfDay: value,
+            cloudiness: lightingSettings.cloudiness,
+            sunIntensity: lightingSettings.sunIntensity,
+            ambientIntensity: lightingSettings.ambientIntensity,
+            useTimeOfDay: true,
+        });
+    }
+
+    function handleCloudinessChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber / 100;
+        lightingSettings.cloudiness = value;
+        bridge.updateLighting({
+            timeOfDay: lightingSettings.timeOfDay,
+            cloudiness: value,
+            sunIntensity: lightingSettings.sunIntensity,
+            ambientIntensity: lightingSettings.ambientIntensity,
+            useTimeOfDay: true,
+        });
+    }
+
+    function handleAoEnabledChange(e: Event) {
+        const checked = (e.target as HTMLInputElement).checked;
+        aoSettings.enabled = checked;
+        bridge.updateAmbientOcclusion({
+            enabled: checked,
+            qualityLevel: aoSettings.qualityLevel,
+            constantObjectThickness: aoSettings.constantObjectThickness,
+        });
+    }
+
+    function handleAoQualityChange(e: Event) {
+        const value = parseInt((e.target as HTMLSelectElement).value);
+        aoSettings.qualityLevel = value;
+        bridge.updateAmbientOcclusion({
+            enabled: aoSettings.enabled,
+            qualityLevel: value,
+            constantObjectThickness: aoSettings.constantObjectThickness,
+        });
+    }
+
+    function handleAoIntensityChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber;
+        aoSettings.constantObjectThickness = value;
+        bridge.updateAmbientOcclusion({
+            enabled: aoSettings.enabled,
+            qualityLevel: aoSettings.qualityLevel,
+            constantObjectThickness: value,
+        });
+    }
+
+    function formatTime(hours: number): string {
+        const h = Math.floor(hours);
+        const m = Math.floor((hours - h) * 60);
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
     }
 </script>
 
@@ -79,6 +158,96 @@
                     />
                     <span class="property-value">{materialProps.roughness.toFixed(2)}</span>
                 </div>
+            </div>
+        {/if}
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">Lighting</h2>
+
+        <div class="property-group">
+            <h3 class="group-title">Sun / Sky</h3>
+
+            <div class="property">
+                <label class="property-label">Time of Day</label>
+                <input
+                    type="range"
+                    min="0"
+                    max="24"
+                    step="0.1"
+                    value={lightingSettings.timeOfDay}
+                    oninput={handleTimeOfDayChange}
+                    class="slider"
+                />
+                <span class="property-value">{formatTime(lightingSettings.timeOfDay)}</span>
+            </div>
+
+            <div class="property">
+                <label class="property-label">Cloudiness</label>
+                <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={lightingSettings.cloudiness * 100}
+                    oninput={handleCloudinessChange}
+                    class="slider"
+                />
+                <span class="property-value">{(lightingSettings.cloudiness * 100).toFixed(0)}%</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">Ambient Occlusion</h2>
+
+        {#if isWasm}
+            <p class="placeholder disabled-notice" title="SSAO is not supported in WebGL2/WASM mode">
+                Not supported in browser
+            </p>
+        {:else}
+            <div class="property-group">
+                <div class="property checkbox-property">
+                    <label class="property-label">Enable SSAO</label>
+                    <input
+                        type="checkbox"
+                        checked={aoSettings.enabled}
+                        onchange={handleAoEnabledChange}
+                        class="checkbox"
+                    />
+                    <span></span>
+                </div>
+
+                {#if aoSettings.enabled}
+                    <div class="property">
+                        <label class="property-label">Quality</label>
+                        <select
+                            value={aoSettings.qualityLevel}
+                            onchange={handleAoQualityChange}
+                            class="select"
+                        >
+                            <option value={0}>Low</option>
+                            <option value={1}>Medium</option>
+                            <option value={2}>High</option>
+                            <option value={3}>Ultra</option>
+                        </select>
+                        <span></span>
+                    </div>
+
+                    <div class="property">
+                        <label class="property-label">Intensity</label>
+                        <input
+                            type="range"
+                            min="0.0625"
+                            max="4"
+                            step="0.0625"
+                            value={aoSettings.constantObjectThickness}
+                            oninput={handleAoIntensityChange}
+                            class="slider"
+                        />
+                        <span class="property-value">{aoSettings.constantObjectThickness.toFixed(2)}</span>
+                    </div>
+                {/if}
             </div>
         {/if}
     </section>
@@ -125,6 +294,11 @@
         margin: 0;
     }
 
+    .disabled-notice {
+        font-style: italic;
+        cursor: help;
+    }
+
     .property-group {
         margin-bottom: 16px;
     }
@@ -142,6 +316,10 @@
         align-items: center;
         gap: 8px;
         margin-bottom: 8px;
+    }
+
+    .checkbox-property {
+        grid-template-columns: 80px auto 1fr;
     }
 
     .property-label {
@@ -165,6 +343,27 @@
         background: white;
         border-radius: 50%;
         cursor: pointer;
+    }
+
+    .checkbox {
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+    }
+
+    .select {
+        width: 100%;
+        padding: 4px 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        color: white;
+        font-size: 12px;
+        cursor: pointer;
+    }
+
+    .select option {
+        background: #2a2a2a;
     }
 
     .property-value {
