@@ -329,15 +329,21 @@ Key issues fixed to get painting working:
 
 ### Known Issues
 
-#### Performance (Addressed)
+#### Performance (Partially Addressed)
 The GPU upload system has been optimized:
-- ✅ Image handle is reused and updated in-place (no memory churn)
-- ✅ Only dirty tile regions are uploaded, not the full surface
+- ✅ Image handle is reused (no handle/material churn from creating new images)
 - ✅ Dirty tiles are batched into a single merged bounding box region
+- ⚠️ Full image data is still replaced each frame (partial upload not yet working)
+- ⚠️ Material must be "touched" each frame to trigger GPU rebinding
+
+**Why full replacement is needed:**
+Bevy's `StandardMaterial` caches the GPU texture binding. Simply modifying
+`image.data` doesn't trigger the material to rebind. Touching the material
+with `material.base_color_texture = Some(same_handle)` forces rebinding.
 
 **Potential future optimizations:**
-- Consider double-buffering for smoother updates
-- Consider using `wgpu::Queue::write_texture()` directly for even lower overhead
+- Use `wgpu::Queue::write_texture()` directly for true partial tile uploads
+- This bypasses Bevy's asset system entirely and allows GPU-level partial updates
 
 #### Brush Feel
 The simple `BrushEngine` uses basic spacing interpolation. For production:
@@ -347,10 +353,10 @@ The simple `BrushEngine` uses basic spacing interpolation. For production:
 
 ### Remaining Work
 
-#### Performance Optimization (High Priority) ✅
-- [x] Partial tile upload - updates only dirty regions instead of full surface
+#### Performance Optimization (Partially Complete)
 - [x] Reuse Image handle instead of creating new one each frame
-- [x] Batch dirty tile uploads into merged bounding box regions
+- [x] Batch dirty tile calculations into merged bounding box regions
+- [ ] True partial tile upload via `wgpu::Queue::write_texture()` (future)
 
 #### libmypaint Integration (Deferred)
 - [ ] FFI bindings for libmypaint
