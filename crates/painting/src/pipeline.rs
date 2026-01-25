@@ -9,7 +9,7 @@
 //! The pipeline is designed to be used from Bevy systems but does not
 //! depend on Bevy itself.
 
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::brush::{BrushEngine, BrushPreset, DabOutput};
 use crate::log::{DabParams, StrokeConfig, StrokeLog, StrokeRecorder};
@@ -121,10 +121,6 @@ impl PaintingPipeline {
 
         // Generate dabs from brush engine
         let dabs = self.brush.stroke_to(x, y, pressure);
-        info!(
-            "PaintingPipeline::stroke_to({:.1}, {:.1}, {:.2}) generated {} dabs",
-            x, y, pressure, dabs.len()
-        );
 
         // Initialize recorder on first dab if needed
         if self.recorder.is_none() && !dabs.is_empty() {

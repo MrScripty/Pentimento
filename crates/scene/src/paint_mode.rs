@@ -10,7 +10,7 @@
 use bevy::ecs::message::Message;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorMoved, PrimaryWindow};
 
 use crate::camera::MainCamera;
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
@@ -139,7 +139,8 @@ fn handle_paint_mode_toggle(
 /// Handle paint input (left mouse button for strokes)
 fn handle_paint_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
+    mut cursor_events: MessageReader<CursorMoved>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     plane_query: Query<(&GlobalTransform, &CanvasPlane)>,
     active_plane: Res<ActiveCanvasPlane>,
@@ -167,86 +168,113 @@ fn handle_paint_input(
         return;
     };
 
-    // Get cursor position
-    let Ok(window) = windows.single() else {
+    // Get window and its entity for filtering cursor events
+    let Ok((window_entity, window)) = windows.single() else {
         return;
     };
 
-    let Some(cursor_pos) = window.cursor_position() else {
-        return;
-    };
-
-    // Cast ray from camera through cursor
-    let ray = camera.viewport_to_world(camera_transform, cursor_pos);
-    let Some(ray) = ray.ok() else {
-        return;
-    };
-
-    // Intersect ray with plane, using world dimensions for proper UV calculation
-    let plane_intersection = ray_plane_intersection(
-        ray,
-        plane_transform,
-        canvas_plane.world_width,
-        canvas_plane.world_height,
-    );
+    // Collect all cursor positions from this frame for this window
+    let cursor_positions: Vec<Vec2> = cursor_events
+        .read()
+        .filter(|e| e.window == window_entity)
+        .map(|e| e.position)
+        .collect();
 
     let current_time = time.elapsed_secs_f64();
 
-    // Handle left mouse button
+    // Handle stroke start (just pressed) - use current cursor position
     if mouse_button.just_pressed(MouseButton::Left) {
-        if let Some((world_pos, uv_pos)) = plane_intersection {
-            // Start new stroke
-            let stroke_id = stroke_id_gen.next();
-            let space_id = canvas_plane.plane_id;
+        let cursor_pos = cursor_positions.last().copied().or_else(|| window.cursor_position());
+        if let Some(cursor_pos) = cursor_pos {
+            let ray = camera.viewport_to_world(camera_transform, cursor_pos);
+            if let Some(ray) = ray.ok() {
+                let plane_intersection = ray_plane_intersection(
+                    ray,
+                    plane_transform,
+                    canvas_plane.world_width,
+                    canvas_plane.world_height,
+                );
 
-            paint_mode.current_stroke = Some(StrokeState {
-                stroke_id,
-                space_id,
-                start_time: (current_time * 1000.0) as u64,
-                last_world_pos: Some(world_pos),
-                last_time: current_time,
-            });
+                if let Some((world_pos, uv_pos)) = plane_intersection {
+                    // Start new stroke
+                    let stroke_id = stroke_id_gen.next();
+                    let space_id = canvas_plane.plane_id;
 
-            paint_events.write(PaintEvent::StrokeStart {
-                plane_entity,
-                world_pos,
-                uv_pos,
-                stroke_id,
-                space_id,
-            });
+                    paint_mode.current_stroke = Some(StrokeState {
+                        stroke_id,
+                        space_id,
+                        start_time: (current_time * 1000.0) as u64,
+                        last_world_pos: Some(world_pos),
+                        last_time: current_time,
+                    });
 
-            info!(
-                "Stroke started: id={}, pos={:?}, uv={:?}",
-                stroke_id, world_pos, uv_pos
-            );
+                    paint_events.write(PaintEvent::StrokeStart {
+                        plane_entity,
+                        world_pos,
+                        uv_pos,
+                        stroke_id,
+                        space_id,
+                    });
+
+                    info!(
+                        "Stroke started: id={}, pos={:?}, uv={:?}",
+                        stroke_id, world_pos, uv_pos
+                    );
+                }
+            }
         }
     } else if mouse_button.pressed(MouseButton::Left) {
-        // Continue stroke
+        // Continue stroke - process ALL cursor events for smooth input
         if let Some(ref mut stroke_state) = paint_mode.current_stroke {
-            if let Some((world_pos, uv_pos)) = plane_intersection {
-                // Calculate speed from position delta and time delta
-                let speed = if let Some(last_pos) = stroke_state.last_world_pos {
-                    let distance = world_pos.distance(last_pos);
-                    let dt = (current_time - stroke_state.last_time) as f32;
-                    if dt > 0.0 {
-                        distance / dt
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
+            // If we have cursor events this frame, process each one
+            // This gives us sub-frame input resolution for smooth strokes
+            let positions_to_process: Vec<Vec2> = if !cursor_positions.is_empty() {
+                cursor_positions
+            } else if let Some(pos) = window.cursor_position() {
+                // Fallback to current position if no events (cursor stationary)
+                vec![pos]
+            } else {
+                vec![]
+            };
+
+            for cursor_pos in positions_to_process {
+                let ray = camera.viewport_to_world(camera_transform, cursor_pos);
+                let Some(ray) = ray.ok() else {
+                    continue;
                 };
 
-                // Update stroke state
-                stroke_state.last_world_pos = Some(world_pos);
-                stroke_state.last_time = current_time;
+                let plane_intersection = ray_plane_intersection(
+                    ray,
+                    plane_transform,
+                    canvas_plane.world_width,
+                    canvas_plane.world_height,
+                );
 
-                paint_events.write(PaintEvent::StrokeMove {
-                    world_pos,
-                    uv_pos,
-                    pressure: 1.0, // Default pressure for mouse
-                    speed,
-                });
+                if let Some((world_pos, uv_pos)) = plane_intersection {
+                    // Calculate speed from position delta and time delta
+                    let speed = if let Some(last_pos) = stroke_state.last_world_pos {
+                        let distance = world_pos.distance(last_pos);
+                        let dt = (current_time - stroke_state.last_time) as f32;
+                        if dt > 0.0 {
+                            distance / dt
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+
+                    // Update stroke state
+                    stroke_state.last_world_pos = Some(world_pos);
+                    stroke_state.last_time = current_time;
+
+                    paint_events.write(PaintEvent::StrokeMove {
+                        world_pos,
+                        uv_pos,
+                        pressure: 1.0, // Default pressure for mouse
+                        speed,
+                    });
+                }
             }
         }
     } else if mouse_button.just_released(MouseButton::Left) {

@@ -374,12 +374,6 @@ fn extract_dirty_tiles(
             continue;
         }
 
-        info!(
-            "extract_dirty_tiles: plane={}, {} tiles",
-            canvas_plane.plane_id,
-            dirty_tiles.len()
-        );
-
         let mut canvas_buffer = CanvasDirtyTileBuffer {
             image_id: canvas_texture.image_handle.id(),
             tiles: Vec::with_capacity(dirty_tiles.len()),
@@ -465,11 +459,6 @@ fn upload_dirty_tiles_to_gpu(
             );
         }
 
-        info!(
-            "Uploaded {} tiles for image {:?}",
-            canvas.tiles.len(),
-            canvas.image_id
-        );
     }
 }
 
