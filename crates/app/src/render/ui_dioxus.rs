@@ -1,20 +1,21 @@
-//! Dioxus UI Compositing - Zero-Copy GPU rendering with Vello
+//! Dioxus UI Compositing - Zero-Copy GPU rendering with Vello via Blitz
 //!
-//! This module renders the Dioxus UI using Vello's GPU compute pipeline directly
-//! to a Bevy-owned texture, eliminating CPU-side copies.
+//! This module renders the Dioxus UI using Blitz for DOM/CSS/layout and Vello
+//! for GPU rendering directly to a Bevy-owned texture, eliminating CPU-side copies.
 //!
 //! # Architecture
 //!
-//! 1. Main world: UI state is extracted to render world each frame
-//! 2. Render world (Prepare): Vello scene graph is built from UI state
-//! 3. Render world (Render): Vello renders directly to Bevy's GpuImage
-//! 4. Bevy composites the texture over the 3D scene
+//! 1. Main world: BlitzDocument manages Dioxus VirtualDom + Blitz DOM/layout
+//! 2. Main world (Update): poll() processes state changes, paint_to_scene() builds Vello scene
+//! 3. Extraction: Scene is cloned to render world
+//! 4. Render world: Vello renders the scene directly to Bevy's GpuImage
+//! 5. Bevy composites the texture over the 3D scene
 //!
 //! # Thread Safety
 //!
-//! Vello's Renderer is wrapped in `Arc<Mutex<...>>` to be Send+Sync for
-//! the render world. The mutex is only held during the single render call
-//! per frame, so there's no contention.
+//! BlitzDocument contains !Send types (VirtualDom), so it stays in main world.
+//! Only the Scene (which is Clone+Send) is extracted to the render world.
+//! Vello's Renderer is wrapped in `Arc<Mutex<...>>` for thread safety.
 
 use bevy::asset::{AssetId, RenderAssetUsages};
 use bevy::picking::prelude::Pickable;
@@ -26,8 +27,10 @@ use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use pentimento_dioxus_ui::{
-    kurbo, peniko, AaConfig, DioxusBridge, DioxusBridgeHandle, RenderParams, Scene,
-    SharedVelloRenderer,
+    peniko, AaConfig, BlitzDocument, BlitzModifiers, BlitzPointerId, BlitzPointerEvent,
+    BlitzWheelDelta, BlitzWheelEvent, DioxusBridge, DioxusBridgeHandle, MouseEventButton,
+    MouseEventButtons, PointerCoords, PointerDetails, RenderParams, Scene, SharedVelloRenderer,
+    UiEvent,
 };
 use pentimento_ipc::MouseEvent;
 
@@ -38,12 +41,9 @@ use super::ui_blend_material::{UiBlendMaterial, UiBlendMaterialPlugin};
 // ============================================================================
 
 /// UI state that gets extracted to the render world each frame.
-/// This contains all the data needed to build the Vello scene.
+/// This contains viewport dimensions needed for Vello rendering.
 #[derive(Resource, Clone, ExtractResource, Default)]
 pub struct DioxusUiState {
-    pub fps: f32,
-    pub frame_time: f32,
-    pub selected_tool: String,
     pub width: u32,
     pub height: u32,
 }
@@ -67,29 +67,258 @@ pub struct DioxusBridgeResource {
     pub bridge_handle: DioxusBridgeHandle,
 }
 
+/// The BlitzDocument that manages the Dioxus VirtualDom and Blitz DOM/layout.
+/// This is a NonSend resource because VirtualDom is !Send.
+pub struct BlitzDocumentResource {
+    pub document: BlitzDocument,
+}
+
+/// Pre-built Vello scene for the current frame.
+/// Built in main world, extracted to render world.
+#[derive(Resource, Clone, Default, ExtractResource)]
+pub struct VelloSceneBuffer {
+    pub scene: Scene,
+}
+
 /// Input state for the Dioxus UI (main world).
+/// Queues UI events to be processed in the build_ui_scene system.
 #[derive(Resource, Default)]
 pub struct DioxusInputState {
     pub mouse_x: f32,
     pub mouse_y: f32,
+    /// Track which mouse buttons are currently pressed
+    pub buttons_pressed: MouseEventButtons,
+    /// Queued UI events to be processed
+    pub event_queue: Vec<UiEvent>,
 }
 
 impl DioxusInputState {
     pub fn send_mouse_event(&mut self, event: MouseEvent) {
         match event {
-            MouseEvent::Move { x, y }
-            | MouseEvent::ButtonDown { x, y, .. }
-            | MouseEvent::ButtonUp { x, y, .. } => {
+            MouseEvent::Move { x, y } => {
                 self.mouse_x = x;
                 self.mouse_y = y;
+                self.event_queue.push(UiEvent::PointerMove(self.create_pointer_event(x, y, MouseEventButton::Main)));
             }
-            MouseEvent::Scroll { .. } => {}
+            MouseEvent::ButtonDown { x, y, button } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                let btn = self.convert_button(button);
+                self.buttons_pressed.insert(MouseEventButtons::from(btn));
+                self.event_queue.push(UiEvent::PointerDown(self.create_pointer_event(x, y, btn)));
+            }
+            MouseEvent::ButtonUp { x, y, button } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                let btn = self.convert_button(button);
+                self.buttons_pressed.remove(MouseEventButtons::from(btn));
+                self.event_queue.push(UiEvent::PointerUp(self.create_pointer_event(x, y, btn)));
+            }
+            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                self.event_queue.push(UiEvent::Wheel(BlitzWheelEvent {
+                    delta: BlitzWheelDelta::Pixels(delta_x as f64, delta_y as f64),
+                    coords: PointerCoords {
+                        page_x: x,
+                        page_y: y,
+                        screen_x: x,
+                        screen_y: y,
+                        client_x: x,
+                        client_y: y,
+                    },
+                    buttons: self.buttons_pressed,
+                    mods: BlitzModifiers::empty(),
+                }));
+            }
         }
     }
 
     pub fn send_keyboard_event(&mut self, _event: pentimento_ipc::KeyboardEvent) {
         // Future: handle keyboard input
     }
+
+    fn convert_button(&self, button: pentimento_ipc::MouseButton) -> MouseEventButton {
+        match button {
+            pentimento_ipc::MouseButton::Left => MouseEventButton::Main,
+            pentimento_ipc::MouseButton::Right => MouseEventButton::Secondary,
+            pentimento_ipc::MouseButton::Middle => MouseEventButton::Auxiliary,
+        }
+    }
+
+    fn create_pointer_event(&self, x: f32, y: f32, button: MouseEventButton) -> BlitzPointerEvent {
+        BlitzPointerEvent {
+            id: BlitzPointerId::Mouse,
+            is_primary: true,
+            coords: PointerCoords {
+                page_x: x,
+                page_y: y,
+                screen_x: x,
+                screen_y: y,
+                client_x: x,
+                client_y: y,
+            },
+            button,
+            buttons: self.buttons_pressed,
+            mods: BlitzModifiers::empty(),
+            details: PointerDetails::default(),
+        }
+    }
+}
+
+// ============================================================================
+// Dioxus Channel-Based Renderer Resources
+// ============================================================================
+
+/// Event sender for channel-based Dioxus UI event handling.
+#[derive(Clone)]
+pub struct DioxusEventSender(pub std::sync::mpsc::Sender<UiEvent>);
+
+/// Resource for sending events to the Dioxus UI thread via channel.
+/// Uses click tolerance to prevent small mouse movement from triggering drag detection.
+#[derive(Resource)]
+pub struct DioxusRendererResource {
+    sender: DioxusEventSender,
+    mouse_x: f32,
+    mouse_y: f32,
+    buttons_pressed: MouseEventButtons,
+    /// Position where the mouse button was pressed (for click vs drag detection)
+    mousedown_x: f32,
+    mousedown_y: f32,
+}
+
+/// Click tolerance in logical pixels. Movement within this distance from mousedown
+/// won't trigger drag mode, making clicks more reliable on sensitive input devices.
+const CLICK_TOLERANCE: f32 = 8.0;
+
+impl DioxusRendererResource {
+    pub fn new(sender: DioxusEventSender) -> Self {
+        Self {
+            sender,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
+            buttons_pressed: MouseEventButtons::empty(),
+            mousedown_x: 0.0,
+            mousedown_y: 0.0,
+        }
+    }
+
+    pub fn send_mouse_event(&mut self, event: MouseEvent) {
+        let ui_event = match event {
+            MouseEvent::Move { x, y } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                // Only report buttons as pressed if we've moved beyond click tolerance.
+                // This prevents small mouse jitter from triggering Blitz's drag detection
+                // (which would prevent the click from being synthesized).
+                let buttons = if self.buttons_pressed.is_empty() {
+                    MouseEventButtons::empty()
+                } else {
+                    let dx = (x - self.mousedown_x).abs();
+                    let dy = (y - self.mousedown_y).abs();
+                    if dx > CLICK_TOLERANCE || dy > CLICK_TOLERANCE {
+                        self.buttons_pressed
+                    } else {
+                        MouseEventButtons::empty()
+                    }
+                };
+                UiEvent::PointerMove(self.create_pointer_event_with_buttons(
+                    x,
+                    y,
+                    MouseEventButton::Main,
+                    buttons,
+                ))
+            }
+            MouseEvent::ButtonDown { x, y, button } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                self.mousedown_x = x;
+                self.mousedown_y = y;
+                let btn = self.convert_button(button);
+                self.buttons_pressed.insert(MouseEventButtons::from(btn));
+                UiEvent::PointerDown(self.create_pointer_event(x, y, btn))
+            }
+            MouseEvent::ButtonUp { x, y, button } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                let btn = self.convert_button(button);
+                self.buttons_pressed.remove(MouseEventButtons::from(btn));
+                UiEvent::PointerUp(self.create_pointer_event(x, y, btn))
+            }
+            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
+                self.mouse_x = x;
+                self.mouse_y = y;
+                UiEvent::Wheel(BlitzWheelEvent {
+                    delta: BlitzWheelDelta::Pixels(delta_x as f64, delta_y as f64),
+                    coords: PointerCoords {
+                        page_x: x,
+                        page_y: y,
+                        screen_x: x,
+                        screen_y: y,
+                        client_x: x,
+                        client_y: y,
+                    },
+                    buttons: self.buttons_pressed,
+                    mods: BlitzModifiers::empty(),
+                })
+            }
+        };
+
+        // Send through channel (ignore errors if receiver is dropped)
+        if let Err(e) = self.sender.0.send(ui_event) {
+            error!("Failed to send UI event through channel: {}", e);
+        }
+    }
+
+    pub fn send_keyboard_event(&mut self, _event: pentimento_ipc::KeyboardEvent) {
+        // Future: handle keyboard input
+    }
+
+    fn convert_button(&self, button: pentimento_ipc::MouseButton) -> MouseEventButton {
+        match button {
+            pentimento_ipc::MouseButton::Left => MouseEventButton::Main,
+            pentimento_ipc::MouseButton::Right => MouseEventButton::Secondary,
+            pentimento_ipc::MouseButton::Middle => MouseEventButton::Auxiliary,
+        }
+    }
+
+    fn create_pointer_event(&self, x: f32, y: f32, button: MouseEventButton) -> BlitzPointerEvent {
+        self.create_pointer_event_with_buttons(x, y, button, self.buttons_pressed)
+    }
+
+    fn create_pointer_event_with_buttons(
+        &self,
+        x: f32,
+        y: f32,
+        button: MouseEventButton,
+        buttons: MouseEventButtons,
+    ) -> BlitzPointerEvent {
+        BlitzPointerEvent {
+            id: BlitzPointerId::Mouse,
+            is_primary: true,
+            coords: PointerCoords {
+                page_x: x,
+                page_y: y,
+                screen_x: x,
+                screen_y: y,
+                client_x: x,
+                client_y: y,
+            },
+            button,
+            buttons,
+            mods: BlitzModifiers::empty(),
+            details: PointerDetails::default(),
+        }
+    }
+}
+
+/// Channel receiver for UI events, processed in build_ui_scene.
+pub struct DioxusEventReceiver(pub std::sync::mpsc::Receiver<UiEvent>);
+
+/// Create a new event channel pair for UI input events.
+pub fn create_event_channel() -> (DioxusEventSender, DioxusEventReceiver) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    (DioxusEventSender(tx), DioxusEventReceiver(rx))
 }
 
 // ============================================================================
@@ -102,16 +331,18 @@ pub struct RenderWorldVelloRenderer {
     pub renderer: SharedVelloRenderer,
 }
 
-/// Pre-built Vello scene for the current frame.
-#[derive(Resource, Default)]
-pub struct VelloSceneBuffer {
-    pub scene: Scene,
-}
-
 /// Track initialization status in render world.
 #[derive(Resource, Default)]
 pub struct VelloRenderStatus {
     pub first_render_done: bool,
+}
+
+/// Track whether Dioxus UI setup is complete (main world).
+/// We defer setup to allow the window size to stabilize after creation.
+#[derive(Resource, Default)]
+pub struct DioxusSetupStatus {
+    pub setup_done: bool,
+    pub frames_waited: u32,
 }
 
 // ============================================================================
@@ -126,11 +357,14 @@ impl Plugin for DioxusRenderPlugin {
         // Main world setup
         app.init_resource::<DioxusUiState>()
             .init_resource::<DioxusInputState>()
+            .init_resource::<VelloSceneBuffer>()
+            .init_resource::<DioxusSetupStatus>()
             .add_plugins(UiBlendMaterialPlugin)
             .add_plugins(ExtractResourcePlugin::<DioxusUiState>::default())
             .add_plugins(ExtractResourcePlugin::<DioxusRenderTargetId>::default())
-            .add_systems(Startup, setup_dioxus_texture)
-            .add_systems(Update, (update_ui_state, handle_window_resize));
+            .add_plugins(ExtractResourcePlugin::<VelloSceneBuffer>::default())
+            // Run setup during Update (not Startup) to allow window size to stabilize
+            .add_systems(Update, (deferred_setup_dioxus_texture, build_ui_scene, handle_window_resize).chain());
 
         // Render world setup
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -139,14 +373,7 @@ impl Plugin for DioxusRenderPlugin {
         };
 
         render_app
-            .init_resource::<VelloSceneBuffer>()
             .init_resource::<VelloRenderStatus>()
-            .add_systems(
-                Render,
-                prepare_vello_scene
-                    .in_set(RenderSystems::Prepare)
-                    .before(render_vello_to_texture),
-            )
             .add_systems(Render, render_vello_to_texture.in_set(RenderSystems::Render));
     }
 
@@ -173,10 +400,39 @@ impl Plugin for DioxusRenderPlugin {
 // Main World Systems
 // ============================================================================
 
-/// Initialize the Dioxus UI texture and overlay node.
-/// This is an exclusive system because DioxusBridgeResource is NonSend.
+/// Deferred setup that waits for window size to stabilize before initializing.
+/// This prevents issues where the window starts at one size and immediately resizes.
+fn deferred_setup_dioxus_texture(world: &mut World) {
+    // Check if already set up
+    {
+        let status = world.resource::<DioxusSetupStatus>();
+        if status.setup_done {
+            return;
+        }
+    }
+
+    // Wait 2 frames for window size to stabilize
+    const FRAMES_TO_WAIT: u32 = 2;
+    {
+        let mut status = world.resource_mut::<DioxusSetupStatus>();
+        status.frames_waited += 1;
+        if status.frames_waited < FRAMES_TO_WAIT {
+            return;
+        }
+    }
+
+    // Now run the actual setup
+    setup_dioxus_texture(world);
+
+    // Mark as done
+    world.resource_mut::<DioxusSetupStatus>().setup_done = true;
+}
+
+/// Initialize the Dioxus UI texture, BlitzDocument, and overlay node.
+/// This is an exclusive system because BlitzDocumentResource is NonSend.
 fn setup_dioxus_texture(world: &mut World) {
-    // Get window dimensions
+    // Get window dimensions in LOGICAL pixels
+    // We use logical coordinates throughout to match Bevy's mouse event coordinates
     let (width, height) = {
         let mut window_query = world.query::<&Window>();
         let Some(window) = window_query.iter(world).next() else {
@@ -184,19 +440,39 @@ fn setup_dioxus_texture(world: &mut World) {
             return;
         };
         (
-            window.resolution.physical_width(),
-            window.resolution.physical_height(),
+            window.resolution.width() as u32,  // logical width
+            window.resolution.height() as u32, // logical height
         )
     };
+    // Use scale_factor of 1.0 since we're working in logical pixels
+    let scale_factor = 1.0_f64;
 
+    // Get the actual scale factor for logging
+    let actual_scale = {
+        let mut window_query = world.query::<&Window>();
+        window_query
+            .iter(world)
+            .next()
+            .map(|w| w.resolution.scale_factor())
+            .unwrap_or(1.0)
+    };
     info!(
-        "Setting up Dioxus UI texture ({}x{} physical, zero-copy mode)",
-        width, height
+        "Setting up Dioxus UI texture: {}x{} logical (device scale={}, using scale=1.0)",
+        width, height, actual_scale
     );
 
     // Create the IPC bridge (non-send due to mpsc::Receiver)
-    let (_bridge, bridge_handle) = DioxusBridge::new();
+    let (bridge, bridge_handle) = DioxusBridge::new();
     world.insert_non_send_resource(DioxusBridgeResource { bridge_handle });
+
+    // Create the UI event channel for input forwarding
+    let (event_sender, event_receiver) = create_event_channel();
+    world.insert_non_send_resource(DioxusRendererResource::new(event_sender));
+    world.insert_non_send_resource(event_receiver);
+
+    // Create the BlitzDocument with our Dioxus UI components
+    let document = BlitzDocument::new(width, height, scale_factor, bridge);
+    world.insert_non_send_resource(BlitzDocumentResource { document });
 
     // Create a Bevy Image for the UI texture
     let mut image = Image::new_fill(
@@ -224,11 +500,7 @@ fn setup_dioxus_texture(world: &mut World) {
         handle: handle.clone(),
     });
     world.insert_resource(DioxusRenderTargetId(handle.id()));
-    world.insert_resource(DioxusUiState {
-        width,
-        height,
-        ..default()
-    });
+    world.insert_resource(DioxusUiState { width, height });
 
     // Create the blend material for proper alpha compositing
     let material_handle = world
@@ -254,84 +526,129 @@ fn setup_dioxus_texture(world: &mut World) {
         Pickable::IGNORE,
     ));
 
-    info!("Dioxus UI overlay created with UiBlendMaterial");
+    info!("Dioxus UI overlay created with Blitz+Vello rendering");
 }
 
-/// Update UI state from game state (runs every frame in main world).
-fn update_ui_state(mut ui_state: ResMut<DioxusUiState>, time: Res<Time>) {
-    // Update performance stats
-    ui_state.fps = 1.0 / time.delta_secs();
-    ui_state.frame_time = time.delta_secs() * 1000.0;
-}
-
-/// Handle window resize - update texture and UI state.
-fn handle_window_resize(
-    mut ui_state: ResMut<DioxusUiState>,
-    render_target: Option<Res<DioxusRenderTarget>>,
-    mut images: ResMut<Assets<Image>>,
-    windows: Query<&Window, Changed<Window>>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
+/// Build the UI scene from BlitzDocument (runs every frame in main world).
+/// This is an exclusive system because BlitzDocumentResource is NonSend.
+fn build_ui_scene(world: &mut World) {
+    // Drain queued input events from the channel receiver
+    let events: Vec<UiEvent> = {
+        if let Some(receiver) = world.get_non_send_resource::<DioxusEventReceiver>() {
+            receiver.0.try_iter().collect()
+        } else {
+            warn!("No DioxusEventReceiver found!");
+            Vec::new()
+        }
     };
 
-    let Some(render_target) = render_target else {
-        return;
-    };
+    // Process input events and poll the document (needs mutable access, separate scope)
+    {
+        let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>()
+        else {
+            return;
+        };
 
-    let width = window.resolution.physical_width();
-    let height = window.resolution.physical_height();
+        // Forward queued events to BlitzDocument
+        for event in &events {
+            doc_resource.document.handle_event(event.clone());
+        }
 
-    if width == ui_state.width && height == ui_state.height {
-        return;
+        // Poll for any pending Dioxus updates
+        doc_resource.document.poll();
     }
+
+    // Get a raw pointer to the document for painting
+    // SAFETY: We only hold an immutable reference to the document while mutating the scene buffer.
+    // The document and scene buffer are independent resources with no aliasing.
+    let doc_ptr = {
+        let Some(doc_resource) = world.get_non_send_resource::<BlitzDocumentResource>() else {
+            return;
+        };
+        &doc_resource.document as *const BlitzDocument
+    };
+
+    let Some(mut scene_buffer) = world.get_resource_mut::<VelloSceneBuffer>() else {
+        return;
+    };
+
+    // SAFETY: doc_ptr points to valid data that outlives this scope.
+    // BlitzDocument::paint_to_scene only requires &self (immutable).
+    unsafe {
+        (*doc_ptr).paint_to_scene(&mut scene_buffer.scene);
+    }
+}
+
+/// Handle window resize - update texture, UI state, and BlitzDocument.
+/// This is an exclusive system because BlitzDocumentResource is NonSend.
+fn handle_window_resize(world: &mut World) {
+    // Check if window changed
+    // Use LOGICAL dimensions to match initial setup and mouse coordinates
+    let (width, height, changed) = {
+        let mut query = world.query_filtered::<&Window, Changed<Window>>();
+        match query.iter(world).next() {
+            Some(window) => (
+                window.resolution.width() as u32,  // logical width
+                window.resolution.height() as u32, // logical height
+                true,
+            ),
+            None => return,
+        }
+    };
 
     if width == 0 || height == 0 {
         return;
     }
 
+    // Check if size actually changed
+    let current_size = {
+        world
+            .get_resource::<DioxusUiState>()
+            .map(|s| (s.width, s.height))
+    };
+
+    if let Some((cur_w, cur_h)) = current_size {
+        if cur_w == width && cur_h == height {
+            return;
+        }
+    }
+
     info!(
-        "Window resized to {}x{} physical, updating UI texture",
+        "Window resized to {}x{} logical, updating UI texture",
         width, height
     );
 
-    // Update state (will be extracted to render world)
-    ui_state.width = width;
-    ui_state.height = height;
+    // Update UI state
+    if let Some(mut ui_state) = world.get_resource_mut::<DioxusUiState>() {
+        ui_state.width = width;
+        ui_state.height = height;
+    }
+
+    // Resize the BlitzDocument
+    if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
+        doc_resource.document.resize(width, height);
+    }
 
     // Resize the Bevy Image asset
-    if let Some(image) = images.get_mut(&render_target.handle) {
-        image.resize(Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        });
+    let handle = world
+        .get_resource::<DioxusRenderTarget>()
+        .map(|rt| rt.handle.clone());
+    if let Some(handle) = handle {
+        if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
+            if let Some(image) = images.get_mut(&handle) {
+                image.resize(Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                });
+            }
+        }
     }
 }
 
 // ============================================================================
 // Render World Systems
 // ============================================================================
-
-/// Build the Vello scene from extracted UI state (runs in Prepare set).
-fn prepare_vello_scene(
-    ui_state: Option<Res<DioxusUiState>>,
-    mut scene_buffer: ResMut<VelloSceneBuffer>,
-) {
-    let Some(ui_state) = ui_state else {
-        return;
-    };
-
-    scene_buffer.scene.reset();
-
-    // Build UI elements
-    draw_toolbar(&mut scene_buffer.scene, ui_state.width as f64);
-    draw_side_panel(
-        &mut scene_buffer.scene,
-        ui_state.width as f64,
-        ui_state.height as f64,
-    );
-}
 
 /// Render Vello scene directly to Bevy's GPU texture (runs in Render set).
 fn render_vello_to_texture(
@@ -362,6 +679,15 @@ fn render_vello_to_texture(
         return;
     };
 
+    // Log dimensions on first render to help diagnose fuzzy/sharp alternation
+    if !status.first_render_done {
+        let tex_size = gpu_image.size;
+        info!(
+            "First Vello render: ui_state={}x{}, texture={}x{}",
+            ui_state.width, ui_state.height, tex_size.width, tex_size.height
+        );
+    }
+
     // Zero-copy: render directly to Bevy's texture!
     if let Err(e) = vello.renderer.render_to_texture(
         render_device.wgpu_device(),
@@ -385,101 +711,3 @@ fn render_vello_to_texture(
     }
 }
 
-// ============================================================================
-// Scene Building Helpers
-// ============================================================================
-
-/// Draw the toolbar at the top of the screen.
-fn draw_toolbar(scene: &mut Scene, width: f64) {
-    use kurbo::{Affine, RoundedRect};
-    use peniko::{Brush, Color, Fill};
-
-    let toolbar_height = 48.0;
-
-    // Background - semi-transparent dark gray (90% opacity = 230/255)
-    let bg_color = Color::from_rgba8(30, 30, 30, 230);
-    let rect = RoundedRect::from_rect(kurbo::Rect::new(0.0, 0.0, width, toolbar_height), 0.0);
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        &Brush::Solid(bg_color),
-        None,
-        &rect,
-    );
-
-    // Title placeholder - white rectangle
-    let title_color = Color::WHITE;
-    let title_rect = RoundedRect::from_rect(kurbo::Rect::new(16.0, 14.0, 96.0, 34.0), 2.0);
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        &Brush::Solid(title_color),
-        None,
-        &title_rect,
-    );
-
-    // Bottom border (10% opacity = 26/255)
-    let border_color = Color::from_rgba8(255, 255, 255, 26);
-    let border_rect = RoundedRect::from_rect(
-        kurbo::Rect::new(0.0, toolbar_height - 1.0, width, toolbar_height),
-        0.0,
-    );
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        &Brush::Solid(border_color),
-        None,
-        &border_rect,
-    );
-}
-
-/// Draw the side panel on the right.
-fn draw_side_panel(scene: &mut Scene, width: f64, height: f64) {
-    use kurbo::{Affine, RoundedRect};
-    use peniko::{Brush, Color, Fill};
-
-    let panel_width = 300.0;
-    let panel_top = 56.0;
-    let panel_margin = 8.0;
-
-    // Panel background (90% opacity)
-    let bg_color = Color::from_rgba8(30, 30, 30, 230);
-    let rect = RoundedRect::from_rect(
-        kurbo::Rect::new(
-            width - panel_width - panel_margin,
-            panel_top,
-            width - panel_margin,
-            height - panel_margin,
-        ),
-        6.0,
-    );
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        &Brush::Solid(bg_color),
-        None,
-        &rect,
-    );
-}
-
-// ============================================================================
-// Legacy Compatibility - Resource for input module
-// ============================================================================
-
-/// Compatibility wrapper for the input module.
-/// The input module expects DioxusRendererResource with send_mouse_event/send_keyboard_event.
-pub struct DioxusRendererResource;
-
-impl DioxusRendererResource {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn send_mouse_event(&mut self, _event: MouseEvent) {
-        // Input handling is now done via DioxusInputState resource
-    }
-
-    pub fn send_keyboard_event(&mut self, _event: pentimento_ipc::KeyboardEvent) {
-        // Input handling is now done via DioxusInputState resource
-    }
-}

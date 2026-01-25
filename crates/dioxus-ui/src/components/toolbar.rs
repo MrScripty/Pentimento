@@ -7,16 +7,13 @@ use crate::state::RenderStats;
 
 const TOOLBAR_CSS: &str = r#"
 .toolbar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
+    /* Normal flow layout - no positioning for Blitz hit testing compatibility */
+    width: 100%;
     height: 48px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0 16px;
-    z-index: 100;
     background: rgba(30, 30, 30, 0.95);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
@@ -43,8 +40,8 @@ const TOOLBAR_CSS: &str = r#"
 }
 
 .nav-button {
-    background: transparent;
-    border: none;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.15);
     color: rgba(255, 255, 255, 0.8);
     padding: 6px 12px;
     border-radius: 4px;
@@ -161,23 +158,6 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
     let mut open_menu = use_signal(|| None::<String>);
     let mut selected_tool = use_signal(|| "select".to_string());
 
-    let mut toggle_menu = move |menu: &str| {
-        let menu = menu.to_string();
-        if open_menu() == Some(menu.clone()) {
-            open_menu.set(None);
-        } else {
-            open_menu.set(Some(menu));
-        }
-    };
-
-    let close_menu = move |_| {
-        open_menu.set(None);
-    };
-
-    let mut select_tool = move |tool: &str| {
-        selected_tool.set(tool.to_string());
-    };
-
     let bridge = props.bridge.clone();
     let handle_reset_camera = move |_| {
         bridge.camera_reset();
@@ -193,16 +173,23 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
                     div { class: "menu-container",
                         button {
                             class: if open_menu() == Some("file".to_string()) { "nav-button active" } else { "nav-button" },
-                            onclick: move |_| toggle_menu("file"),
+                            onclick: move |_| {
+                                tracing::info!("File button clicked, current: {:?}", open_menu());
+                                if open_menu() == Some("file".to_string()) {
+                                    open_menu.set(None);
+                                } else {
+                                    open_menu.set(Some("file".to_string()));
+                                }
+                            },
                             "File"
                         }
                         if open_menu() == Some("file".to_string()) {
                             div { class: "dropdown",
-                                button { class: "dropdown-item", onclick: close_menu, "New Project" }
-                                button { class: "dropdown-item", onclick: close_menu, "Open..." }
-                                button { class: "dropdown-item", onclick: close_menu, "Save" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "New Project" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Open..." }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Save" }
                                 div { class: "dropdown-divider" }
-                                button { class: "dropdown-item", onclick: close_menu, "Export..." }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Export..." }
                             }
                         }
                     }
@@ -210,17 +197,24 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
                     div { class: "menu-container",
                         button {
                             class: if open_menu() == Some("edit".to_string()) { "nav-button active" } else { "nav-button" },
-                            onclick: move |_| toggle_menu("edit"),
+                            onclick: move |_| {
+                                tracing::info!("Edit button clicked, current: {:?}", open_menu());
+                                if open_menu() == Some("edit".to_string()) {
+                                    open_menu.set(None);
+                                } else {
+                                    open_menu.set(Some("edit".to_string()));
+                                }
+                            },
                             "Edit"
                         }
                         if open_menu() == Some("edit".to_string()) {
                             div { class: "dropdown",
-                                button { class: "dropdown-item", onclick: close_menu, "Undo" }
-                                button { class: "dropdown-item", onclick: close_menu, "Redo" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Undo" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Redo" }
                                 div { class: "dropdown-divider" }
-                                button { class: "dropdown-item", onclick: close_menu, "Cut" }
-                                button { class: "dropdown-item", onclick: close_menu, "Copy" }
-                                button { class: "dropdown-item", onclick: close_menu, "Paste" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Cut" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Copy" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Paste" }
                             }
                         }
                     }
@@ -228,14 +222,20 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
                     div { class: "menu-container",
                         button {
                             class: if open_menu() == Some("view".to_string()) { "nav-button active" } else { "nav-button" },
-                            onclick: move |_| toggle_menu("view"),
+                            onclick: move |_| {
+                                if open_menu() == Some("view".to_string()) {
+                                    open_menu.set(None);
+                                } else {
+                                    open_menu.set(Some("view".to_string()));
+                                }
+                            },
                             "View"
                         }
                         if open_menu() == Some("view".to_string()) {
                             div { class: "dropdown",
-                                button { class: "dropdown-item", onclick: close_menu, "Zoom In" }
-                                button { class: "dropdown-item", onclick: close_menu, "Zoom Out" }
-                                button { class: "dropdown-item", onclick: close_menu, "Fit to Window" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Zoom In" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Zoom Out" }
+                                button { class: "dropdown-item", onclick: move |_| open_menu.set(None), "Fit to Window" }
                             }
                         }
                     }
@@ -247,25 +247,25 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
                     button {
                         class: if selected_tool() == "select" { "tool-button selected" } else { "tool-button" },
                         title: "Select",
-                        onclick: move |_| select_tool("select"),
+                        onclick: move |_| selected_tool.set("select".to_string()),
                         span { class: "icon", "↖" }
                     }
                     button {
                         class: if selected_tool() == "move" { "tool-button selected" } else { "tool-button" },
                         title: "Move",
-                        onclick: move |_| select_tool("move"),
+                        onclick: move |_| selected_tool.set("move".to_string()),
                         span { class: "icon", "✥" }
                     }
                     button {
                         class: if selected_tool() == "rotate" { "tool-button selected" } else { "tool-button" },
                         title: "Rotate",
-                        onclick: move |_| select_tool("rotate"),
+                        onclick: move |_| selected_tool.set("rotate".to_string()),
                         span { class: "icon", "↻" }
                     }
                     button {
                         class: if selected_tool() == "scale" { "tool-button selected" } else { "tool-button" },
                         title: "Scale",
-                        onclick: move |_| select_tool("scale"),
+                        onclick: move |_| selected_tool.set("scale".to_string()),
                         span { class: "icon", "⤢" }
                     }
                 }

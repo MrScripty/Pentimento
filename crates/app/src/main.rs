@@ -42,7 +42,10 @@ fn main() {
     // Configure window based on compositing mode
     let window_config = Window {
         title: "Pentimento".into(),
-        resolution: WindowResolution::new(DEFAULT_WIDTH, DEFAULT_HEIGHT),
+        // Force scale factor to 1.0 to prevent winit from incorrectly guessing HiDPI.
+        // This ensures 1:1 pixel mapping between logical and physical coordinates.
+        resolution: WindowResolution::new(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+            .with_scale_factor_override(1.0),
         present_mode: bevy::window::PresentMode::AutoVsync,
         // Transparent window helps with overlay mode blending
         transparent: config.composite_mode == CompositeMode::Overlay,
