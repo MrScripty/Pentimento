@@ -68,6 +68,9 @@ pub enum BevyToUi {
 
     /// Ambient occlusion settings changed
     AmbientOcclusionChanged { settings: AmbientOcclusionSettings },
+
+    /// Edit mode changed (paint mode, etc.)
+    EditModeChanged { mode: EditMode },
 }
 
 /// Messages from Svelte UI to Bevy
@@ -112,6 +115,9 @@ pub enum UiToBevy {
 
     /// Gizmo command (from keyboard hotkeys)
     GizmoCommand(GizmoCommand),
+
+    /// Add a paint canvas and enter paint mode
+    AddPaintCanvas(AddPaintCanvasRequest),
 }
 
 // ============================================================================
@@ -382,6 +388,29 @@ pub enum GizmoCommand {
     Cancel,
     /// Confirm current transform operation (Enter/LMB)
     Confirm,
+}
+
+// ============================================================================
+// Edit Mode Types
+// ============================================================================
+
+/// Edit mode types for specialized editing (paint, sculpt, etc.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum EditMode {
+    /// Normal object/scene editing mode
+    #[default]
+    None,
+    /// Paint mode - painting on a canvas plane
+    Paint,
+}
+
+/// Request to add a paint canvas and enter paint mode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddPaintCanvasRequest {
+    /// Canvas width in pixels (defaults to 1024)
+    pub width: Option<u32>,
+    /// Canvas height in pixels (defaults to 1024)
+    pub height: Option<u32>,
 }
 
 // ============================================================================

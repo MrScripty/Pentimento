@@ -10,6 +10,7 @@ mod add_object;
 mod ambient_occlusion;
 mod camera;
 mod canvas_plane;
+mod edit_mode;
 mod gizmo;
 mod lighting;
 mod paint_mode;
@@ -24,6 +25,7 @@ mod wireframe;
 pub use add_object::{AddObjectEvent, AddObjectPlugin};
 pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
+pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use canvas_plane::{
     ActiveCanvasPlane, CanvasMaterialUpdated, CanvasPlane, CanvasPlaneEvent,
     CanvasPlaneIdGenerator, CanvasPlanePlugin,
@@ -47,6 +49,7 @@ impl Plugin for ScenePlugin {
         app.add_plugins(LightingPlugin);
         app.add_plugins(AmbientOcclusionPlugin);
         app.add_plugins(AddObjectPlugin);
+        app.add_plugins(EditModePlugin);
         app.add_plugins(GizmoPlugin);
         app.add_plugins(CanvasPlanePlugin);
         app.add_plugins(PaintModePlugin);

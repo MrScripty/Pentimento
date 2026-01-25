@@ -3,8 +3,8 @@
 //! Uses Rust channels instead of console.log interception like CEF mode.
 
 use pentimento_ipc::{
-    AddObjectRequest, AmbientOcclusionSettings, BevyToUi, CameraCommand, DiffusionRequest,
-    LightingSettings, MaterialCommand, ObjectCommand, PrimitiveType, UiToBevy,
+    AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, BevyToUi, CameraCommand,
+    DiffusionRequest, LightingSettings, MaterialCommand, ObjectCommand, PrimitiveType, UiToBevy,
 };
 use std::sync::mpsc;
 
@@ -143,6 +143,15 @@ impl DioxusBridge {
             position,
             name,
         }));
+    }
+
+    // ========================================================================
+    // Paint canvas commands
+    // ========================================================================
+
+    /// Add a paint canvas in front of the camera and enter paint mode
+    pub fn add_paint_canvas(&self, width: Option<u32>, height: Option<u32>) {
+        self.send(UiToBevy::AddPaintCanvas(AddPaintCanvasRequest { width, height }));
     }
 
     // ========================================================================

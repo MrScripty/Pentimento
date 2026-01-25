@@ -8,6 +8,8 @@
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
 
+use crate::camera::MainCamera;
+use crate::paint_mode::PaintMode;
 use crate::painting_system::CanvasTexture;
 
 /// Component marking an entity as a paintable canvas plane
@@ -71,6 +73,8 @@ pub enum CanvasPlaneEvent {
         width: u32,
         height: u32,
     },
+    /// Create a canvas plane in front of the camera and enter paint mode
+    CreateInFrontOfCamera { width: u32, height: u32 },
     /// Select a canvas plane for painting
     Select(Entity),
     /// Deselect the current canvas plane
@@ -107,6 +111,8 @@ fn handle_canvas_plane_events(
     mut active_plane: ResMut<ActiveCanvasPlane>,
     mut id_generator: ResMut<CanvasPlaneIdGenerator>,
     mut canvas_query: Query<&mut CanvasPlane>,
+    camera_query: Query<&GlobalTransform, With<MainCamera>>,
+    mut paint_mode: ResMut<PaintMode>,
 ) {
     for event in events.read() {
         match event {
@@ -158,6 +164,73 @@ fn handle_canvas_plane_events(
                     plane.active = true;
                 }
             }
+            CanvasPlaneEvent::CreateInFrontOfCamera { width, height } => {
+                // Get camera position and forward direction
+                let Ok(camera_transform) = camera_query.single() else {
+                    warn!("No main camera found for CreateInFrontOfCamera");
+                    continue;
+                };
+
+                let camera_pos = camera_transform.translation();
+                let forward = camera_transform.forward();
+
+                // Position the plane 2 units in front of the camera
+                let plane_pos = camera_pos + *forward * 2.0;
+
+                let plane_id = id_generator.next();
+
+                // Calculate plane size based on resolution (1 unit = 100 pixels for reasonable scale)
+                let scale_factor = 0.01;
+                let plane_width = *width as f32 * scale_factor;
+                let plane_height = *height as f32 * scale_factor;
+
+                // Create a quad mesh for the canvas plane
+                let mesh = Plane3d::default()
+                    .mesh()
+                    .size(plane_width, plane_height)
+                    .build();
+
+                // Placeholder material - white with some transparency to indicate paintable area
+                let material = StandardMaterial {
+                    base_color: Color::srgba(0.95, 0.95, 0.95, 0.9),
+                    alpha_mode: AlphaMode::Blend,
+                    unlit: true,
+                    double_sided: true,
+                    ..default()
+                };
+
+                // Create a rotation that makes the plane face the camera
+                // The plane's local Y axis (normal) should point toward the camera
+                let transform =
+                    Transform::from_translation(plane_pos).looking_at(camera_pos, Vec3::Y);
+
+                let entity = commands
+                    .spawn((
+                        Mesh3d(meshes.add(mesh)),
+                        MeshMaterial3d(materials.add(material)),
+                        transform,
+                        CanvasPlane::new(plane_id, *width, *height),
+                        Name::new(format!("CanvasPlane_{}", plane_id)),
+                    ))
+                    .id();
+
+                info!(
+                    "Created canvas plane {} in front of camera at {:?} with resolution {}x{}",
+                    plane_id, plane_pos, width, height
+                );
+
+                // Auto-select and lock camera
+                active_plane.entity = Some(entity);
+                active_plane.camera_locked = true;
+
+                if let Ok(mut plane) = canvas_query.get_mut(entity) {
+                    plane.active = true;
+                }
+
+                // Enable paint mode
+                paint_mode.active = true;
+                info!("Entered paint mode with camera locked");
+            }
             CanvasPlaneEvent::Select(entity) => {
                 // Deactivate previous plane
                 if let Some(prev_entity) = active_plane.entity {
@@ -186,15 +259,23 @@ fn handle_canvas_plane_events(
             }
             CanvasPlaneEvent::ToggleCameraLock => {
                 if active_plane.entity.is_some() {
-                    active_plane.camera_locked = !active_plane.camera_locked;
-                    info!(
-                        "Camera lock {}",
-                        if active_plane.camera_locked {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        }
-                    );
+                    let was_locked = active_plane.camera_locked;
+                    active_plane.camera_locked = !was_locked;
+
+                    // When unlocking, also deactivate paint mode
+                    if was_locked && !active_plane.camera_locked {
+                        paint_mode.active = false;
+                        info!("Camera lock disabled, exiting paint mode");
+                    } else {
+                        info!(
+                            "Camera lock {}",
+                            if active_plane.camera_locked {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                    }
                 }
             }
         }

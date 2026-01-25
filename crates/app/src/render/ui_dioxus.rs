@@ -32,7 +32,8 @@ use pentimento_dioxus_ui::{
     MouseEventButtons, PointerCoords, PointerDetails, RenderParams, Scene, SharedVelloRenderer,
     UiEvent,
 };
-use pentimento_ipc::MouseEvent;
+use pentimento_ipc::{MouseEvent, UiToBevy};
+use pentimento_scene::CanvasPlaneEvent;
 
 use super::ui_blend_material::{UiBlendMaterial, UiBlendMaterialPlugin};
 
@@ -364,7 +365,9 @@ impl Plugin for DioxusRenderPlugin {
             .add_plugins(ExtractResourcePlugin::<DioxusRenderTargetId>::default())
             .add_plugins(ExtractResourcePlugin::<VelloSceneBuffer>::default())
             // Run setup during Update (not Startup) to allow window size to stabilize
-            .add_systems(Update, (deferred_setup_dioxus_texture, build_ui_scene, handle_window_resize).chain());
+            .add_systems(Update, (deferred_setup_dioxus_texture, build_ui_scene, handle_window_resize).chain())
+            // Handle IPC messages from UI (runs after setup so bridge exists)
+            .add_systems(Update, handle_ui_to_bevy_messages.after(deferred_setup_dioxus_texture));
 
         // Render world setup
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -641,6 +644,59 @@ fn handle_window_resize(world: &mut World) {
                     height,
                     depth_or_array_layers: 1,
                 });
+            }
+        }
+    }
+}
+
+/// Handle IPC messages from the Dioxus UI and dispatch to appropriate Bevy events.
+/// This is an exclusive system because DioxusBridgeResource is NonSend.
+fn handle_ui_to_bevy_messages(world: &mut World) {
+    use bevy::ecs::message::Messages;
+
+    // Collect all pending messages first to avoid holding the borrow
+    let messages: Vec<UiToBevy> = {
+        let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() else {
+            return;
+        };
+        let mut msgs = Vec::new();
+        while let Some(msg) = bridge.bridge_handle.try_recv() {
+            msgs.push(msg);
+        }
+        msgs
+    };
+
+    if messages.is_empty() {
+        return;
+    }
+
+    // Process each message, collecting events to send
+    let mut canvas_events: Vec<CanvasPlaneEvent> = Vec::new();
+
+    for msg in messages {
+        match msg {
+            UiToBevy::AddPaintCanvas(request) => {
+                canvas_events.push(CanvasPlaneEvent::CreateInFrontOfCamera {
+                    width: request.width.unwrap_or(1024),
+                    height: request.height.unwrap_or(1024),
+                });
+                info!("Received AddPaintCanvas request, creating canvas in front of camera");
+            }
+            UiToBevy::UiDirty => {
+                // UI has changed - in Dioxus mode this is handled by the Vello renderer
+            }
+            _ => {
+                // Other messages not yet implemented
+                debug!("Received unhandled UI message: {:?}", msg);
+            }
+        }
+    }
+
+    // Send collected canvas events
+    if !canvas_events.is_empty() {
+        if let Some(mut messages) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
+            for event in canvas_events {
+                messages.write(event);
             }
         }
     }
