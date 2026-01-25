@@ -40,7 +40,8 @@
 
     function handleAddMenuKeydown(e: KeyboardEvent) {
         // Shift+A opens the add object menu at last known cursor position
-        if (e.shiftKey && e.key === 'A') {
+        // Note: key is lowercase 'a' because the Bevy keyboard forwarding uses lowercase letters
+        if (e.shiftKey && e.key.toLowerCase() === 'a') {
             e.preventDefault();
             showAddMenu = true;
         }

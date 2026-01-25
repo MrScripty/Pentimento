@@ -611,6 +611,21 @@ impl LinuxCefWebview {
         // Get the character from the key string
         let char_code = event.key.chars().next().unwrap_or('\0');
 
+        // For Windows virtual key codes, letter keys must use uppercase (VK_KEY_A = 65, not 97)
+        // This is how Windows virtual key codes work - they're always uppercase for letters
+        let vk_code = if char_code.is_ascii_lowercase() {
+            char_code.to_ascii_uppercase() as c_int
+        } else {
+            char_code as c_int
+        };
+
+        // The actual character that would be typed (depends on shift state)
+        let typed_char = if event.modifiers.shift && char_code.is_ascii_lowercase() {
+            char_code.to_ascii_uppercase()
+        } else {
+            char_code
+        };
+
         // Build modifiers from the event
         let mut modifiers: u32 = 0;
         if event.modifiers.shift {
@@ -631,10 +646,10 @@ impl LinuxCefWebview {
                 KeyEventType::KEYUP
             },
             modifiers,
-            windows_key_code: char_code as c_int,
+            windows_key_code: vk_code,
             native_key_code: 0, // Platform-specific, not needed for basic input
             is_system_key: 0,
-            character: char_code as u16,
+            character: typed_char as u16,
             unmodified_character: char_code as u16,
             focus_on_editable_field: 0,
         };
@@ -646,10 +661,10 @@ impl LinuxCefWebview {
                 size: size_of::<KeyEvent>(),
                 type_: KeyEventType::CHAR,
                 modifiers,
-                windows_key_code: char_code as c_int,
+                windows_key_code: vk_code,
                 native_key_code: 0,
                 is_system_key: 0,
-                character: char_code as u16,
+                character: typed_char as u16,
                 unmodified_character: char_code as u16,
                 focus_on_editable_field: 0,
             };
