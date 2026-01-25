@@ -329,18 +329,15 @@ Key issues fixed to get painting working:
 
 ### Known Issues
 
-#### Performance
-The current GPU upload approach creates a **new Image asset every frame** with
-dirty tiles. This bypasses Bevy's change detection but is inefficient:
-- Creates memory churn (allocate new image, deallocate old)
-- Full surface upload instead of tile-based partial updates
-- No batching of dirty tiles across frames
+#### Performance (Addressed)
+The GPU upload system has been optimized:
+- ✅ Image handle is reused and updated in-place (no memory churn)
+- ✅ Only dirty tile regions are uploaded, not the full surface
+- ✅ Dirty tiles are batched into a single merged bounding box region
 
-**Recommended optimizations:**
-1. Use `wgpu::Queue::write_texture()` for partial tile uploads
-2. Keep a single Image handle and update its data in place
-3. Batch small dirty regions into larger uploads
-4. Consider double-buffering for smoother updates
+**Potential future optimizations:**
+- Consider double-buffering for smoother updates
+- Consider using `wgpu::Queue::write_texture()` directly for even lower overhead
 
 #### Brush Feel
 The simple `BrushEngine` uses basic spacing interpolation. For production:
@@ -350,10 +347,10 @@ The simple `BrushEngine` uses basic spacing interpolation. For production:
 
 ### Remaining Work
 
-#### Performance Optimization (High Priority)
-- [ ] Partial tile upload via `wgpu::Queue::write_texture()`
-- [ ] Reuse Image handle instead of creating new one each frame
-- [ ] Batch dirty tile uploads
+#### Performance Optimization (High Priority) ✅
+- [x] Partial tile upload - updates only dirty regions instead of full surface
+- [x] Reuse Image handle instead of creating new one each frame
+- [x] Batch dirty tile uploads into merged bounding box regions
 
 #### libmypaint Integration (Deferred)
 - [ ] FFI bindings for libmypaint
