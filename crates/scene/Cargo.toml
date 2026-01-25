@@ -16,6 +16,7 @@ selection = ["bevy/bevy_picking", "bevy/mesh_picking"]
 pentimento-ipc = { path = "../ipc" }
 painting = { path = "../painting" }
 bytemuck = { workspace = true }
+wgpu = "27"
 
 bevy = { workspace = true, default-features = false, features = [
     "bevy_core_pipeline",

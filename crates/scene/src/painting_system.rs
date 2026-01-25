@@ -5,7 +5,14 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+use bevy::render::{
+    extract_resource::ExtractResource,
+    render_asset::RenderAssets,
+    render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+    renderer::RenderQueue,
+    texture::GpuImage,
+    Render, RenderApp, RenderSystems,
+};
 use std::collections::HashMap;
 
 use painting::{BrushPreset, PaintingPipeline};
@@ -90,6 +97,33 @@ pub struct CanvasTexture {
     pub needs_full_upload: bool,
 }
 
+/// Single tile upload request for partial GPU texture updates
+#[derive(Clone)]
+pub struct DirtyTileUpload {
+    /// Pixel offset in texture (x, y)
+    pub offset: (u32, u32),
+    /// Tile dimensions (width, height)
+    pub size: (u32, u32),
+    /// RGBA8 pixel data (row-major, size.0 * size.1 * 4 bytes)
+    pub data: Vec<u8>,
+}
+
+/// Per-canvas dirty tile buffer
+#[derive(Clone)]
+pub struct CanvasDirtyTileBuffer {
+    /// Asset ID of the canvas texture (for GpuImage lookup)
+    pub image_id: AssetId<Image>,
+    /// Pending tile uploads
+    pub tiles: Vec<DirtyTileUpload>,
+}
+
+/// Resource for buffering dirty tile uploads to be extracted to render world
+#[derive(Resource, Default, Clone, ExtractResource)]
+pub struct DirtyTileUploadBuffer {
+    /// Per-canvas upload buffers
+    pub canvases: Vec<CanvasDirtyTileBuffer>,
+}
+
 /// Convert f32 RGBA surface data to u8 RGBA for GPU upload
 /// Input: &[u8] containing [f32; 4] per pixel (from CpuSurface::as_bytes)
 /// Output: Vec<u8> containing [u8; 4] per pixel
@@ -144,16 +178,30 @@ pub struct PaintingSystemPlugin;
 
 impl Plugin for PaintingSystemPlugin {
     fn build(&self, app: &mut App) {
+        // Main world resources and systems
         app.init_resource::<PaintingResource>()
+            .init_resource::<DirtyTileUploadBuffer>()
+            // ExtractResourcePlugin must be added to main app, not render_app
+            .add_plugins(
+                bevy::render::extract_resource::ExtractResourcePlugin::<DirtyTileUploadBuffer>::default(),
+            )
             .add_systems(
                 Update,
                 (
                     setup_canvas_textures,
                     process_paint_events,
-                    upload_dirty_tiles,
+                    extract_dirty_tiles,
                 )
                     .chain(),
             );
+
+        // Render world system for GPU tile uploads
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            warn!("PaintingSystemPlugin: RenderApp not available, skipping render world setup");
+            return;
+        };
+
+        render_app.add_systems(Render, upload_dirty_tiles_to_gpu.in_set(RenderSystems::Prepare));
     }
 }
 
@@ -305,82 +353,122 @@ fn process_paint_events(
     }
 }
 
-/// Upload dirty tiles to GPU
+/// Extract dirty tiles from painting pipelines into the upload buffer
 ///
-/// This system reuses the existing Image handle but replaces all image data.
-/// It also touches the material to trigger Bevy to rebind the GPU texture,
-/// which is necessary because StandardMaterial may cache the texture binding.
-fn upload_dirty_tiles(
+/// This system runs in the main world and prepares tile data for upload.
+/// The actual GPU upload happens in the render world via `upload_dirty_tiles_to_gpu`.
+fn extract_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    canvas_query: Query<(&CanvasPlane, &CanvasTexture, &MeshMaterial3d<StandardMaterial>)>,
+    canvas_query: Query<(&CanvasPlane, &CanvasTexture)>,
+    mut buffer: ResMut<DirtyTileUploadBuffer>,
 ) {
-    for (canvas_plane, canvas_texture, material_handle) in canvas_query.iter() {
+    buffer.canvases.clear();
+
+    for (canvas_plane, canvas_texture) in canvas_query.iter() {
         let Some(pipeline) = painting_res.get_pipeline_mut(canvas_plane.plane_id) else {
             continue;
         };
 
-        // Get dirty tiles
         let dirty_tiles = pipeline.take_dirty_tiles();
         if dirty_tiles.is_empty() {
             continue;
         }
 
-        // Compute the bounding box for logging purposes
-        let region_info = pipeline.compute_tiles_bounding_box(&dirty_tiles);
-
-        if let Some((region_x, region_y, region_w, region_h)) = region_info {
-            info!(
-                "upload_dirty_tiles: plane={}, {} tiles in region ({}, {}) {}x{}",
-                canvas_plane.plane_id,
-                dirty_tiles.len(),
-                region_x,
-                region_y,
-                region_w,
-                region_h
-            );
-        }
-
-        // Get full surface data and convert to RGBA8
-        let surface_bytes = pipeline.surface_as_bytes();
-        let full_rgba8 = surface_to_rgba8(surface_bytes);
-
-        // Diagnostic: count non-white pixels to verify data is changing
-        let non_white_count = full_rgba8
-            .chunks(4)
-            .filter(|p| p[0] < 250 || p[1] < 250 || p[2] < 250)
-            .count();
         info!(
-            "  Surface has {} non-white pixels out of {}",
-            non_white_count,
-            full_rgba8.len() / 4
+            "extract_dirty_tiles: plane={}, {} tiles",
+            canvas_plane.plane_id,
+            dirty_tiles.len()
         );
 
-        // Get the existing image and replace its data
-        let Some(image) = images.get_mut(&canvas_texture.image_handle) else {
-            warn!(
-                "Could not find image for canvas plane {}",
-                canvas_plane.plane_id
+        let mut canvas_buffer = CanvasDirtyTileBuffer {
+            image_id: canvas_texture.image_handle.id(),
+            tiles: Vec::with_capacity(dirty_tiles.len()),
+        };
+
+        for tile_coord in dirty_tiles {
+            let (x, y, w, h) = pipeline.get_tile_bounds(tile_coord);
+            let tile_data = pipeline.get_tile_data(tile_coord);
+            let rgba8 = tile_data_to_rgba8(&tile_data);
+
+            debug!(
+                "  Tile at ({}, {}) {}x{}, {} bytes",
+                x,
+                y,
+                w,
+                h,
+                rgba8.len()
             );
+
+            canvas_buffer.tiles.push(DirtyTileUpload {
+                offset: (x, y),
+                size: (w, h),
+                data: rgba8,
+            });
+        }
+
+        buffer.canvases.push(canvas_buffer);
+    }
+}
+
+/// Upload dirty tiles to GPU using wgpu::Queue::write_texture
+///
+/// This system runs in the render world and writes tile data directly to GPU textures.
+/// This is more efficient than full image replacement as it only uploads changed regions.
+///
+/// Parameters are optional to handle cases where the render app was not available
+/// during plugin initialization (e.g., in headless or test configurations).
+fn upload_dirty_tiles_to_gpu(
+    buffer: Option<Res<DirtyTileUploadBuffer>>,
+    render_queue: Option<Res<RenderQueue>>,
+    gpu_images: Option<Res<RenderAssets<GpuImage>>>,
+) {
+    let (Some(buffer), Some(render_queue), Some(gpu_images)) = (buffer, render_queue, gpu_images)
+    else {
+        return;
+    };
+
+    for canvas in &buffer.canvases {
+        let Some(gpu_image) = gpu_images.get(canvas.image_id) else {
+            // GpuImage not ready yet (first frame after creation)
+            debug!("GpuImage not ready for {:?}", canvas.image_id);
             continue;
         };
 
-        // Replace the image data entirely
-        image.data = Some(full_rgba8);
+        for tile in &canvas.tiles {
+            render_queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gpu_image.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: tile.offset.0,
+                        y: tile.offset.1,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &tile.data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(tile.size.0 * 4), // RGBA8 = 4 bytes per pixel
+                    rows_per_image: Some(tile.size.1),
+                },
+                wgpu::Extent3d {
+                    width: tile.size.0,
+                    height: tile.size.1,
+                    depth_or_array_layers: 1,
+                },
+            );
 
-        // CRITICAL: Touch the material to trigger Bevy to rebind the GPU texture
-        // The original working code updated the material every frame with a new handle.
-        // Even though we're reusing the same handle, touching the material forces
-        // Bevy to re-resolve the texture binding.
-        if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.base_color_texture = Some(canvas_texture.image_handle.clone());
-            info!("  Updated material texture binding");
+            debug!(
+                "  Uploaded tile at ({}, {}) {}x{}",
+                tile.offset.0, tile.offset.1, tile.size.0, tile.size.1
+            );
         }
 
         info!(
-            "  Replaced image data for GPU upload ({}x{})",
-            canvas_plane.width, canvas_plane.height
+            "Uploaded {} tiles for image {:?}",
+            canvas.tiles.len(),
+            canvas.image_id
         );
     }
 }
