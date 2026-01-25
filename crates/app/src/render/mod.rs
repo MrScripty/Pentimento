@@ -70,7 +70,8 @@ impl Plugin for RenderPlugin {
 
                 app.add_systems(Startup, ui_cef::setup_ui_cef)
                     .add_systems(Update, ui_cef::update_cef_ui_texture)
-                    .add_systems(Update, ui_cef::handle_cef_window_resize);
+                    .add_systems(Update, ui_cef::handle_cef_window_resize)
+                    .add_systems(Update, ui_cef::handle_cef_ipc_messages);
 
                 info!("Render plugin initialized with CEF mode");
             }

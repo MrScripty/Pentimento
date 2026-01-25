@@ -111,9 +111,9 @@ fn track_mouse_position(
         let (webview_x, webview_y) = match config.composite_mode {
             #[cfg(feature = "cef")]
             CompositeMode::Cef => {
-                // CEF renders at physical resolution
-                let scale_factor = window.resolution.scale_factor();
-                (event.position.x * scale_factor, event.position.y * scale_factor)
+                // CEF expects logical/CSS coordinates for mouse events.
+                // The CSS layout inside CEF uses logical coordinates, so don't scale.
+                (event.position.x, event.position.y)
             }
             CompositeMode::Overlay => {
                 // Overlay uses physical resolution like CEF

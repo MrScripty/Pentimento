@@ -6,9 +6,12 @@
 //! Similar to ui_composite.rs but uses CEF (Chromium) instead of WebKitGTK.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::message::Messages;
 use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+use pentimento_ipc::UiToBevy;
+use pentimento_scene::AddObjectEvent;
 use pentimento_webview::CefWebview;
 use std::sync::Arc;
 
@@ -231,5 +234,38 @@ pub fn handle_cef_window_resize(
             height,
             depth_or_array_layers: 1,
         });
+    }
+}
+
+/// Process IPC messages from the CEF webview
+pub fn handle_cef_ipc_messages(world: &mut World) {
+    // Collect messages first (avoid borrow conflicts)
+    let messages: Vec<UiToBevy> = {
+        let Some(mut webview_res) = world.get_non_send_resource_mut::<CefWebviewResource>() else {
+            return;
+        };
+        let mut msgs = Vec::new();
+        while let Some(msg) = webview_res.webview.try_recv_from_ui() {
+            msgs.push(msg);
+        }
+        msgs
+    };
+
+    // Process messages
+    for msg in messages {
+        match msg {
+            UiToBevy::AddObject(request) => {
+                if let Some(mut events) = world.get_resource_mut::<Messages<AddObjectEvent>>() {
+                    events.write(AddObjectEvent(request));
+                    info!("Dispatched AddObjectEvent from CEF UI");
+                }
+            }
+            UiToBevy::UiDirty => {
+                // Already handled by dirty flag in webview
+            }
+            _ => {
+                debug!("Unhandled CEF IPC message: {:?}", msg);
+            }
+        }
     }
 }
