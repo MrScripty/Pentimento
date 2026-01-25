@@ -55,8 +55,8 @@ impl PaintingResource {
             let mut pipeline = PaintingPipeline::new(width, height);
             pipeline.set_color(self.brush_color);
             pipeline.set_brush(self.brush_preset.clone());
-            // Clear to white by default
-            pipeline.clear([1.0, 1.0, 1.0, 1.0]);
+            // Clear to transparent by default (glass effect - see scene behind)
+            pipeline.clear([0.0, 0.0, 0.0, 0.0]);
             pipeline
         })
     }
