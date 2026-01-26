@@ -33,7 +33,7 @@ use pentimento_dioxus_ui::{
     PointerDetails, RenderParams, Scene, SharedVelloRenderer, UiEvent,
 };
 use pentimento_ipc::{MouseEvent, PaintCommand, UiToBevy};
-use pentimento_scene::{CanvasPlaneEvent, OutboundUiMessages, PaintingResource};
+use pentimento_scene::{AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, PaintingResource};
 
 use super::ui_blend_material::{UiBlendMaterial, UiBlendMaterialPlugin};
 
@@ -824,6 +824,12 @@ fn handle_ui_to_bevy_messages(world: &mut World) {
                             // TODO: Implement one-shot projection
                         }
                     }
+                }
+            }
+            UiToBevy::AddObject(request) => {
+                if let Some(mut events) = world.get_resource_mut::<Messages<AddObjectEvent>>() {
+                    events.write(AddObjectEvent(request));
+                    info!("Dispatched AddObjectEvent from Dioxus UI");
                 }
             }
             _ => {
