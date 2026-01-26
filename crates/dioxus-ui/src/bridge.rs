@@ -3,22 +3,43 @@
 //! Uses Rust channels instead of console.log interception like CEF mode.
 
 use pentimento_ipc::{
-    AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, BevyToUi, CameraCommand,
-    DiffusionRequest, LightingSettings, MaterialCommand, ObjectCommand, PrimitiveType, UiToBevy,
+    AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, BevyToUi, BlendMode,
+    CameraCommand, DiffusionRequest, LightingSettings, MaterialCommand, ObjectCommand,
+    PaintCommand, PrimitiveType, UiToBevy,
 };
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
+};
+
+/// Shared state that persists between renders.
+/// Used for state that needs to be set from Bevy and read by the component.
+#[derive(Default, Clone)]
+pub struct SharedUiState {
+    /// Show add object menu at position
+    pub show_add_menu: bool,
+    pub add_menu_position: (f32, f32),
+}
 
 /// Bridge for sending messages from Dioxus UI to Bevy
 #[derive(Clone)]
 pub struct DioxusBridge {
     to_bevy: mpsc::Sender<UiToBevy>,
+    from_bevy: Arc<Mutex<mpsc::Receiver<BevyToUi>>>,
+    /// Flag indicating messages are pending from Bevy.
+    /// Set by DioxusBridgeHandle when sending, cleared when messages are consumed.
+    pending_messages: Arc<AtomicBool>,
+    /// Shared UI state that can be updated from Bevy and read by the component.
+    /// This ensures state persists and is available on any render.
+    shared_state: Arc<Mutex<SharedUiState>>,
 }
 
 // Manual PartialEq implementation for Dioxus Props compatibility.
-// The bridge is always considered equal since it's a singleton channel.
+// Always returns false to opt out of Dioxus memoization, ensuring the component
+// re-runs when force_render() is called to process external channel messages.
 impl PartialEq for DioxusBridge {
     fn eq(&self, _other: &Self) -> bool {
-        true
+        false
     }
 }
 
@@ -27,18 +48,65 @@ impl DioxusBridge {
     pub fn new() -> (Self, DioxusBridgeHandle) {
         let (to_bevy_tx, to_bevy_rx) = mpsc::channel();
         let (from_bevy_tx, from_bevy_rx) = mpsc::channel();
+        let pending_messages = Arc::new(AtomicBool::new(false));
+        let shared_state = Arc::new(Mutex::new(SharedUiState::default()));
 
         let bridge = Self {
             to_bevy: to_bevy_tx,
+            from_bevy: Arc::new(Mutex::new(from_bevy_rx)),
+            pending_messages: pending_messages.clone(),
+            shared_state: shared_state.clone(),
         };
 
         let handle = DioxusBridgeHandle {
             to_ui: from_bevy_tx,
             from_ui: to_bevy_rx,
-            to_ui_rx: from_bevy_rx,
+            pending_messages,
+            shared_state,
         };
 
         (bridge, handle)
+    }
+
+    /// Check if there are pending messages from Bevy.
+    /// This can be used to trigger a re-render when messages arrive.
+    pub fn has_pending_messages(&self) -> bool {
+        self.pending_messages.load(Ordering::Acquire)
+    }
+
+    /// Clear the pending messages flag.
+    /// Call this after processing all messages.
+    pub fn clear_pending(&self) {
+        self.pending_messages.store(false, Ordering::Release);
+    }
+
+    /// Get the shared UI state.
+    /// Returns a copy of the current state.
+    pub fn get_shared_state(&self) -> SharedUiState {
+        self.shared_state.lock().unwrap().clone()
+    }
+
+    /// Update the add menu visibility.
+    /// This is called by the component to close the menu.
+    pub fn set_add_menu_visible(&self, show: bool) {
+        let mut state = self.shared_state.lock().unwrap();
+        state.show_add_menu = show;
+    }
+
+    /// Try to receive a message from Bevy (non-blocking)
+    pub fn try_recv_from_bevy(&self) -> Option<BevyToUi> {
+        let lock_result = self.from_bevy.lock();
+        if lock_result.is_err() {
+            tracing::warn!("try_recv_from_bevy: mutex lock failed!");
+            return None;
+        }
+        let guard = lock_result.unwrap();
+        let recv_result = guard.try_recv();
+        match &recv_result {
+            Ok(msg) => tracing::info!("try_recv_from_bevy: received {:?}", msg),
+            Err(e) => tracing::info!("try_recv_from_bevy: channel empty/disconnected: {:?}", e),
+        }
+        recv_result.ok()
     }
 
     fn send(&self, msg: UiToBevy) {
@@ -155,6 +223,40 @@ impl DioxusBridge {
     }
 
     // ========================================================================
+    // Paint commands
+    // ========================================================================
+
+    /// Set brush color (RGBA, 0.0-1.0)
+    pub fn set_brush_color(&self, color: [f32; 4]) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushColor { color }));
+    }
+
+    /// Set brush size in pixels
+    pub fn set_brush_size(&self, size: f32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushSize { size }));
+    }
+
+    /// Set brush opacity (0.0-1.0)
+    pub fn set_brush_opacity(&self, opacity: f32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushOpacity { opacity }));
+    }
+
+    /// Set brush hardness (0.0-1.0)
+    pub fn set_brush_hardness(&self, hardness: f32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushHardness { hardness }));
+    }
+
+    /// Set blend mode (Normal or Erase)
+    pub fn set_blend_mode(&self, mode: BlendMode) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBlendMode { mode }));
+    }
+
+    /// Undo last paint stroke
+    pub fn paint_undo(&self) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::Undo));
+    }
+
+    // ========================================================================
     // UI dirty notification
     // ========================================================================
 
@@ -169,8 +271,10 @@ pub struct DioxusBridgeHandle {
     pub to_ui: mpsc::Sender<BevyToUi>,
     /// Receive messages from the UI
     pub from_ui: mpsc::Receiver<UiToBevy>,
-    /// Receiver for UI to poll messages from Bevy (used internally)
-    to_ui_rx: mpsc::Receiver<BevyToUi>,
+    /// Shared flag to notify UI that messages are pending
+    pending_messages: Arc<AtomicBool>,
+    /// Shared UI state for immediate updates (bypasses channel for critical state)
+    shared_state: Arc<Mutex<SharedUiState>>,
 }
 
 impl DioxusBridgeHandle {
@@ -179,13 +283,28 @@ impl DioxusBridgeHandle {
         self.from_ui.try_recv().ok()
     }
 
-    /// Send a message to the UI
+    /// Send a message to the UI and set the pending flag.
+    /// For ShowAddObjectMenu, also updates shared state directly.
     pub fn send(&self, msg: BevyToUi) {
-        let _ = self.to_ui.send(msg);
-    }
+        tracing::info!("DioxusBridgeHandle::send() sending {:?}", msg);
 
-    /// Try to receive a message intended for the UI (used by UI polling)
-    pub fn try_recv_for_ui(&self) -> Option<BevyToUi> {
-        self.to_ui_rx.try_recv().ok()
+        // For ShowAddObjectMenu, update shared state directly so it's available immediately
+        if let BevyToUi::ShowAddObjectMenu { show, position } = &msg {
+            let mut state = self.shared_state.lock().unwrap();
+            state.show_add_menu = *show;
+            if let Some([x, y]) = position {
+                state.add_menu_position = (*x, *y);
+            }
+            tracing::info!("DioxusBridgeHandle: Updated shared state for add menu");
+        }
+
+        match self.to_ui.send(msg) {
+            Ok(()) => {
+                // Set pending flag so component knows to check for messages
+                self.pending_messages.store(true, Ordering::Release);
+                tracing::info!("DioxusBridgeHandle::send() success, pending flag set");
+            }
+            Err(e) => tracing::error!("DioxusBridgeHandle::send() failed: {:?}", e),
+        }
     }
 }

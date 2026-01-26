@@ -6,12 +6,22 @@ use pentimento_ipc::PrimitiveType;
 use crate::bridge::DioxusBridge;
 
 const ADD_MENU_CSS: &str = r#"
-.add-menu-backdrop {
-    position: fixed;
+/* Overlay fills app-root (which has position: relative).
+   Uses position: absolute which Blitz CAN hit-test inside a relative parent. */
+.add-menu-overlay {
+    position: absolute;
     inset: 0;
     z-index: 300;
+    pointer-events: auto;
 }
 
+/* Invisible backdrop captures clicks outside menu to close it */
+.add-menu-backdrop {
+    position: absolute;
+    inset: 0;
+}
+
+/* Menu panel positioned at cursor location */
 .add-menu {
     position: absolute;
     min-width: 150px;
@@ -89,9 +99,16 @@ pub fn AddObjectMenu(props: AddObjectMenuProps) -> Element {
     rsx! {
         if props.show {
             style { {ADD_MENU_CSS} }
+            // Overlay container - position:absolute inside app-root (position:relative)
+            // This works with Blitz hit-testing
             div {
-                class: "add-menu-backdrop",
-                onclick: handle_backdrop_click,
+                class: "add-menu-overlay",
+                // Backdrop for click-outside-to-close
+                div {
+                    class: "add-menu-backdrop",
+                    onclick: handle_backdrop_click,
+                }
+                // Menu panel positioned at cursor
                 div {
                     class: "add-menu panel",
                     style: "left: {props.position.0}px; top: {props.position.1}px;",
@@ -126,7 +143,7 @@ pub fn AddObjectMenu(props: AddObjectMenuProps) -> Element {
                                         bridge.add_paint_canvas(None, None);
                                         on_close.call(());
                                     },
-                                    "Paint"
+                                    "Paint Canvas"
                                 }
                             }
                         }

@@ -81,199 +81,6 @@ pub struct VelloSceneBuffer {
     pub scene: Scene,
 }
 
-/// Input state for the Dioxus UI (main world).
-/// Queues UI events to be processed in the build_ui_scene system.
-#[derive(Resource, Default)]
-pub struct DioxusInputState {
-    pub mouse_x: f32,
-    pub mouse_y: f32,
-    /// Track which mouse buttons are currently pressed
-    pub buttons_pressed: MouseEventButtons,
-    /// Queued UI events to be processed
-    pub event_queue: Vec<UiEvent>,
-}
-
-impl DioxusInputState {
-    pub fn send_mouse_event(&mut self, event: MouseEvent) {
-        match event {
-            MouseEvent::Move { x, y } => {
-                self.mouse_x = x;
-                self.mouse_y = y;
-                self.event_queue.push(UiEvent::PointerMove(self.create_pointer_event(x, y, MouseEventButton::Main)));
-            }
-            MouseEvent::ButtonDown { x, y, button } => {
-                self.mouse_x = x;
-                self.mouse_y = y;
-                let btn = self.convert_button(button);
-                self.buttons_pressed.insert(MouseEventButtons::from(btn));
-                self.event_queue.push(UiEvent::PointerDown(self.create_pointer_event(x, y, btn)));
-            }
-            MouseEvent::ButtonUp { x, y, button } => {
-                self.mouse_x = x;
-                self.mouse_y = y;
-                let btn = self.convert_button(button);
-                self.buttons_pressed.remove(MouseEventButtons::from(btn));
-                self.event_queue.push(UiEvent::PointerUp(self.create_pointer_event(x, y, btn)));
-            }
-            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
-                self.mouse_x = x;
-                self.mouse_y = y;
-                self.event_queue.push(UiEvent::Wheel(BlitzWheelEvent {
-                    delta: BlitzWheelDelta::Pixels(delta_x as f64, delta_y as f64),
-                    coords: PointerCoords {
-                        page_x: x,
-                        page_y: y,
-                        screen_x: x,
-                        screen_y: y,
-                        client_x: x,
-                        client_y: y,
-                    },
-                    buttons: self.buttons_pressed,
-                    mods: BlitzModifiers::empty(),
-                }));
-            }
-        }
-    }
-
-    pub fn send_keyboard_event(&mut self, event: pentimento_ipc::KeyboardEvent) {
-        // Convert IPC modifiers to Blitz modifiers
-        let mut mods = BlitzModifiers::empty();
-        if event.modifiers.shift {
-            mods.insert(BlitzModifiers::SHIFT);
-        }
-        if event.modifiers.ctrl {
-            mods.insert(BlitzModifiers::CONTROL);
-        }
-        if event.modifiers.alt {
-            mods.insert(BlitzModifiers::ALT);
-        }
-        if event.modifiers.meta {
-            mods.insert(BlitzModifiers::META);
-        }
-
-        // Convert key string to Blitz Key type
-        let key = self.convert_key(&event.key);
-        let code = self.convert_code(&event.key);
-
-        let key_event = BlitzKeyEvent {
-            key,
-            code,
-            modifiers: mods,
-            location: BlitzKeyLocation::Standard,
-            is_auto_repeating: false,
-            is_composing: false,
-            state: if event.pressed { KeyState::Pressed } else { KeyState::Released },
-            text: if event.pressed && event.key.len() == 1 {
-                Some(event.key.clone().into())
-            } else {
-                None
-            },
-        };
-
-        let ui_event = if event.pressed {
-            UiEvent::KeyDown(key_event)
-        } else {
-            UiEvent::KeyUp(key_event)
-        };
-
-        self.event_queue.push(ui_event);
-    }
-
-    fn convert_key(&self, key_str: &str) -> BlitzKey {
-        match key_str {
-            "Enter" => BlitzKey::Enter,
-            "Escape" => BlitzKey::Escape,
-            "Backspace" => BlitzKey::Backspace,
-            "Tab" => BlitzKey::Tab,
-            "Delete" => BlitzKey::Delete,
-            "ArrowUp" => BlitzKey::ArrowUp,
-            "ArrowDown" => BlitzKey::ArrowDown,
-            "ArrowLeft" => BlitzKey::ArrowLeft,
-            "ArrowRight" => BlitzKey::ArrowRight,
-            "Home" => BlitzKey::Home,
-            "End" => BlitzKey::End,
-            "PageUp" => BlitzKey::PageUp,
-            "PageDown" => BlitzKey::PageDown,
-            "Shift" | "Control" | "Alt" | "Meta" => BlitzKey::Unidentified,
-            k => BlitzKey::Character(k.into()),
-        }
-    }
-
-    fn convert_code(&self, key_str: &str) -> BlitzKeyCode {
-        match key_str.to_lowercase().as_str() {
-            "a" => BlitzKeyCode::KeyA,
-            "b" => BlitzKeyCode::KeyB,
-            "c" => BlitzKeyCode::KeyC,
-            "d" => BlitzKeyCode::KeyD,
-            "e" => BlitzKeyCode::KeyE,
-            "f" => BlitzKeyCode::KeyF,
-            "g" => BlitzKeyCode::KeyG,
-            "h" => BlitzKeyCode::KeyH,
-            "i" => BlitzKeyCode::KeyI,
-            "j" => BlitzKeyCode::KeyJ,
-            "k" => BlitzKeyCode::KeyK,
-            "l" => BlitzKeyCode::KeyL,
-            "m" => BlitzKeyCode::KeyM,
-            "n" => BlitzKeyCode::KeyN,
-            "o" => BlitzKeyCode::KeyO,
-            "p" => BlitzKeyCode::KeyP,
-            "q" => BlitzKeyCode::KeyQ,
-            "r" => BlitzKeyCode::KeyR,
-            "s" => BlitzKeyCode::KeyS,
-            "t" => BlitzKeyCode::KeyT,
-            "u" => BlitzKeyCode::KeyU,
-            "v" => BlitzKeyCode::KeyV,
-            "w" => BlitzKeyCode::KeyW,
-            "x" => BlitzKeyCode::KeyX,
-            "y" => BlitzKeyCode::KeyY,
-            "z" => BlitzKeyCode::KeyZ,
-            "0" => BlitzKeyCode::Digit0,
-            "1" => BlitzKeyCode::Digit1,
-            "2" => BlitzKeyCode::Digit2,
-            "3" => BlitzKeyCode::Digit3,
-            "4" => BlitzKeyCode::Digit4,
-            "5" => BlitzKeyCode::Digit5,
-            "6" => BlitzKeyCode::Digit6,
-            "7" => BlitzKeyCode::Digit7,
-            "8" => BlitzKeyCode::Digit8,
-            "9" => BlitzKeyCode::Digit9,
-            " " => BlitzKeyCode::Space,
-            "enter" => BlitzKeyCode::Enter,
-            "escape" => BlitzKeyCode::Escape,
-            "backspace" => BlitzKeyCode::Backspace,
-            "tab" => BlitzKeyCode::Tab,
-            _ => BlitzKeyCode::Unidentified,
-        }
-    }
-
-    fn convert_button(&self, button: pentimento_ipc::MouseButton) -> MouseEventButton {
-        match button {
-            pentimento_ipc::MouseButton::Left => MouseEventButton::Main,
-            pentimento_ipc::MouseButton::Right => MouseEventButton::Secondary,
-            pentimento_ipc::MouseButton::Middle => MouseEventButton::Auxiliary,
-        }
-    }
-
-    fn create_pointer_event(&self, x: f32, y: f32, button: MouseEventButton) -> BlitzPointerEvent {
-        BlitzPointerEvent {
-            id: BlitzPointerId::Mouse,
-            is_primary: true,
-            coords: PointerCoords {
-                page_x: x,
-                page_y: y,
-                screen_x: x,
-                screen_y: y,
-                client_x: x,
-                client_y: y,
-            },
-            button,
-            buttons: self.buttons_pressed,
-            mods: BlitzModifiers::empty(),
-            details: PointerDetails::default(),
-        }
-    }
-}
-
 // ============================================================================
 // Dioxus Channel-Based Renderer Resources
 // ============================================================================
@@ -574,7 +381,6 @@ impl Plugin for DioxusRenderPlugin {
     fn build(&self, app: &mut App) {
         // Main world setup
         app.init_resource::<DioxusUiState>()
-            .init_resource::<DioxusInputState>()
             .init_resource::<VelloSceneBuffer>()
             .init_resource::<DioxusSetupStatus>()
             .add_plugins(UiBlendMaterialPlugin)
@@ -582,9 +388,15 @@ impl Plugin for DioxusRenderPlugin {
             .add_plugins(ExtractResourcePlugin::<DioxusRenderTargetId>::default())
             .add_plugins(ExtractResourcePlugin::<VelloSceneBuffer>::default())
             // Run setup during Update (not Startup) to allow window size to stabilize
-            .add_systems(Update, (deferred_setup_dioxus_texture, build_ui_scene, handle_window_resize).chain())
-            // Handle IPC messages from UI (runs after setup so bridge exists)
-            .add_systems(Update, handle_ui_to_bevy_messages.after(deferred_setup_dioxus_texture));
+            // IMPORTANT: handle_ui_to_bevy_messages MUST run before build_ui_scene so that
+            // IPC messages (like ShowAddObjectMenu) are forwarded to the bridge and the
+            // component state is updated BEFORE the scene is painted.
+            .add_systems(Update, (
+                deferred_setup_dioxus_texture,
+                handle_ui_to_bevy_messages,  // Process IPC messages first
+                build_ui_scene,              // Then build scene with updated state
+                handle_window_resize
+            ).chain());
 
         // Render world setup
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -752,6 +564,14 @@ fn setup_dioxus_texture(world: &mut World) {
 /// Build the UI scene from BlitzDocument (runs every frame in main world).
 /// This is an exclusive system because BlitzDocumentResource is NonSend.
 fn build_ui_scene(world: &mut World) {
+    // Skip if setup hasn't completed yet (receiver doesn't exist until then)
+    {
+        let status = world.resource::<DioxusSetupStatus>();
+        if !status.setup_done {
+            return;
+        }
+    }
+
     // Process network and document messages first (asset loading, head elements)
     // This ensures resources are loaded before the UI tries to use them
     {
@@ -765,7 +585,7 @@ fn build_ui_scene(world: &mut World) {
         if let Some(receiver) = world.get_non_send_resource::<DioxusEventReceiver>() {
             receiver.0.try_iter().collect()
         } else {
-            warn!("No DioxusEventReceiver found!");
+            // This shouldn't happen since we check setup_done above
             Vec::new()
         }
     };
@@ -777,12 +597,18 @@ fn build_ui_scene(world: &mut World) {
             return;
         };
 
+        // Always poll to process any pending state changes from IPC messages.
+        // This is critical: IPC messages (like ShowAddObjectMenu) update shared state,
+        // and the component needs to poll to read that state and update its signals.
+        // Without this, state changes from handle_ui_to_bevy_messages wouldn't be reflected.
+        doc_resource.document.poll();
+
         // Forward queued events to BlitzDocument
         for event in &events {
             doc_resource.document.handle_event(event.clone());
         }
 
-        // Only force render when there were input events to process
+        // Force render when there were input events to ensure layout recalculation
         if !events.is_empty() {
             doc_resource.document.force_render();
         }
@@ -824,7 +650,7 @@ fn build_ui_scene(world: &mut World) {
 fn handle_window_resize(world: &mut World) {
     // Check if window changed
     // Use LOGICAL dimensions to match initial setup and mouse coordinates
-    let (width, height, changed) = {
+    let (width, height, _changed) = {
         let mut query = world.query_filtered::<&Window, Changed<Window>>();
         match query.iter(world).next() {
             Some(window) => (
@@ -988,6 +814,14 @@ fn handle_ui_to_bevy_messages(world: &mut World) {
                             } else {
                                 debug!("Paint undo: nothing to undo");
                             }
+                        }
+                        PaintCommand::SetLiveProjection { enabled } => {
+                            debug!("Set live projection to {}", enabled);
+                            // TODO: Implement live projection toggle
+                        }
+                        PaintCommand::ProjectToScene => {
+                            debug!("Project to scene requested");
+                            // TODO: Implement one-shot projection
                         }
                     }
                 }

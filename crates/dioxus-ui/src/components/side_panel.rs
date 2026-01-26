@@ -1,23 +1,22 @@
 //! Side panel component - replicates the Svelte SidePanel.svelte
 
 use dioxus::prelude::*;
-use pentimento_ipc::{AmbientOcclusionSettings, LightingSettings};
+use pentimento_ipc::{AmbientOcclusionSettings, LightingSettings, PrimitiveType};
 
 use crate::bridge::DioxusBridge;
 
 const SIDE_PANEL_CSS: &str = r#"
 .side-panel {
-    position: fixed;
-    top: 56px;
-    right: 8px;
-    bottom: 8px;
+    /* Normal flow layout - Blitz hit testing doesn't work with position:absolute */
+    /* Use flexbox layout from parent to position on right side */
     width: 300px;
+    margin: 8px;
     border-radius: 8px;
     overflow-y: auto;
-    z-index: 50;
     background: rgba(30, 30, 30, 0.95);
     backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
+    pointer-events: auto;
 }
 
 .section {
@@ -122,6 +121,49 @@ const SIDE_PANEL_CSS: &str = r#"
     color: rgba(255, 255, 255, 0.5);
     text-align: right;
 }
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.section-header:hover {
+    opacity: 0.8;
+}
+
+.expand-arrow {
+    color: rgba(255, 255, 255, 0.5);
+    transition: transform 0.2s;
+    font-size: 10px;
+}
+
+.add-objects-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 12px;
+}
+
+.add-object-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.add-object-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
 "#;
 
 #[derive(Clone, Default)]
@@ -159,6 +201,9 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
     let mut ao_enabled = use_signal(|| false);
     let mut ao_quality = use_signal(|| 2u8);
     let mut ao_intensity = use_signal(|| 0.25f32);
+
+    // Add Object section state (internal - popup menu is the primary way to add objects)
+    let mut add_objects_open = use_signal(|| false);
 
     // Material handlers
     let bridge = props.bridge.clone();
@@ -266,6 +311,70 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
     rsx! {
         style { {SIDE_PANEL_CSS} }
         aside { class: "side-panel panel",
+            // Add Object section (collapsible) - for debugging Shift+A
+            section { class: "section",
+                div {
+                    class: "section-header",
+                    onclick: move |_| {
+                        let new_state = !add_objects_open();
+                        tracing::info!("Add Object header clicked! Setting open to: {}", new_state);
+                        add_objects_open.set(new_state);
+                    },
+                    h2 { class: "section-title", style: "margin: 0;", "Add Object" }
+                    span {
+                        class: "expand-arrow",
+                        style: if add_objects_open() { "transform: rotate(90deg);" } else { "" },
+                        "▶"
+                    }
+                }
+                if add_objects_open() {
+                    div { class: "add-objects-list",
+                        {
+                            let primitives = [
+                                (PrimitiveType::Cube, "Cube"),
+                                (PrimitiveType::Sphere, "Sphere"),
+                                (PrimitiveType::Cylinder, "Cylinder"),
+                                (PrimitiveType::Plane, "Plane"),
+                                (PrimitiveType::Torus, "Torus"),
+                                (PrimitiveType::Cone, "Cone"),
+                                (PrimitiveType::Capsule, "Capsule"),
+                            ];
+                            rsx! {
+                                for (prim_type, name) in primitives.iter() {
+                                    {
+                                        let bridge = props.bridge.clone();
+                                        let prim = *prim_type;
+                                        rsx! {
+                                            button {
+                                                class: "add-object-item",
+                                                onclick: move |_| {
+                                                    tracing::info!("Add object clicked: {:?}", prim);
+                                                    bridge.add_object(prim, None, None);
+                                                },
+                                                "{name}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        {
+                            let bridge = props.bridge.clone();
+                            rsx! {
+                                button {
+                                    class: "add-object-item",
+                                    onclick: move |_| {
+                                        tracing::info!("Add paint canvas clicked");
+                                        bridge.add_paint_canvas(None, None);
+                                    },
+                                    "Paint"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Properties section
             section { class: "section",
                 h2 { class: "section-title", "Properties" }

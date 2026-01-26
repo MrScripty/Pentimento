@@ -107,6 +107,20 @@ impl BlitzDocument {
         // Resolve styles and layout
         doc.inner.borrow_mut().resolve(0.0);
 
+        // Set focus to the first focusable element (app-root div with tabindex=0).
+        // Blitz doesn't auto-focus on click like browsers do, so we need to set it manually.
+        // Without this, keyboard events go to <html> and never reach our onkeydown handler.
+        {
+            let mut inner = doc.inner.borrow_mut();
+            // Find first focusable element by traversing the DOM
+            if let Some(focusable_id) = Self::find_first_focusable(&inner) {
+                info!("Setting initial focus to node {}", focusable_id);
+                inner.set_focus_to(focusable_id);
+            } else {
+                info!("No focusable element found for initial focus");
+            }
+        }
+
         Self {
             doc,
             width,
@@ -150,11 +164,13 @@ impl BlitzDocument {
     pub fn poll(&mut self) -> bool {
         // Poll returns true if there were pending updates
         let had_updates = self.doc.poll(None);
+        debug!("poll: doc.poll() returned {}", had_updates);
 
-        if had_updates {
-            // Re-resolve styles and layout after DOM changes
-            self.doc.inner.borrow_mut().resolve(0.0);
-        }
+        // Always resolve - like the official Dioxus Bevy example.
+        // External state changes (e.g., SharedUiState from IPC) don't trigger
+        // VirtualDom updates directly, but the component reads them on render.
+        // Without unconditional resolve, layout changes won't be reflected.
+        self.doc.inner.borrow_mut().resolve(0.0);
 
         had_updates
     }
@@ -165,13 +181,26 @@ impl BlitzDocument {
     /// Normal `poll()` returns early if VirtualDom thinks there's no work, but
     /// channel messages don't trigger signal changes - the component needs to
     /// render first to poll the channel.
+    ///
+    /// Uses `rebuild()` instead of `mark_dirty() + poll()` because poll() in
+    /// dioxus-native-dom only processes async work, not dirty scopes. rebuild()
+    /// forces a complete component tree rebuild that guarantees the component
+    /// function executes.
     pub fn force_render(&mut self) {
-        // Mark root scope (ScopeId(0)) dirty to ensure next poll triggers render.
-        // This is safe because ScopeId(0) is always the root component scope.
-        self.doc.vdom.mark_dirty(dioxus_core::ScopeId(0));
+        info!("force_render: using rebuild() to force component execution");
 
-        // Now poll() will see dirty scope and call render_immediate()
-        self.poll();
+        // Use initial_build() which calls vdom.rebuild() to force a complete
+        // component tree rebuild. This is the same method used for initial setup,
+        // but it's safe to call again - rebuild() regenerates the entire VNode tree.
+        //
+        // Unlike poll() + render_immediate(), rebuild() guarantees the component
+        // function executes from start to finish, reading channel messages.
+        self.doc.initial_build();
+
+        // Re-resolve layout with potentially updated DOM
+        self.doc.inner.borrow_mut().resolve(0.0);
+
+        info!("force_render: rebuild completed");
     }
 
     /// Process pending document messages from the DocumentProxy.
@@ -384,69 +413,28 @@ impl BlitzDocument {
         deepest_hit
     }
 
-    /// Debug function to dump layout tree information.
-    fn debug_dump_layout(&self, doc: &blitz_dom::BaseDocument) {
-        info!("=== LAYOUT TREE DUMP ===");
-
-        // Get the root node and traverse
-        let root = doc.root_node();
-        self.dump_node_recursive(doc, &root, 0, 8); // Increased depth to see toolbar children
-
-        info!("=== END LAYOUT DUMP ===");
+    /// Find the first focusable element in the document.
+    /// Traverses the DOM tree looking for elements with is_focussable() == true.
+    fn find_first_focusable(doc: &blitz_dom::BaseDocument) -> Option<usize> {
+        Self::find_focusable_recursive(doc, doc.root_node().id)
     }
 
-    fn dump_node_recursive(
-        &self,
-        doc: &blitz_dom::BaseDocument,
-        node: &blitz_dom::Node,
-        depth: usize,
-        max_depth: usize,
-    ) {
-        if depth >= max_depth {
-            return;
+    /// Recursively search for a focusable element.
+    fn find_focusable_recursive(doc: &blitz_dom::BaseDocument, node_id: usize) -> Option<usize> {
+        let node = doc.get_node(node_id)?;
+
+        // Check if this node is focusable
+        if node.is_focussable() {
+            return Some(node_id);
         }
 
-        let indent = "  ".repeat(depth);
-
-        // Get layout information
-        let layout = node.final_layout;
-        let x = layout.location.x;
-        let y = layout.location.y;
-        let w = layout.size.width;
-        let h = layout.size.height;
-
-        // Get element info
-        if let Some(el) = node.element_data() {
-            let tag = el.name.local.as_ref();
-            let class = el.attr(blitz_dom::local_name!("class")).unwrap_or("");
-            let class_str = if class.is_empty() {
-                String::new()
-            } else {
-                format!(" class='{}'", class)
-            };
-            info!(
-                "{}<{}{}> @ ({:.0},{:.0}) {}x{}",
-                indent, tag, class_str, x, y, w, h
-            );
-        } else {
-            // Text or other node type
-            let text = node.text_content();
-            let text_trimmed = text.trim();
-            if !text_trimmed.is_empty() {
-                let text_preview = if text_trimmed.len() > 20 {
-                    format!("'{:.20}...'", text_trimmed)
-                } else {
-                    format!("'{}'", text_trimmed)
-                };
-                info!("{}#text {} @ ({:.0},{:.0})", indent, text_preview, x, y);
+        // Check children
+        for &child_id in &node.children {
+            if let Some(focusable) = Self::find_focusable_recursive(doc, child_id) {
+                return Some(focusable);
             }
         }
 
-        // Recurse into children
-        for child_id in node.children.iter() {
-            if let Some(child) = doc.get_node(*child_id) {
-                self.dump_node_recursive(doc, child, depth + 1, max_depth);
-            }
-        }
+        None
     }
 }
