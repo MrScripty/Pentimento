@@ -771,7 +771,7 @@ fn build_ui_scene(world: &mut World) {
     };
 
     // Process input events and poll the document (needs mutable access, separate scope)
-    {
+    let viewport_clicked = {
         let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>()
         else {
             return;
@@ -785,6 +785,16 @@ fn build_ui_scene(world: &mut World) {
         // Only force render when there were input events to process
         if !events.is_empty() {
             doc_resource.document.force_render();
+        }
+
+        // Check if a viewport click occurred (click outside UI elements)
+        doc_resource.document.take_viewport_clicked()
+    };
+
+    // If viewport was clicked, notify UI to close menus
+    if viewport_clicked {
+        if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+            outbound.send(pentimento_ipc::BevyToUi::CloseMenus);
         }
     }
 

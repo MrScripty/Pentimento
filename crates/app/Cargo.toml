@@ -38,7 +38,7 @@ rust-embed = { version = "8.7", features = ["debug-embed", "compression"] }
 gtk = "0.18"
 
 [features]
-default = ["wayland", "wireframe", "selection"]
+default = ["wayland", "wireframe", "selection", "mesh_painting"]
 wayland = []
 x11 = []
 cef = ["pentimento-webview/cef"]
@@ -46,6 +46,7 @@ dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui", "dep:pollster
 local-diffusion = ["pentimento-diffusion/local"]
 wireframe = ["pentimento-scene/wireframe"]
 selection = ["pentimento-scene/selection"]
+mesh_painting = ["pentimento-scene/mesh_painting"]
 
 [[bin]]
 name = "pentimento"

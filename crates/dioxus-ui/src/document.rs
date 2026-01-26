@@ -52,6 +52,8 @@ pub struct BlitzDocument {
     click_dots: Vec<(f32, f32)>,
     /// Receiver for document head element messages
     doc_receiver: Receiver<DocumentMessage>,
+    /// Flag: a click occurred outside UI elements (viewport click)
+    viewport_clicked: bool,
 }
 
 impl BlitzDocument {
@@ -112,6 +114,7 @@ impl BlitzDocument {
             scale,
             click_dots: Vec::new(),
             doc_receiver,
+            viewport_clicked: false,
         }
     }
 
@@ -243,6 +246,12 @@ impl BlitzDocument {
         &mut self.doc
     }
 
+    /// Check and clear the viewport clicked flag.
+    /// Returns true if a click occurred outside UI elements since last check.
+    pub fn take_viewport_clicked(&mut self) -> bool {
+        std::mem::take(&mut self.viewport_clicked)
+    }
+
     /// Handle a UI event (mouse click, key press, etc.)
     ///
     /// Debug logging shows hit testing results for both our custom algorithm
@@ -276,7 +285,7 @@ impl BlitzDocument {
             }
 
             // Blitz's hit testing for comparison
-            if let Some(blitz_hit) = doc_ref.hit(x, y) {
+            let hit_ui = if let Some(blitz_hit) = doc_ref.hit(x, y) {
                 if let Some(node) = doc_ref.get_node(blitz_hit.node_id) {
                     if let Some(el) = node.element_data() {
                         let tag = el.name.local.as_ref();
@@ -287,11 +296,18 @@ impl BlitzDocument {
                         info!("  -> Blitz HIT:  (non-element node) node_id={}", blitz_hit.node_id);
                     }
                 }
+                true
             } else {
                 info!("  -> Blitz HIT:  NO ELEMENT");
-            }
+                false
+            };
 
             drop(doc_ref);
+
+            // If click missed UI, set flag to notify menus should close
+            if !hit_ui {
+                self.viewport_clicked = true;
+            }
         }
 
         // Let Blitz handle the event

@@ -4,6 +4,7 @@ use tracing::debug;
 
 use crate::constants::DEFAULT_TILE_SIZE;
 use crate::surface::CpuSurface;
+use crate::types::BlendMode;
 use std::collections::HashSet;
 
 /// Tile coordinates
@@ -232,6 +233,8 @@ impl TiledSurface {
     /// Apply a dab to the surface (basic circle stamp)
     /// Returns bounding box of affected region (x, y, width, height)
     /// Returns None if the dab is completely outside the surface
+    ///
+    /// This is a convenience wrapper around `apply_dab_ellipse` for circular dabs.
     pub fn apply_dab(
         &mut self,
         center_x: f32,
@@ -240,22 +243,88 @@ impl TiledSurface {
         color: [f32; 4],
         opacity: f32,
         hardness: f32,
+        blend_mode: BlendMode,
+    ) -> Option<(u32, u32, u32, u32)> {
+        // Delegate to ellipse implementation with circular parameters
+        self.apply_dab_ellipse(
+            center_x,
+            center_y,
+            radius,
+            color,
+            opacity,
+            hardness,
+            blend_mode,
+            0.0, // angle
+            1.0, // aspect_ratio (1.0 = circle)
+        )
+    }
+
+    /// Apply an elliptical dab to the surface with rotation support.
+    ///
+    /// This is the core dab application function that supports both circular and
+    /// elliptical brushes with arbitrary rotation. Used for 3D mesh painting where
+    /// brushes must be projected onto surfaces at oblique angles.
+    ///
+    /// # Arguments
+    /// * `center_x`, `center_y` - Dab center in pixel coordinates
+    /// * `radius` - Radius along the major axis (in pixels)
+    /// * `color` - RGBA color to apply
+    /// * `opacity` - Overall opacity (0.0 to 1.0)
+    /// * `hardness` - Edge hardness (0.0 = soft, 1.0 = hard)
+    /// * `blend_mode` - How to combine with existing pixels
+    /// * `angle` - Rotation angle in radians (counter-clockwise)
+    /// * `aspect_ratio` - Ratio of minor to major axis (1.0 = circle, 0.5 = 2:1 ellipse)
+    ///
+    /// # Returns
+    /// Bounding box of affected region (x, y, width, height), or None if outside surface.
+    pub fn apply_dab_ellipse(
+        &mut self,
+        center_x: f32,
+        center_y: f32,
+        radius: f32,
+        color: [f32; 4],
+        opacity: f32,
+        hardness: f32,
+        blend_mode: BlendMode,
+        angle: f32,
+        aspect_ratio: f32,
     ) -> Option<(u32, u32, u32, u32)> {
         debug!(
-            "TiledSurface::apply_dab: center=({:.1}, {:.1}), radius={:.1}, color={:?}, opacity={:.2}, hardness={:.2}",
-            center_x, center_y, radius, color, opacity, hardness
+            "TiledSurface::apply_dab_ellipse: center=({:.1}, {:.1}), radius={:.1}, aspect={:.2}, angle={:.2}rad, opacity={:.2}, hardness={:.2}, mode={:?}",
+            center_x, center_y, radius, aspect_ratio, angle, opacity, hardness, blend_mode
         );
 
-        if radius <= 0.0 || opacity <= 0.0 {
-            debug!("  -> skipped: radius or opacity <= 0");
+        if radius <= 0.0 || opacity <= 0.0 || aspect_ratio <= 0.0 {
+            debug!("  -> skipped: invalid radius, opacity, or aspect_ratio");
             return None;
         }
 
+        // Clamp aspect ratio to prevent extreme ellipses
+        let aspect_ratio = aspect_ratio.clamp(0.01, 1.0);
+
+        // For ellipse bounding box, we need to account for rotation.
+        // The bounding box of a rotated ellipse with semi-axes a (major) and b (minor)
+        // rotated by angle θ has half-widths:
+        //   half_w = sqrt(a² cos²θ + b² sin²θ)
+        //   half_h = sqrt(a² sin²θ + b² cos²θ)
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let cos_sq = cos_a * cos_a;
+        let sin_sq = sin_a * sin_a;
+
+        let radius_major = radius;
+        let radius_minor = radius * aspect_ratio;
+        let r_major_sq = radius_major * radius_major;
+        let r_minor_sq = radius_minor * radius_minor;
+
+        let half_w = (r_major_sq * cos_sq + r_minor_sq * sin_sq).sqrt();
+        let half_h = (r_major_sq * sin_sq + r_minor_sq * cos_sq).sqrt();
+
         // Calculate bounding box
-        let x_min_f = (center_x - radius).floor();
-        let y_min_f = (center_y - radius).floor();
-        let x_max_f = (center_x + radius).ceil();
-        let y_max_f = (center_y + radius).ceil();
+        let x_min_f = (center_x - half_w).floor();
+        let y_min_f = (center_y - half_h).floor();
+        let x_max_f = (center_x + half_w).ceil();
+        let y_max_f = (center_y + half_h).ceil();
 
         // Clamp to surface bounds
         let x_min = (x_min_f.max(0.0) as u32).min(self.surface.width);
@@ -268,31 +337,45 @@ impl TiledSurface {
             return None;
         }
 
-        let radius_sq = radius * radius;
-
         // Apply dab to each pixel in the bounding box
         for py in y_min..y_max {
             for px in x_min..x_max {
                 // Calculate distance from center (use pixel center)
                 let dx = (px as f32 + 0.5) - center_x;
                 let dy = (py as f32 + 0.5) - center_y;
-                let dist_sq = dx * dx + dy * dy;
 
-                // Skip if outside the circle
-                if dist_sq > radius_sq {
+                // Rotate point by -angle to align with ellipse axes
+                let rotated_x = dx * cos_a + dy * sin_a;
+                let rotated_y = -dx * sin_a + dy * cos_a;
+
+                // Normalize to unit circle space (ellipse becomes circle)
+                let normalized_x = rotated_x / radius_major;
+                let normalized_y = rotated_y / radius_minor;
+                let normalized_dist_sq = normalized_x * normalized_x + normalized_y * normalized_y;
+
+                // Skip if outside the ellipse (distance > 1 in normalized space)
+                if normalized_dist_sq > 1.0 {
                     continue;
                 }
 
                 // Calculate normalized distance (0 at center, 1 at edge)
-                let distance_normalized = (dist_sq.sqrt() / radius).min(1.0);
+                let distance_normalized = normalized_dist_sq.sqrt();
 
                 // Calculate falloff based on hardness
                 let falloff = calculate_hardness_falloff(distance_normalized, hardness);
 
                 if falloff > 0.0 {
-                    // Blend the color with the calculated falloff
                     let effective_opacity = opacity * falloff;
-                    self.surface.blend_pixel(px, py, color, effective_opacity);
+                    match blend_mode {
+                        BlendMode::Normal => {
+                            // Blend the color with the calculated falloff
+                            self.surface.blend_pixel(px, py, color, effective_opacity);
+                        }
+                        BlendMode::Erase => {
+                            // Erase by reducing alpha
+                            self.surface.erase_pixel(px, py, effective_opacity);
+                        }
+                    }
                 }
             }
         }
@@ -389,7 +472,7 @@ mod tests {
         let mut surface = TiledSurface::new(256, 256, 128);
         surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
 
-        let result = surface.apply_dab(128.0, 128.0, 10.0, [1.0, 0.0, 0.0, 1.0], 1.0, 1.0);
+        let result = surface.apply_dab(128.0, 128.0, 10.0, [1.0, 0.0, 0.0, 1.0], 1.0, 1.0, BlendMode::Normal);
 
         assert!(result.is_some());
         let (_x, _y, w, h) = result.unwrap();
@@ -405,9 +488,25 @@ mod tests {
     fn test_apply_dab_marks_dirty() {
         let mut surface = TiledSurface::new(256, 256, 128);
 
-        surface.apply_dab(128.0, 128.0, 10.0, [1.0, 0.0, 0.0, 1.0], 1.0, 1.0);
+        surface.apply_dab(128.0, 128.0, 10.0, [1.0, 0.0, 0.0, 1.0], 1.0, 1.0, BlendMode::Normal);
 
         assert!(surface.has_dirty_tiles());
+    }
+
+    #[test]
+    fn test_apply_dab_erase() {
+        let mut surface = TiledSurface::new(256, 256, 128);
+        // Fill with red
+        surface.surface_mut().clear([1.0, 0.0, 0.0, 1.0]);
+
+        // Erase at center
+        let result = surface.apply_dab(128.0, 128.0, 10.0, [0.0, 0.0, 0.0, 1.0], 1.0, 1.0, BlendMode::Erase);
+
+        assert!(result.is_some());
+
+        // Center pixel should be erased (alpha reduced)
+        let center = surface.surface().get_pixel(128, 128).unwrap();
+        assert!(center[3] < 0.5); // Alpha should be reduced
     }
 
     #[test]
@@ -446,5 +545,86 @@ mod tests {
 
         let (x, y, w, h) = surface.get_tile_bounds(TileCoord { x: 1, y: 1 });
         assert_eq!((x, y, w, h), (128, 128, 22, 22));
+    }
+
+    #[test]
+    fn test_apply_dab_ellipse_circular() {
+        // Ellipse with aspect_ratio=1.0 should behave like a circle
+        let mut surface = TiledSurface::new(256, 256, 128);
+        surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
+
+        let result = surface.apply_dab_ellipse(
+            128.0, 128.0, 10.0,
+            [1.0, 0.0, 0.0, 1.0],
+            1.0, 1.0,
+            BlendMode::Normal,
+            0.0,  // angle
+            1.0,  // aspect_ratio (circular)
+        );
+
+        assert!(result.is_some());
+        let center = surface.surface().get_pixel(128, 128).unwrap();
+        assert!((center[0] - 1.0).abs() < 0.01); // Red
+    }
+
+    #[test]
+    fn test_apply_dab_ellipse_stretched() {
+        // Ellipse with aspect_ratio=0.5 should be stretched
+        let mut surface = TiledSurface::new(256, 256, 128);
+        surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
+
+        let result = surface.apply_dab_ellipse(
+            128.0, 128.0, 20.0,
+            [1.0, 0.0, 0.0, 1.0],
+            1.0, 1.0,
+            BlendMode::Normal,
+            0.0,      // angle = 0 (horizontal major axis)
+            0.5,      // aspect_ratio (half as tall as wide)
+        );
+
+        assert!(result.is_some());
+
+        // Center should be painted
+        let center = surface.surface().get_pixel(128, 128).unwrap();
+        assert!((center[0] - 1.0).abs() < 0.01);
+
+        // Point along major axis (x direction) should be painted
+        let on_major = surface.surface().get_pixel(145, 128).unwrap();
+        assert!((on_major[0] - 1.0).abs() < 0.1); // Should be red
+
+        // Point beyond minor axis extent should NOT be painted
+        // radius_minor = 20 * 0.5 = 10, so y=128+12 should be outside
+        let outside_minor = surface.surface().get_pixel(128, 141).unwrap();
+        assert!((outside_minor[0] - 1.0).abs() < 0.01); // Should still be white (original)
+        assert!((outside_minor[1] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_apply_dab_ellipse_rotated() {
+        // Rotated ellipse should paint in a rotated pattern
+        let mut surface = TiledSurface::new(256, 256, 128);
+        surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
+
+        let angle = std::f32::consts::FRAC_PI_4; // 45 degrees
+        let result = surface.apply_dab_ellipse(
+            128.0, 128.0, 20.0,
+            [1.0, 0.0, 0.0, 1.0],
+            1.0, 1.0,
+            BlendMode::Normal,
+            angle,
+            0.3,  // Very elliptical
+        );
+
+        assert!(result.is_some());
+
+        // Center should be painted
+        let center = surface.surface().get_pixel(128, 128).unwrap();
+        assert!((center[0] - 1.0).abs() < 0.01);
+
+        // The bounding box should be computed correctly for rotated ellipse
+        let (_x, _y, w, h) = result.unwrap();
+        assert!(w > 0 && h > 0);
+        // For a 45-degree rotated ellipse, width and height should be similar
+        // (not as extreme as unrotated would be)
     }
 }

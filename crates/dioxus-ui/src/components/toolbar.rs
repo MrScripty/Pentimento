@@ -160,11 +160,13 @@ const TOOLBAR_CSS: &str = r#"
 pub struct ToolbarProps {
     pub render_stats: RenderStats,
     pub bridge: DioxusBridge,
+    /// Menu state - controlled by parent for cross-component coordination
+    pub open_menu: Signal<Option<String>>,
 }
 
 #[component]
 pub fn Toolbar(props: ToolbarProps) -> Element {
-    let mut open_menu = use_signal(|| None::<String>);
+    let mut open_menu = props.open_menu;
     let mut selected_tool = use_signal(|| "select".to_string());
 
     let bridge = props.bridge.clone();

@@ -1,3 +1,4 @@
+use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Space type for stroke targeting
@@ -97,4 +98,61 @@ pub struct Dab {
 pub struct StrokePacket {
     pub header: StrokeHeader,
     pub dabs: Vec<Dab>,
+}
+
+// ============================================================================
+// Mesh Painting Types
+// ============================================================================
+
+/// Hit information for mesh painting.
+///
+/// Contains all the geometric data needed to paint at a point on a mesh surface,
+/// including interpolated surface properties from the triangle vertices.
+#[derive(Debug, Clone)]
+pub struct MeshHit {
+    /// World-space position of the hit point
+    pub world_pos: Vec3,
+    /// Face (triangle) index in the mesh
+    pub face_id: u32,
+    /// Barycentric coordinates within the triangle (u, v, w where w = 1-u-v)
+    pub barycentric: Vec3,
+    /// Interpolated surface normal at the hit point (world space, normalized)
+    pub normal: Vec3,
+    /// Tangent vector for tangent-space basis (world space, normalized)
+    pub tangent: Vec3,
+    /// Bitangent vector (cross of normal and tangent, world space, normalized)
+    pub bitangent: Vec3,
+    /// Interpolated UV coordinate (if mesh has UVs, otherwise None)
+    pub uv: Option<Vec2>,
+}
+
+/// Result of projecting a brush onto a surface tangent plane.
+///
+/// When painting on a 3D surface, the brush must be projected from world space
+/// onto the surface's tangent plane to avoid distortion at oblique angles.
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectedDab {
+    /// Position in texture space (UV coordinates or Ptex face-local coords)
+    pub tex_pos: Vec2,
+    /// Size in texture pixels (after projection accounting for surface angle)
+    pub size: f32,
+    /// Rotation angle in radians (from tangent alignment)
+    pub angle: f32,
+    /// Aspect ratio: 1.0 = circular on surface, <1.0 = ellipse stretched along minor axis
+    pub aspect_ratio: f32,
+}
+
+/// Storage mode for a paintable mesh
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshStorageMode {
+    /// Paint to UV texture atlas (requires mesh UVs)
+    UvAtlas {
+        /// Texture resolution (width, height)
+        resolution: (u32, u32),
+    },
+    /// Per-face textures for UV-less meshes (Ptex-style)
+    Ptex {
+        /// Resolution of each face's texture tile
+        face_resolution: u32,
+    },
 }

@@ -16,6 +16,10 @@ mod gizmo;
 mod lighting;
 mod paint_mode;
 mod painting_system;
+#[cfg(feature = "mesh_painting")]
+mod mesh_paint_mode;
+#[cfg(feature = "mesh_painting")]
+mod mesh_painting_system;
 #[cfg(feature = "selection")]
 mod outline;
 #[cfg(feature = "selection")]
@@ -35,6 +39,14 @@ pub use gizmo::{GizmoPlugin, GizmoState};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
 pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
 pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
+#[cfg(feature = "mesh_painting")]
+pub use mesh_paint_mode::{
+    MeshIdGenerator, MeshPaintEvent, MeshPaintModePlugin, MeshPaintState, PaintableMesh,
+};
+#[cfg(feature = "mesh_painting")]
+pub use mesh_painting_system::{
+    MeshPaintTexture, MeshPaintingResource, MeshPaintingSystemPlugin,
+};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
 #[cfg(feature = "selection")]
@@ -78,6 +90,12 @@ impl Plugin for ScenePlugin {
         app.add_plugins(PaintingSystemPlugin);
 
         app.add_systems(Startup, setup_scene);
+
+        #[cfg(feature = "mesh_painting")]
+        {
+            app.add_plugins(MeshPaintModePlugin);
+            app.add_plugins(MeshPaintingSystemPlugin);
+        }
 
         #[cfg(feature = "selection")]
         {
@@ -137,8 +155,13 @@ fn setup_scene(
     )).id();
     #[cfg(feature = "selection")]
     commands.entity(cube).insert(Selectable { id: "cube".to_string() });
+    #[cfg(feature = "mesh_painting")]
+    commands.entity(cube).insert(PaintableMesh {
+        mesh_id: 0,
+        storage_mode: painting::types::MeshStorageMode::Ptex { face_resolution: 32 },
+    });
 
-    // Test sphere
+    // Test sphere (has UVs from .uv() call)
     #[allow(unused_variables)]
     let sphere = commands.spawn((
         Mesh3d(meshes.add(Sphere::new(0.5).mesh().uv(32, 18))),
@@ -153,6 +176,11 @@ fn setup_scene(
     )).id();
     #[cfg(feature = "selection")]
     commands.entity(sphere).insert(Selectable { id: "sphere".to_string() });
+    #[cfg(feature = "mesh_painting")]
+    commands.entity(sphere).insert(PaintableMesh {
+        mesh_id: 1,
+        storage_mode: painting::types::MeshStorageMode::UvAtlas { resolution: (512, 512) },
+    });
 
     // Test torus
     #[allow(unused_variables)]
@@ -169,6 +197,11 @@ fn setup_scene(
     )).id();
     #[cfg(feature = "selection")]
     commands.entity(torus).insert(Selectable { id: "torus".to_string() });
+    #[cfg(feature = "mesh_painting")]
+    commands.entity(torus).insert(PaintableMesh {
+        mesh_id: 2,
+        storage_mode: painting::types::MeshStorageMode::Ptex { face_resolution: 32 },
+    });
 
     info!("Scene initialized with test objects");
 }

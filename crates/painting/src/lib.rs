@@ -9,11 +9,14 @@
 //! - [`log`] - Stroke log storage and Iroh-ready hooks
 //! - [`brush`] - Brush engine for dab generation
 //! - [`pipeline`] - Complete painting pipeline
+//! - [`projection`] - Brush projection math for 3D mesh painting
 
 pub mod brush;
 pub mod constants;
 pub mod log;
+pub mod mesh_surface;
 pub mod pipeline;
+pub mod projection;
 pub mod surface;
 pub mod tiles;
 pub mod types;
@@ -22,7 +25,9 @@ pub mod validation;
 pub use brush::*;
 pub use constants::*;
 pub use log::*;
+pub use mesh_surface::*;
 pub use pipeline::*;
+pub use projection::*;
 pub use surface::*;
 pub use tiles::*;
 pub use types::*;
