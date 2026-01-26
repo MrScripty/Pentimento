@@ -27,13 +27,13 @@ use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use pentimento_dioxus_ui::{
-    peniko, AaConfig, BlitzDocument, BlitzModifiers, BlitzPointerId, BlitzPointerEvent,
-    BlitzWheelDelta, BlitzWheelEvent, DioxusBridge, DioxusBridgeHandle, MouseEventButton,
-    MouseEventButtons, PointerCoords, PointerDetails, RenderParams, Scene, SharedVelloRenderer,
-    UiEvent,
+    peniko, AaConfig, BlitzDocument, BlitzKey, BlitzKeyCode, BlitzKeyEvent, BlitzKeyLocation,
+    BlitzModifiers, BlitzPointerId, BlitzPointerEvent, BlitzWheelDelta, BlitzWheelEvent,
+    DioxusBridge, DioxusBridgeHandle, KeyState, MouseEventButton, MouseEventButtons, PointerCoords,
+    PointerDetails, RenderParams, Scene, SharedVelloRenderer, UiEvent,
 };
-use pentimento_ipc::{MouseEvent, UiToBevy};
-use pentimento_scene::CanvasPlaneEvent;
+use pentimento_ipc::{MouseEvent, PaintCommand, UiToBevy};
+use pentimento_scene::{CanvasPlaneEvent, OutboundUiMessages, PaintingResource};
 
 use super::ui_blend_material::{UiBlendMaterial, UiBlendMaterialPlugin};
 
@@ -135,8 +135,115 @@ impl DioxusInputState {
         }
     }
 
-    pub fn send_keyboard_event(&mut self, _event: pentimento_ipc::KeyboardEvent) {
-        // Future: handle keyboard input
+    pub fn send_keyboard_event(&mut self, event: pentimento_ipc::KeyboardEvent) {
+        // Convert IPC modifiers to Blitz modifiers
+        let mut mods = BlitzModifiers::empty();
+        if event.modifiers.shift {
+            mods.insert(BlitzModifiers::SHIFT);
+        }
+        if event.modifiers.ctrl {
+            mods.insert(BlitzModifiers::CONTROL);
+        }
+        if event.modifiers.alt {
+            mods.insert(BlitzModifiers::ALT);
+        }
+        if event.modifiers.meta {
+            mods.insert(BlitzModifiers::META);
+        }
+
+        // Convert key string to Blitz Key type
+        let key = self.convert_key(&event.key);
+        let code = self.convert_code(&event.key);
+
+        let key_event = BlitzKeyEvent {
+            key,
+            code,
+            modifiers: mods,
+            location: BlitzKeyLocation::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: if event.pressed { KeyState::Pressed } else { KeyState::Released },
+            text: if event.pressed && event.key.len() == 1 {
+                Some(event.key.clone().into())
+            } else {
+                None
+            },
+        };
+
+        let ui_event = if event.pressed {
+            UiEvent::KeyDown(key_event)
+        } else {
+            UiEvent::KeyUp(key_event)
+        };
+
+        self.event_queue.push(ui_event);
+    }
+
+    fn convert_key(&self, key_str: &str) -> BlitzKey {
+        match key_str {
+            "Enter" => BlitzKey::Enter,
+            "Escape" => BlitzKey::Escape,
+            "Backspace" => BlitzKey::Backspace,
+            "Tab" => BlitzKey::Tab,
+            "Delete" => BlitzKey::Delete,
+            "ArrowUp" => BlitzKey::ArrowUp,
+            "ArrowDown" => BlitzKey::ArrowDown,
+            "ArrowLeft" => BlitzKey::ArrowLeft,
+            "ArrowRight" => BlitzKey::ArrowRight,
+            "Home" => BlitzKey::Home,
+            "End" => BlitzKey::End,
+            "PageUp" => BlitzKey::PageUp,
+            "PageDown" => BlitzKey::PageDown,
+            "Shift" | "Control" | "Alt" | "Meta" => BlitzKey::Unidentified,
+            k => BlitzKey::Character(k.into()),
+        }
+    }
+
+    fn convert_code(&self, key_str: &str) -> BlitzKeyCode {
+        match key_str.to_lowercase().as_str() {
+            "a" => BlitzKeyCode::KeyA,
+            "b" => BlitzKeyCode::KeyB,
+            "c" => BlitzKeyCode::KeyC,
+            "d" => BlitzKeyCode::KeyD,
+            "e" => BlitzKeyCode::KeyE,
+            "f" => BlitzKeyCode::KeyF,
+            "g" => BlitzKeyCode::KeyG,
+            "h" => BlitzKeyCode::KeyH,
+            "i" => BlitzKeyCode::KeyI,
+            "j" => BlitzKeyCode::KeyJ,
+            "k" => BlitzKeyCode::KeyK,
+            "l" => BlitzKeyCode::KeyL,
+            "m" => BlitzKeyCode::KeyM,
+            "n" => BlitzKeyCode::KeyN,
+            "o" => BlitzKeyCode::KeyO,
+            "p" => BlitzKeyCode::KeyP,
+            "q" => BlitzKeyCode::KeyQ,
+            "r" => BlitzKeyCode::KeyR,
+            "s" => BlitzKeyCode::KeyS,
+            "t" => BlitzKeyCode::KeyT,
+            "u" => BlitzKeyCode::KeyU,
+            "v" => BlitzKeyCode::KeyV,
+            "w" => BlitzKeyCode::KeyW,
+            "x" => BlitzKeyCode::KeyX,
+            "y" => BlitzKeyCode::KeyY,
+            "z" => BlitzKeyCode::KeyZ,
+            "0" => BlitzKeyCode::Digit0,
+            "1" => BlitzKeyCode::Digit1,
+            "2" => BlitzKeyCode::Digit2,
+            "3" => BlitzKeyCode::Digit3,
+            "4" => BlitzKeyCode::Digit4,
+            "5" => BlitzKeyCode::Digit5,
+            "6" => BlitzKeyCode::Digit6,
+            "7" => BlitzKeyCode::Digit7,
+            "8" => BlitzKeyCode::Digit8,
+            "9" => BlitzKeyCode::Digit9,
+            " " => BlitzKeyCode::Space,
+            "enter" => BlitzKeyCode::Enter,
+            "escape" => BlitzKeyCode::Escape,
+            "backspace" => BlitzKeyCode::Backspace,
+            "tab" => BlitzKeyCode::Tab,
+            _ => BlitzKeyCode::Unidentified,
+        }
     }
 
     fn convert_button(&self, button: pentimento_ipc::MouseButton) -> MouseEventButton {
@@ -271,8 +378,118 @@ impl DioxusRendererResource {
         }
     }
 
-    pub fn send_keyboard_event(&mut self, _event: pentimento_ipc::KeyboardEvent) {
-        // Future: handle keyboard input
+    pub fn send_keyboard_event(&mut self, event: pentimento_ipc::KeyboardEvent) {
+        // Convert IPC modifiers to Blitz modifiers
+        let mut mods = BlitzModifiers::empty();
+        if event.modifiers.shift {
+            mods.insert(BlitzModifiers::SHIFT);
+        }
+        if event.modifiers.ctrl {
+            mods.insert(BlitzModifiers::CONTROL);
+        }
+        if event.modifiers.alt {
+            mods.insert(BlitzModifiers::ALT);
+        }
+        if event.modifiers.meta {
+            mods.insert(BlitzModifiers::META);
+        }
+
+        // Convert key string to Blitz Key type
+        let key = self.convert_key(&event.key);
+        let code = self.convert_code(&event.key);
+
+        let key_event = BlitzKeyEvent {
+            key,
+            code,
+            modifiers: mods,
+            location: BlitzKeyLocation::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: if event.pressed { KeyState::Pressed } else { KeyState::Released },
+            text: if event.pressed && event.key.len() == 1 {
+                Some(event.key.clone().into())
+            } else {
+                None
+            },
+        };
+
+        let ui_event = if event.pressed {
+            UiEvent::KeyDown(key_event)
+        } else {
+            UiEvent::KeyUp(key_event)
+        };
+
+        // Send through channel (ignore errors if receiver is dropped)
+        if let Err(e) = self.sender.0.send(ui_event) {
+            error!("Failed to send keyboard event through channel: {}", e);
+        }
+    }
+
+    fn convert_key(&self, key_str: &str) -> BlitzKey {
+        match key_str {
+            "Enter" => BlitzKey::Enter,
+            "Escape" => BlitzKey::Escape,
+            "Backspace" => BlitzKey::Backspace,
+            "Tab" => BlitzKey::Tab,
+            "Delete" => BlitzKey::Delete,
+            "ArrowUp" => BlitzKey::ArrowUp,
+            "ArrowDown" => BlitzKey::ArrowDown,
+            "ArrowLeft" => BlitzKey::ArrowLeft,
+            "ArrowRight" => BlitzKey::ArrowRight,
+            "Home" => BlitzKey::Home,
+            "End" => BlitzKey::End,
+            "PageUp" => BlitzKey::PageUp,
+            "PageDown" => BlitzKey::PageDown,
+            "Shift" | "Control" | "Alt" | "Meta" => BlitzKey::Unidentified,
+            k => BlitzKey::Character(k.into()),
+        }
+    }
+
+    fn convert_code(&self, key_str: &str) -> BlitzKeyCode {
+        match key_str.to_lowercase().as_str() {
+            "a" => BlitzKeyCode::KeyA,
+            "b" => BlitzKeyCode::KeyB,
+            "c" => BlitzKeyCode::KeyC,
+            "d" => BlitzKeyCode::KeyD,
+            "e" => BlitzKeyCode::KeyE,
+            "f" => BlitzKeyCode::KeyF,
+            "g" => BlitzKeyCode::KeyG,
+            "h" => BlitzKeyCode::KeyH,
+            "i" => BlitzKeyCode::KeyI,
+            "j" => BlitzKeyCode::KeyJ,
+            "k" => BlitzKeyCode::KeyK,
+            "l" => BlitzKeyCode::KeyL,
+            "m" => BlitzKeyCode::KeyM,
+            "n" => BlitzKeyCode::KeyN,
+            "o" => BlitzKeyCode::KeyO,
+            "p" => BlitzKeyCode::KeyP,
+            "q" => BlitzKeyCode::KeyQ,
+            "r" => BlitzKeyCode::KeyR,
+            "s" => BlitzKeyCode::KeyS,
+            "t" => BlitzKeyCode::KeyT,
+            "u" => BlitzKeyCode::KeyU,
+            "v" => BlitzKeyCode::KeyV,
+            "w" => BlitzKeyCode::KeyW,
+            "x" => BlitzKeyCode::KeyX,
+            "y" => BlitzKeyCode::KeyY,
+            "z" => BlitzKeyCode::KeyZ,
+            "0" => BlitzKeyCode::Digit0,
+            "1" => BlitzKeyCode::Digit1,
+            "2" => BlitzKeyCode::Digit2,
+            "3" => BlitzKeyCode::Digit3,
+            "4" => BlitzKeyCode::Digit4,
+            "5" => BlitzKeyCode::Digit5,
+            "6" => BlitzKeyCode::Digit6,
+            "7" => BlitzKeyCode::Digit7,
+            "8" => BlitzKeyCode::Digit8,
+            "9" => BlitzKeyCode::Digit9,
+            " " => BlitzKeyCode::Space,
+            "enter" => BlitzKeyCode::Enter,
+            "escape" => BlitzKeyCode::Escape,
+            "backspace" => BlitzKeyCode::Backspace,
+            "tab" => BlitzKeyCode::Tab,
+            _ => BlitzKeyCode::Unidentified,
+        }
     }
 
     fn convert_button(&self, button: pentimento_ipc::MouseButton) -> MouseEventButton {
@@ -535,6 +752,14 @@ fn setup_dioxus_texture(world: &mut World) {
 /// Build the UI scene from BlitzDocument (runs every frame in main world).
 /// This is an exclusive system because BlitzDocumentResource is NonSend.
 fn build_ui_scene(world: &mut World) {
+    // Process network and document messages first (asset loading, head elements)
+    // This ensures resources are loaded before the UI tries to use them
+    {
+        if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
+            doc_resource.document.process_messages();
+        }
+    }
+
     // Drain queued input events from the channel receiver
     let events: Vec<UiEvent> = {
         if let Some(receiver) = world.get_non_send_resource::<DioxusEventReceiver>() {
@@ -557,8 +782,10 @@ fn build_ui_scene(world: &mut World) {
             doc_resource.document.handle_event(event.clone());
         }
 
-        // Poll for any pending Dioxus updates
-        doc_resource.document.poll();
+        // Only force render when there were input events to process
+        if !events.is_empty() {
+            doc_resource.document.force_render();
+        }
     }
 
     // Get a raw pointer to the document for painting
@@ -654,6 +881,37 @@ fn handle_window_resize(world: &mut World) {
 fn handle_ui_to_bevy_messages(world: &mut World) {
     use bevy::ecs::message::Messages;
 
+    // Forward outbound messages (Bevy->UI) first
+    let outbound_msgs = {
+        if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+            outbound.drain()
+        } else {
+            Vec::new()
+        }
+    };
+
+    if !outbound_msgs.is_empty() {
+        info!("Forwarding {} outbound messages to UI bridge", outbound_msgs.len());
+        if let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() {
+            for msg in outbound_msgs {
+                info!("  -> Processing message: {:?}", msg);
+                bridge.bridge_handle.send(msg);
+            }
+        } else {
+            warn!("No DioxusBridgeResource found!");
+        }
+
+        // Force VirtualDom to render so component polls bridge and processes messages.
+        // Normal poll() returns early if no signals changed, but channel messages
+        // don't trigger signals - the component needs to render first.
+        if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
+            info!("Calling force_render() after forwarding messages");
+            doc_resource.document.force_render();
+        } else {
+            warn!("No BlitzDocumentResource found!");
+        }
+    }
+
     // Collect all pending messages first to avoid holding the borrow
     let messages: Vec<UiToBevy> = {
         let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() else {
@@ -684,6 +942,45 @@ fn handle_ui_to_bevy_messages(world: &mut World) {
             }
             UiToBevy::UiDirty => {
                 // UI has changed - in Dioxus mode this is handled by the Vello renderer
+            }
+            UiToBevy::PaintCommand(cmd) => {
+                if let Some(mut painting_res) = world.get_resource_mut::<PaintingResource>() {
+                    match cmd {
+                        PaintCommand::SetBrushColor { color } => {
+                            painting_res.set_brush_color(color);
+                            debug!("Set brush color to {:?}", color);
+                        }
+                        PaintCommand::SetBrushSize { size } => {
+                            painting_res.brush_preset.base_size = size;
+                            let preset = painting_res.brush_preset.clone();
+                            painting_res.set_brush_preset(preset);
+                            debug!("Set brush size to {}", size);
+                        }
+                        PaintCommand::SetBrushOpacity { opacity } => {
+                            painting_res.brush_preset.opacity = opacity;
+                            let preset = painting_res.brush_preset.clone();
+                            painting_res.set_brush_preset(preset);
+                            debug!("Set brush opacity to {}", opacity);
+                        }
+                        PaintCommand::SetBrushHardness { hardness } => {
+                            painting_res.brush_preset.hardness = hardness;
+                            let preset = painting_res.brush_preset.clone();
+                            painting_res.set_brush_preset(preset);
+                            debug!("Set brush hardness to {}", hardness);
+                        }
+                        PaintCommand::SetBlendMode { mode } => {
+                            painting_res.set_blend_mode_ipc(mode);
+                            debug!("Set blend mode to {:?}", mode);
+                        }
+                        PaintCommand::Undo => {
+                            if painting_res.undo_any() {
+                                info!("Paint undo performed");
+                            } else {
+                                debug!("Paint undo: nothing to undo");
+                            }
+                        }
+                    }
+                }
             }
             _ => {
                 // Other messages not yet implemented

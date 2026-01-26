@@ -3,9 +3,13 @@ name = "pentimento-dioxus-ui"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+hot-reload = ["dep:dioxus-devtools"]
+
 [dependencies]
 pentimento-ipc = { path = "../ipc" }
-dioxus = { workspace = true }
+dioxus = { workspace = true, features = ["document"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -36,3 +40,10 @@ taffy = "0.9"
 peniko = "0.6"
 kurbo = "0.13"
 keyboard-types = "0.7"
+
+# Asset loading and document support (matching official Bevy example)
+dioxus-asset-resolver = { git = "https://github.com/DioxusLabs/dioxus.git", branch = "main", features = ["native"] }
+dioxus-devtools = { git = "https://github.com/DioxusLabs/dioxus.git", branch = "main", optional = true }
+crossbeam-channel = "0.5"
+data-url = "0.3"
+bytes = "1.0"

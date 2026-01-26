@@ -9,10 +9,18 @@
 //! 2. `poll()` processes VirtualDom changes and updates the DOM tree
 //! 3. `resolve()` computes CSS styles and Taffy layout
 //! 4. `paint_to_scene()` renders to a Vello Scene via anyrender
+//!
+//! # Providers (matching official Dioxus Bevy example)
+//!
+//! - `BevyNetProvider`: Handles asset loading (CSS, images, fonts)
+//! - `DioxusDocumentProxy`: Handles head elements (Title, Meta, Style, etc.)
+
+use std::rc::Rc;
 
 use anyrender_vello::VelloScenePainter;
 use blitz_dom::{Document, DocumentConfig};
 use blitz_traits::shell::{ColorScheme, Viewport};
+use crossbeam_channel::Receiver;
 use dioxus::prelude::*;
 use dioxus_native_dom::DioxusDocument;
 use tracing::{debug, info};
@@ -21,6 +29,8 @@ use vello::peniko::{Color, Fill};
 use vello::Scene;
 
 use crate::bridge::DioxusBridge;
+use crate::document_proxy::{DocumentMessage, DioxusDocumentProxy};
+use crate::net_provider::BevyNetProvider;
 use crate::PentimentoApp;
 
 /// Wrapper around DioxusDocument that provides Vello rendering integration.
@@ -29,6 +39,10 @@ use crate::PentimentoApp;
 /// - Creates the document from the PentimentoApp component
 /// - Handles updates via poll()
 /// - Paints to a Vello Scene using blitz-paint
+///
+/// Includes provider integration for:
+/// - Asset loading via `BevyNetProvider`
+/// - Head element handling via `DioxusDocumentProxy`
 pub struct BlitzDocument {
     doc: DioxusDocument,
     width: u32,
@@ -36,6 +50,8 @@ pub struct BlitzDocument {
     scale: f64,
     /// Debug: recent click positions for visual debugging
     click_dots: Vec<(f32, f32)>,
+    /// Receiver for document head element messages
+    doc_receiver: Receiver<DocumentMessage>,
 }
 
 impl BlitzDocument {
@@ -52,6 +68,9 @@ impl BlitzDocument {
             width, height, scale
         );
 
+        // Create channel for document proxy communication
+        let (doc_sender, doc_receiver) = crossbeam_channel::unbounded();
+
         // Create the Dioxus VirtualDom with our app component
         let vdom = VirtualDom::new_with_props(
             PentimentoApp,
@@ -67,6 +86,19 @@ impl BlitzDocument {
         // Create the DioxusDocument which wraps VirtualDom + BaseDocument
         let mut doc = DioxusDocument::new(vdom, config);
 
+        // Set up NetProvider for asset loading (CSS, images, fonts)
+        // The new blitz API handles resource loading internally via the NetHandler
+        let net_provider = BevyNetProvider::shared();
+        doc.inner.borrow_mut().set_net_provider(net_provider);
+        info!("BevyNetProvider configured for asset loading");
+
+        // Set up DocumentProxy for head elements (Title, Meta, Style, etc.)
+        let proxy = Rc::new(DioxusDocumentProxy::new(doc_sender));
+        doc.vdom.in_scope(dioxus_core::ScopeId::ROOT, move || {
+            dioxus::prelude::provide_context(proxy as Rc<dyn dioxus::document::Document>);
+        });
+        info!("DioxusDocumentProxy configured for head elements");
+
         // Initial build: build the Dioxus component tree into the DOM
         doc.initial_build();
 
@@ -79,6 +111,7 @@ impl BlitzDocument {
             height,
             scale,
             click_dots: Vec::new(),
+            doc_receiver,
         }
     }
 
@@ -121,6 +154,46 @@ impl BlitzDocument {
         }
 
         had_updates
+    }
+
+    /// Force a VirtualDom render even if there's no pending work.
+    ///
+    /// Use this after sending external messages that the component needs to process.
+    /// Normal `poll()` returns early if VirtualDom thinks there's no work, but
+    /// channel messages don't trigger signal changes - the component needs to
+    /// render first to poll the channel.
+    pub fn force_render(&mut self) {
+        // Mark root scope (ScopeId(0)) dirty to ensure next poll triggers render.
+        // This is safe because ScopeId(0) is always the root component scope.
+        self.doc.vdom.mark_dirty(dioxus_core::ScopeId(0));
+
+        // Now poll() will see dirty scope and call render_immediate()
+        self.poll();
+    }
+
+    /// Process pending document messages from the DocumentProxy.
+    ///
+    /// This should be called each frame to process head element requests.
+    /// Note: Network resources are handled internally by the blitz NetHandler.
+    pub fn process_messages(&mut self) {
+        let mut had_messages = false;
+
+        // Handle head element creation (Title, Meta, Style, etc.)
+        while let Ok(msg) = self.doc_receiver.try_recv() {
+            match msg {
+                DocumentMessage::CreateHeadElement(el) => {
+                    debug!("Creating head element: <{}>", el.name);
+                    self.doc.create_head_element(&el.name, &el.attributes, &el.contents);
+                    had_messages = true;
+                }
+            }
+        }
+
+        // If we processed messages, we need to re-poll and re-resolve
+        if had_messages {
+            debug!("Processed provider messages, re-resolving layout");
+            self.doc.inner.borrow_mut().resolve(0.0);
+        }
     }
 
     /// Paint the document to a Vello Scene.

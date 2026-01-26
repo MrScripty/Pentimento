@@ -23,6 +23,8 @@ mod app;
 mod bridge;
 mod components;
 mod document;
+mod document_proxy;
+mod net_provider;
 mod renderer;
 mod state;
 
@@ -40,7 +42,7 @@ pub use wgpu;
 
 // Re-export Blitz event types for input handling
 pub use blitz_traits::events::{
-    BlitzPointerId, BlitzPointerEvent, BlitzWheelDelta, BlitzWheelEvent, MouseEventButton,
-    MouseEventButtons, PointerCoords, PointerDetails, UiEvent,
+    BlitzKeyEvent, BlitzPointerId, BlitzPointerEvent, BlitzWheelDelta, BlitzWheelEvent,
+    KeyState, MouseEventButton, MouseEventButtons, PointerCoords, PointerDetails, UiEvent,
 };
-pub use keyboard_types::Modifiers as BlitzModifiers;
+pub use keyboard_types::{Code as BlitzKeyCode, Key as BlitzKey, Location as BlitzKeyLocation, Modifiers as BlitzModifiers};
