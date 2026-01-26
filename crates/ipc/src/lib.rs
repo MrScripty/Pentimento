@@ -72,6 +72,9 @@ pub enum BevyToUi {
     /// Edit mode changed (paint mode, etc.)
     EditModeChanged { mode: EditMode },
 
+    /// Projection mode changed
+    ProjectionModeChanged { live_projection: bool },
+
     /// Close all open menus (triggered when clicking outside UI)
     CloseMenus,
 }
@@ -364,6 +367,8 @@ pub enum GizmoMode {
     None,
     Translate,
     Rotate,
+    /// Trackball rotation (free rotation - press R twice to toggle from Rotate)
+    Trackball,
     Scale,
 }
 
@@ -381,6 +386,16 @@ pub enum GizmoAxis {
     XZ,
     /// Constrain to YZ plane (exclude X)
     YZ,
+}
+
+/// Coordinate space for gizmo operations (global vs local/object-relative)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CoordinateSpace {
+    /// World/global coordinate space
+    #[default]
+    Global,
+    /// Object-local coordinate space (axes rotate with object)
+    Local,
 }
 
 /// Commands for controlling the transform gizmo
@@ -446,6 +461,10 @@ pub enum PaintCommand {
     SetBlendMode { mode: BlendMode },
     /// Undo last stroke
     Undo,
+    /// Enable/disable live projection mode (paint-as-project)
+    SetLiveProjection { enabled: bool },
+    /// Project current canvas contents to all visible meshes (one-shot)
+    ProjectToScene,
 }
 
 // ============================================================================
