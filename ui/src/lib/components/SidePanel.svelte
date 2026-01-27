@@ -132,8 +132,9 @@
                 <h3 class="group-title">Material</h3>
 
                 <div class="property">
-                    <label class="property-label">Metallic</label>
+                    <label class="property-label" for="metallic-slider">Metallic</label>
                     <input
+                        id="metallic-slider"
                         type="range"
                         min="0"
                         max="1"
@@ -146,8 +147,9 @@
                 </div>
 
                 <div class="property">
-                    <label class="property-label">Roughness</label>
+                    <label class="property-label" for="roughness-slider">Roughness</label>
                     <input
+                        id="roughness-slider"
                         type="range"
                         min="0"
                         max="1"
@@ -169,8 +171,9 @@
             <h3 class="group-title">Sun / Sky</h3>
 
             <div class="property">
-                <label class="property-label">Time of Day</label>
+                <label class="property-label" for="time-of-day-slider">Time of Day</label>
                 <input
+                    id="time-of-day-slider"
                     type="range"
                     min="0"
                     max="24"
@@ -183,8 +186,9 @@
             </div>
 
             <div class="property">
-                <label class="property-label">Cloudiness</label>
+                <label class="property-label" for="cloudiness-slider">Cloudiness</label>
                 <input
+                    id="cloudiness-slider"
                     type="range"
                     min="0"
                     max="100"
@@ -208,8 +212,9 @@
         {:else}
             <div class="property-group">
                 <div class="property checkbox-property">
-                    <label class="property-label">Enable SSAO</label>
+                    <label class="property-label" for="ssao-checkbox">Enable SSAO</label>
                     <input
+                        id="ssao-checkbox"
                         type="checkbox"
                         checked={aoSettings.enabled}
                         onchange={handleAoEnabledChange}
@@ -220,8 +225,9 @@
 
                 {#if aoSettings.enabled}
                     <div class="property">
-                        <label class="property-label">Quality</label>
+                        <label class="property-label" for="ao-quality-select">Quality</label>
                         <select
+                            id="ao-quality-select"
                             value={aoSettings.qualityLevel}
                             onchange={handleAoQualityChange}
                             class="select"
@@ -235,8 +241,9 @@
                     </div>
 
                     <div class="property">
-                        <label class="property-label">Intensity</label>
+                        <label class="property-label" for="ao-intensity-slider">Intensity</label>
                         <input
+                            id="ao-intensity-slider"
                             type="range"
                             min="0.0625"
                             max="4"

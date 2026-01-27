@@ -43,11 +43,14 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if show}
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="add-menu-backdrop" onclick={handleBackdropClick}>
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="add-menu-backdrop" role="presentation" onclick={handleBackdropClick}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
             class="add-menu panel"
+            role="dialog"
+            aria-label="Add Object Menu"
+            tabindex="-1"
             style="left: {position.x}px; top: {position.y}px;"
             onclick={(e) => e.stopPropagation()}
         >

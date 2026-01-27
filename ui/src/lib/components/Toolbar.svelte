@@ -153,8 +153,7 @@
     }
 
     .nav-button:hover,
-    .nav-button.active,
-    .nav-button.pentimento-hover {
+    .nav-button.active {
         background: rgba(255, 255, 255, 0.1);
         color: white;
     }
@@ -191,8 +190,7 @@
         transition: background 0.1s;
     }
 
-    .dropdown-item:hover,
-    .dropdown-item.pentimento-hover {
+    .dropdown-item:hover {
         background: rgba(255, 255, 255, 0.1);
     }
 
@@ -224,8 +222,7 @@
         transition: all 0.15s;
     }
 
-    .tool-button:hover,
-    .tool-button.pentimento-hover {
+    .tool-button:hover {
         background: rgba(255, 255, 255, 0.15);
         color: white;
     }
