@@ -1,0 +1,9 @@
+[package]
+name = "pentimento-frontend-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pentimento-ipc = { path = "../ipc" }
+thiserror = "2.0"
+image = { version = "0.25", default-features = false }

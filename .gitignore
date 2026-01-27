@@ -1,5 +1,5 @@
 # Rust
-/target/
+**/target/
 Cargo.lock
 
 # Node
@@ -44,3 +44,6 @@ ui/public/wasm/
 
 # Test outputs
 /tmp/
+
+# Refactoring documentation
+**/CHANGES.md
