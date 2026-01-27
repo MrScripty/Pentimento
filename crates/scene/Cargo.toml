@@ -13,10 +13,14 @@ wireframe = []
 selection = ["bevy/bevy_picking", "bevy/mesh_picking"]
 # 3D mesh painting with normal-based brush projection
 mesh_painting = ["bevy/bevy_picking", "bevy/mesh_picking"]
+# Mesh editing mode for vertex, edge, and face manipulation
+mesh_editing = ["bevy/bevy_picking", "bevy/mesh_picking", "painting/bevy", "selection"]
+# Atmospheric sky rendering - requires HDR (native only, not WASM/WebGL)
+atmosphere = []
 
 [dependencies]
 pentimento-ipc = { path = "../ipc" }
-painting = { path = "../painting" }
+painting = { path = "../painting", features = ["bevy"] }
 bytemuck = { workspace = true }
 wgpu = "27"
 

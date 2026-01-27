@@ -7,19 +7,38 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 use pentimento_ipc::BevyToUi;
 
+#[cfg(feature = "atmosphere")]
+use bevy::camera::Exposure;
+#[cfg(feature = "atmosphere")]
+use bevy::light::AtmosphereEnvironmentMapLight;
+#[cfg(feature = "atmosphere")]
+use bevy::pbr::{Atmosphere, AtmosphereSettings};
+
 mod add_object;
 mod ambient_occlusion;
 mod camera;
 mod canvas_plane;
 mod edit_mode;
 mod gizmo;
+#[cfg(feature = "selection")]
+mod gizmo_raycast;
 mod lighting;
+#[cfg(feature = "mesh_editing")]
+mod mesh_edit_highlight;
+#[cfg(feature = "mesh_editing")]
+mod mesh_edit_mode;
+#[cfg(feature = "mesh_editing")]
+mod mesh_edit_selection;
 mod paint_mode;
 mod painting_system;
+mod projection_mode;
+mod projection_painting;
 #[cfg(feature = "mesh_painting")]
 mod mesh_paint_mode;
 #[cfg(feature = "mesh_painting")]
 mod mesh_painting_system;
+#[cfg(feature = "mesh_painting")]
+mod normal_indicator;
 #[cfg(feature = "selection")]
 mod outline;
 #[cfg(feature = "selection")]
@@ -36,9 +55,23 @@ pub use canvas_plane::{
     CanvasPlaneIdGenerator, CanvasPlanePlugin,
 };
 pub use gizmo::{GizmoPlugin, GizmoState};
+#[cfg(feature = "selection")]
+pub use gizmo_raycast::{GizmoGeometry, GizmoHandle};
 pub use lighting::{LightingPlugin, SceneLighting, SunLight};
+#[cfg(feature = "atmosphere")]
+pub use lighting::AtmosphereState;
 pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
 pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
+pub use projection_mode::{ProjectionEvent, ProjectionMode, ProjectionModePlugin, ProjectionTarget};
+pub use projection_painting::{ProjectionPaintingPlugin, ProjectionTargets, MeshRaycastCache};
+#[cfg(feature = "mesh_editing")]
+pub use mesh_edit_highlight::MeshEditHighlightPlugin;
+#[cfg(feature = "mesh_editing")]
+pub use mesh_edit_mode::{
+    EditableMesh, MeshEditEvent, MeshEditModePlugin, MeshEditState,
+};
+#[cfg(feature = "mesh_editing")]
+pub use mesh_edit_selection::MeshEditSelectionPlugin;
 #[cfg(feature = "mesh_painting")]
 pub use mesh_paint_mode::{
     MeshIdGenerator, MeshPaintEvent, MeshPaintModePlugin, MeshPaintState, PaintableMesh,
@@ -47,6 +80,8 @@ pub use mesh_paint_mode::{
 pub use mesh_painting_system::{
     MeshPaintTexture, MeshPaintingResource, MeshPaintingSystemPlugin,
 };
+#[cfg(feature = "mesh_painting")]
+pub use normal_indicator::{NormalIndicatorPlugin, NormalIndicatorState};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
 #[cfg(feature = "selection")]
@@ -88,13 +123,26 @@ impl Plugin for ScenePlugin {
         app.add_plugins(CanvasPlanePlugin);
         app.add_plugins(PaintModePlugin);
         app.add_plugins(PaintingSystemPlugin);
+        app.add_plugins(ProjectionModePlugin);
+        app.add_plugins(ProjectionPaintingPlugin);
 
         app.add_systems(Startup, setup_scene);
+
+        #[cfg(feature = "atmosphere")]
+        app.add_systems(Startup, setup_atmosphere.after(setup_scene));
+
+        #[cfg(feature = "mesh_editing")]
+        {
+            app.add_plugins(MeshEditModePlugin);
+            app.add_plugins(MeshEditSelectionPlugin);
+            app.add_plugins(MeshEditHighlightPlugin);
+        }
 
         #[cfg(feature = "mesh_painting")]
         {
             app.add_plugins(MeshPaintModePlugin);
             app.add_plugins(MeshPaintingSystemPlugin);
+            app.add_plugins(NormalIndicatorPlugin);
         }
 
         #[cfg(feature = "selection")]
@@ -204,4 +252,27 @@ fn setup_scene(
     });
 
     info!("Scene initialized with test objects");
+}
+
+/// Add atmosphere components to the main camera (atmosphere feature only)
+#[cfg(feature = "atmosphere")]
+fn setup_atmosphere(
+    mut commands: Commands,
+    camera_query: Query<Entity, With<MainCamera>>,
+    atmosphere_state: Res<lighting::AtmosphereState>,
+) {
+    for camera_entity in camera_query.iter() {
+        commands.entity(camera_entity).insert((
+            // Earth-like atmosphere with the scattering medium from lighting setup
+            Atmosphere::earthlike(atmosphere_state.medium.clone()),
+            AtmosphereSettings::default(),
+            // Enable atmosphere-driven IBL (image-based lighting / reflections)
+            AtmosphereEnvironmentMapLight::default(),
+            // Proper exposure for outdoor scenes with bright sun
+            Exposure { ev100: 13.0 },
+            // Better tonemapping for HDR atmospheric scenes
+            Tonemapping::AcesFitted,
+        ));
+        info!("Atmosphere components added to main camera");
+    }
 }

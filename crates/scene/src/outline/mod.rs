@@ -195,7 +195,7 @@ fn add_selected_to_id_buffer(
                 Visibility::default(),
                 // Only visible to ID camera
                 RenderLayers::layer(1),
-                RenderToIdBuffer { entity_color },
+                RenderToIdBuffer,
                 // Track which entity this is for
                 IdBufferMirror { source: entity },
                 Pickable::IGNORE,

@@ -354,13 +354,22 @@ fn handle_canvas_plane_events(
 }
 
 /// Handle Tab key input to toggle camera lock when a plane is selected
+///
+/// Tab behavior is context-aware:
+/// - In Paint mode or when no mesh is in edit mode: toggle camera lock for canvas
+/// - In MeshEdit mode: handled by mesh_edit_mode.rs
 fn handle_camera_lock_input(
     key_input: Res<ButtonInput<KeyCode>>,
     active_plane: Res<ActiveCanvasPlane>,
+    edit_mode: Res<crate::edit_mode::EditModeState>,
     mut events: MessageWriter<CanvasPlaneEvent>,
 ) {
-    // Tab key toggles camera lock when a plane is selected
-    if key_input.just_pressed(KeyCode::Tab) && active_plane.entity.is_some() {
+    // Tab key toggles camera lock when a plane is selected AND we're not in mesh edit mode
+    // (mesh_edit_mode.rs handles Tab for entering/exiting mesh edit mode)
+    if key_input.just_pressed(KeyCode::Tab)
+        && active_plane.entity.is_some()
+        && edit_mode.mode != EditMode::MeshEdit
+    {
         events.write(CanvasPlaneEvent::ToggleCameraLock);
     }
 }

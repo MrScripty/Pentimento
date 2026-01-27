@@ -9,6 +9,7 @@ use bevy::input::mouse::{MouseButton, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 
 use crate::canvas_plane::ActiveCanvasPlane;
+use crate::gizmo::GizmoState;
 
 /// Marker component for the main camera
 #[derive(Component)]
@@ -105,9 +106,16 @@ fn camera_orbit_system(
     mut motion_events: MessageReader<MouseMotion>,
     mut camera_query: Query<&mut OrbitCamera>,
     active_plane: Res<ActiveCanvasPlane>,
+    gizmo_state: Res<GizmoState>,
 ) {
     // Don't allow camera movement when locked to a canvas plane
     if active_plane.camera_locked {
+        motion_events.clear();
+        return;
+    }
+
+    // Don't allow camera movement when gizmo is being manipulated
+    if gizmo_state.is_active {
         motion_events.clear();
         return;
     }
@@ -154,9 +162,16 @@ fn camera_pan_system(
     mut motion_events: MessageReader<MouseMotion>,
     mut camera_query: Query<(&mut OrbitCamera, &Transform)>,
     active_plane: Res<ActiveCanvasPlane>,
+    gizmo_state: Res<GizmoState>,
 ) {
     // Don't allow camera movement when locked to a canvas plane
     if active_plane.camera_locked {
+        motion_events.clear();
+        return;
+    }
+
+    // Don't allow camera movement when gizmo is being manipulated
+    if gizmo_state.is_active {
         motion_events.clear();
         return;
     }
@@ -202,9 +217,16 @@ fn camera_zoom_system(
     mut scroll_events: MessageReader<MouseWheel>,
     mut camera_query: Query<&mut OrbitCamera>,
     active_plane: Res<ActiveCanvasPlane>,
+    gizmo_state: Res<GizmoState>,
 ) {
     // Don't allow camera movement when locked to a canvas plane
     if active_plane.camera_locked {
+        scroll_events.clear();
+        return;
+    }
+
+    // Don't allow camera movement when gizmo is being manipulated
+    if gizmo_state.is_active {
         scroll_events.clear();
         return;
     }

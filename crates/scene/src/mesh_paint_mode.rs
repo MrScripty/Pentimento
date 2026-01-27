@@ -274,7 +274,7 @@ fn find_closest_mesh_hit<'a>(
 ///
 /// This performs a brute-force triangle intersection test. For large meshes,
 /// a BVH acceleration structure would be more efficient.
-fn ray_mesh_intersection(
+pub fn ray_mesh_intersection(
     ray: &Ray3d,
     mesh: &Mesh,
     transform: &GlobalTransform,

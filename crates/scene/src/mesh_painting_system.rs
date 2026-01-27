@@ -109,10 +109,16 @@ impl MeshPaintingResource {
 /// Component linking a PaintableMesh to its GPU texture.
 #[derive(Component)]
 pub struct MeshPaintTexture {
-    /// Handle to the Bevy Image asset
+    /// Handle to the Bevy Image asset (composited paint + original)
     pub image_handle: Handle<Image>,
+    /// Handle to original material texture (if any) for compositing
+    pub original_texture: Option<Handle<Image>>,
+    /// Original base color from material (for meshes without texture)
+    pub original_base_color: [f32; 4],
     /// Whether this needs full upload
     pub needs_full_upload: bool,
+    /// Whether any paint has been applied (don't touch material until painting)
+    pub has_paint: bool,
 }
 
 /// Plugin for mesh painting system.
@@ -137,7 +143,7 @@ impl Plugin for MeshPaintingSystemPlugin {
 fn setup_mesh_paint_textures(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    materials: Res<Assets<StandardMaterial>>,
     mut painting_res: ResMut<MeshPaintingResource>,
     query: Query<
         (Entity, &PaintableMesh, Option<&MeshMaterial3d<StandardMaterial>>),
@@ -184,20 +190,27 @@ fn setup_mesh_paint_textures(
             }
         }
 
-        // Apply texture to material if available
-        if let Some(material_ref) = material_handle {
-            if let Some(material) = materials.get_mut(&material_ref.0) {
-                material.base_color_texture = Some(image_handle.clone());
-                material.base_color = Color::WHITE;
-                material.alpha_mode = AlphaMode::Blend;
-                material.unlit = true;
-                material.double_sided = true;
+        // Extract original texture and color from material (don't modify material yet)
+        let (original_texture, original_base_color) = if let Some(material_ref) = material_handle {
+            if let Some(material) = materials.get(&material_ref.0) {
+                let color = material.base_color.to_linear();
+                (
+                    material.base_color_texture.clone(),
+                    [color.red, color.green, color.blue, color.alpha],
+                )
+            } else {
+                (None, [0.8, 0.8, 0.8, 1.0])
             }
-        }
+        } else {
+            (None, [0.8, 0.8, 0.8, 1.0])
+        };
 
         commands.entity(entity).insert(MeshPaintTexture {
             image_handle,
-            needs_full_upload: true,
+            original_texture,
+            original_base_color,
+            needs_full_upload: false, // Don't upload until we have paint
+            has_paint: false,
         });
 
         info!(
@@ -227,7 +240,7 @@ fn process_mesh_paint_events(
             MeshPaintEvent::StrokeMove {
                 hit,
                 pressure,
-                speed,
+                speed: _,
             } => {
                 // We need to know which mesh - get from hit's context
                 // For now, iterate and find matching mesh by checking if surface exists
@@ -362,41 +375,109 @@ fn apply_dab_for_move(
     }
 }
 
-/// Upload dirty tiles to GPU for UV surfaces.
+/// Upload dirty tiles to GPU for UV surfaces, compositing paint over original texture.
 fn upload_mesh_dirty_tiles(
     painting_res: Res<MeshPaintingResource>,
     mut images: ResMut<Assets<Image>>,
-    query: Query<(&PaintableMesh, &MeshPaintTexture)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut query: Query<(
+        &PaintableMesh,
+        &mut MeshPaintTexture,
+        Option<&MeshMaterial3d<StandardMaterial>>,
+    )>,
 ) {
-    for (paintable, paint_texture) in query.iter() {
+    for (paintable, mut paint_texture, material_handle) in query.iter_mut() {
         match paintable.storage_mode {
             MeshStorageMode::UvAtlas { .. } => {
                 if let Some(surface) = painting_res.get_uv_surface(paintable.mesh_id) {
-                    if surface.has_dirty_tiles() || paint_texture.needs_full_upload {
-                        // Upload entire texture for now
-                        // TODO: Implement partial tile upload like canvas planes
-                        if let Some(image) = images.get_mut(&paint_texture.image_handle) {
-                            let cpu_surface = surface.surface().surface();
-                            let width = cpu_surface.width as usize;
-                            let height = cpu_surface.height as usize;
+                    if !surface.has_dirty_tiles() && !paint_texture.needs_full_upload {
+                        continue;
+                    }
 
-                            let mut data = vec![0u8; width * height * 4];
-                            for y in 0..height {
-                                for x in 0..width {
-                                    if let Some(pixel) =
-                                        cpu_surface.get_pixel(x as u32, y as u32)
-                                    {
-                                        let idx = (y * width + x) * 4;
-                                        data[idx] = linear_to_srgb_u8(pixel[0]);
-                                        data[idx + 1] = linear_to_srgb_u8(pixel[1]);
-                                        data[idx + 2] = linear_to_srgb_u8(pixel[2]);
-                                        data[idx + 3] = (pixel[3] * 255.0) as u8;
+                    let cpu_surface = surface.surface().surface();
+                    let width = cpu_surface.width as usize;
+                    let height = cpu_surface.height as usize;
+
+                    // Get original texture data for compositing
+                    let original_data: Option<Vec<u8>> =
+                        paint_texture.original_texture.as_ref().and_then(|handle| {
+                            images.get(handle).and_then(|img| img.data.clone())
+                        });
+
+                    // Composite paint over original
+                    let mut data = vec![0u8; width * height * 4];
+                    for y in 0..height {
+                        for x in 0..width {
+                            let idx = (y * width + x) * 4;
+
+                            // Get original pixel (from texture or base color)
+                            let (orig_r, orig_g, orig_b, orig_a) =
+                                if let Some(ref orig) = original_data {
+                                    if idx + 3 < orig.len() {
+                                        (orig[idx], orig[idx + 1], orig[idx + 2], orig[idx + 3])
+                                    } else {
+                                        color_to_srgb_u8(paint_texture.original_base_color)
                                     }
+                                } else {
+                                    color_to_srgb_u8(paint_texture.original_base_color)
+                                };
+
+                            // Get paint pixel
+                            if let Some(paint_pixel) = cpu_surface.get_pixel(x as u32, y as u32) {
+                                let paint_alpha = paint_pixel[3];
+
+                                if paint_alpha > 0.001 {
+                                    // Alpha blend paint over original
+                                    let paint_r = linear_to_srgb_u8(paint_pixel[0]);
+                                    let paint_g = linear_to_srgb_u8(paint_pixel[1]);
+                                    let paint_b = linear_to_srgb_u8(paint_pixel[2]);
+                                    let paint_a = (paint_alpha * 255.0) as u8;
+
+                                    let alpha = paint_a as f32 / 255.0;
+                                    let inv_alpha = 1.0 - alpha;
+
+                                    data[idx] =
+                                        (paint_r as f32 * alpha + orig_r as f32 * inv_alpha) as u8;
+                                    data[idx + 1] =
+                                        (paint_g as f32 * alpha + orig_g as f32 * inv_alpha) as u8;
+                                    data[idx + 2] =
+                                        (paint_b as f32 * alpha + orig_b as f32 * inv_alpha) as u8;
+                                    data[idx + 3] = orig_a.max(paint_a);
+                                } else {
+                                    // No paint, use original
+                                    data[idx] = orig_r;
+                                    data[idx + 1] = orig_g;
+                                    data[idx + 2] = orig_b;
+                                    data[idx + 3] = orig_a;
                                 }
+                            } else {
+                                // No paint data, use original
+                                data[idx] = orig_r;
+                                data[idx + 1] = orig_g;
+                                data[idx + 2] = orig_b;
+                                data[idx + 3] = orig_a;
                             }
-                            image.data = Some(data);
                         }
                     }
+
+                    // Upload to GPU texture
+                    if let Some(image) = images.get_mut(&paint_texture.image_handle) {
+                        image.data = Some(data);
+                    }
+
+                    // Apply texture to material on first paint
+                    if !paint_texture.has_paint {
+                        if let Some(material_ref) = material_handle {
+                            if let Some(material) = materials.get_mut(&material_ref.0) {
+                                material.base_color_texture =
+                                    Some(paint_texture.image_handle.clone());
+                                material.base_color = Color::WHITE;
+                            }
+                        }
+                        paint_texture.has_paint = true;
+                    }
+
+                    paint_texture.needs_full_upload = false;
                 }
             }
             MeshStorageMode::Ptex { .. } => {
@@ -406,6 +487,16 @@ fn upload_mesh_dirty_tiles(
             }
         }
     }
+}
+
+/// Convert linear [f32; 4] color to sRGB (u8, u8, u8, u8).
+fn color_to_srgb_u8(color: [f32; 4]) -> (u8, u8, u8, u8) {
+    (
+        linear_to_srgb_u8(color[0]),
+        linear_to_srgb_u8(color[1]),
+        linear_to_srgb_u8(color[2]),
+        (color[3] * 255.0) as u8,
+    )
 }
 
 /// Convert linear color to sRGB u8.

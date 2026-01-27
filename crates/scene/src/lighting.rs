@@ -3,15 +3,25 @@
 //! Supports time-of-day simulation where sun position is calculated
 //! based on time (0-24 hours). Cloudiness affects ambient light color
 //! and sun intensity.
+//!
+//! With the `atmosphere` feature enabled, uses Bevy's built-in atmospheric
+//! scattering for realistic sky rendering.
 
+#[cfg(not(feature = "atmosphere"))]
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use pentimento_ipc::LightingSettings;
+
+#[cfg(feature = "atmosphere")]
+use bevy::prelude::light_consts::lux;
+#[cfg(feature = "atmosphere")]
+use bevy::pbr::ScatteringMedium;
 
 /// Calculate sun direction from time of day
 ///
 /// Time is in hours (0.0-24.0). Sunrise is at 6:00, sunset at 18:00.
 /// Returns a normalized direction vector pointing toward the sun.
+#[cfg(not(feature = "atmosphere"))]
 fn calculate_sun_direction_from_time(time_of_day: f32) -> Vec3 {
     // Normalize time to 0-1 range within daylight hours (6:00-18:00)
     // Before 6:00 or after 18:00, sun is below horizon
@@ -31,6 +41,7 @@ fn calculate_sun_direction_from_time(time_of_day: f32) -> Vec3 {
 }
 
 /// Calculate sun color based on time of day (warmer at sunrise/sunset)
+#[cfg(not(feature = "atmosphere"))]
 fn calculate_sun_color_from_time(time_of_day: f32) -> [f32; 3] {
     let clamped_time = time_of_day.clamp(6.0, 18.0);
     let normalized_time = (clamped_time - 6.0) / 12.0;
@@ -52,6 +63,7 @@ fn calculate_sun_color_from_time(time_of_day: f32) -> [f32; 3] {
 }
 
 /// Calculate ambient color based on time and cloudiness
+#[cfg(not(feature = "atmosphere"))]
 fn calculate_ambient_color(time_of_day: f32, cloudiness: f32) -> [f32; 3] {
     let clamped_time = time_of_day.clamp(6.0, 18.0);
     let normalized_time = (clamped_time - 6.0) / 12.0;
@@ -76,6 +88,7 @@ fn calculate_ambient_color(time_of_day: f32, cloudiness: f32) -> [f32; 3] {
 }
 
 /// Calculate sun intensity based on time and cloudiness
+#[cfg(not(feature = "atmosphere"))]
 fn calculate_sun_intensity(time_of_day: f32, cloudiness: f32, base_intensity: f32) -> f32 {
     let clamped_time = time_of_day.clamp(6.0, 18.0);
     let normalized_time = (clamped_time - 6.0) / 12.0;
@@ -120,6 +133,14 @@ impl SceneLighting {
     }
 }
 
+/// Resource tracking atmosphere rendering state (atmosphere feature only)
+#[cfg(feature = "atmosphere")]
+#[derive(Resource)]
+pub struct AtmosphereState {
+    /// Handle to the scattering medium asset
+    pub medium: Handle<ScatteringMedium>,
+}
+
 /// Plugin for configurable scene lighting
 pub struct LightingPlugin;
 
@@ -132,6 +153,40 @@ impl Plugin for LightingPlugin {
 }
 
 /// Spawn the sun light and ambient light
+#[cfg(feature = "atmosphere")]
+fn setup_lighting(
+    mut commands: Commands,
+    lighting: Res<SceneLighting>,
+    mut scattering_mediums: ResMut<Assets<ScatteringMedium>>,
+) {
+    let settings = &lighting.settings;
+
+    // Calculate initial sun rotation from time of day
+    // Sun rotates around X-axis: midnight=0, noon=PI
+    let sun_angle = (settings.time_of_day / 24.0) * std::f32::consts::TAU;
+
+    // Spawn directional light (sun) with raw sunlight - atmosphere will attenuate it
+    commands.spawn((
+        DirectionalLight {
+            illuminance: lux::RAW_SUNLIGHT,
+            color: Color::WHITE, // Atmosphere handles color tinting
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_rotation_x(sun_angle)),
+        SunLight,
+    ));
+
+    // Create and store the scattering medium for atmosphere
+    let medium = scattering_mediums.add(ScatteringMedium::default());
+    commands.insert_resource(AtmosphereState { medium });
+
+    // No GlobalAmbientLight - atmosphere IBL handles ambient lighting
+    info!("Scene lighting initialized with atmosphere");
+}
+
+/// Spawn the sun light and ambient light (non-atmosphere version)
+#[cfg(not(feature = "atmosphere"))]
 fn setup_lighting(mut commands: Commands, lighting: Res<SceneLighting>) {
     let settings = &lighting.settings;
 
@@ -170,7 +225,48 @@ fn setup_lighting(mut commands: Commands, lighting: Res<SceneLighting>) {
     info!("Scene lighting initialized");
 }
 
-/// Update lighting when settings change
+/// Update lighting when settings change (atmosphere version)
+#[cfg(feature = "atmosphere")]
+fn update_lighting(
+    mut lighting: ResMut<SceneLighting>,
+    mut sun_query: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
+) {
+    if !lighting.dirty {
+        return;
+    }
+
+    let use_time_of_day = lighting.settings.use_time_of_day;
+    let time_of_day = lighting.settings.time_of_day;
+    let cloudiness = lighting.settings.cloudiness;
+
+    for (mut light, mut transform) in sun_query.iter_mut() {
+        if use_time_of_day {
+            // Convert time_of_day (0-24h) to sun rotation angle
+            // Sun rotates around X-axis: midnight=0, noon=PI
+            let sun_angle = (time_of_day / 24.0) * std::f32::consts::TAU;
+            *transform = Transform::from_rotation(Quat::from_rotation_x(sun_angle));
+        } else {
+            // Use explicit direction from settings
+            let direction = Vec3::from_array(lighting.settings.sun_direction).normalize();
+            *transform = Transform::default().looking_to(-direction, Vec3::Y);
+        }
+
+        // With atmosphere, use raw sunlight - atmosphere handles attenuation
+        // Cloudiness could modulate illuminance slightly (cloud shadow effect)
+        let cloud_factor = 1.0 - (cloudiness * 0.3); // Up to 30% reduction for thick clouds
+        light.illuminance = lux::RAW_SUNLIGHT * cloud_factor;
+    }
+
+    lighting.dirty = false;
+    info!(
+        "Scene lighting updated (atmosphere): time={:.1}h, cloudiness={:.0}%",
+        time_of_day,
+        cloudiness * 100.0
+    );
+}
+
+/// Update lighting when settings change (non-atmosphere version)
+#[cfg(not(feature = "atmosphere"))]
 fn update_lighting(
     mut lighting: ResMut<SceneLighting>,
     mut sun_query: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,

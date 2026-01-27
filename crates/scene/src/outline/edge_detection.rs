@@ -235,8 +235,8 @@ impl FromWorld for EdgeDetectionPipeline {
                         shader_defs: vec![],
                         entry_point: Some("fragment".into()),
                         targets: vec![Some(ColorTargetState {
-                            // Use SDR format for WebGL2 compatibility
-                            format: TextureFormat::Rgba8UnormSrgb,
+                            // Use HDR format to match ViewTarget (atmosphere enables HDR)
+                            format: TextureFormat::Rgba16Float,
                             blend: None,
                             write_mask: ColorWrites::ALL,
                         })],

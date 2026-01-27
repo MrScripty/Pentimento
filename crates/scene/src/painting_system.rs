@@ -15,7 +15,8 @@ use bevy::render::{
 };
 use std::collections::HashMap;
 
-use painting::{BrushPreset, PaintingPipeline};
+use painting::{BlendMode, BrushPreset, PaintingPipeline};
+use pentimento_ipc::BlendMode as IpcBlendMode;
 
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
 use crate::paint_mode::PaintEvent;
@@ -31,6 +32,8 @@ pub struct PaintingResource {
     pub brush_color: [f32; 4],
     /// Current brush preset
     pub brush_preset: BrushPreset,
+    /// Current blend mode
+    pub blend_mode: BlendMode,
 }
 
 impl Default for PaintingResource {
@@ -46,15 +49,20 @@ impl PaintingResource {
             pipelines: HashMap::new(),
             brush_color: [0.0, 0.0, 0.0, 1.0], // Default black
             brush_preset: BrushPreset::default(),
+            blend_mode: BlendMode::Normal,
         }
     }
 
     /// Get or create a pipeline for a canvas plane
     pub fn get_or_create_pipeline(&mut self, plane_id: u32, width: u32, height: u32) -> &mut PaintingPipeline {
+        let brush_color = self.brush_color;
+        let brush_preset = self.brush_preset.clone();
+        let blend_mode = self.blend_mode;
         self.pipelines.entry(plane_id).or_insert_with(|| {
             let mut pipeline = PaintingPipeline::new(width, height);
-            pipeline.set_color(self.brush_color);
-            pipeline.set_brush(self.brush_preset.clone());
+            pipeline.set_color(brush_color);
+            pipeline.set_brush(brush_preset);
+            pipeline.set_blend_mode(blend_mode);
             // Clear to transparent by default (glass effect - see scene behind)
             pipeline.clear([0.0, 0.0, 0.0, 0.0]);
             pipeline
@@ -85,6 +93,44 @@ impl PaintingResource {
         for pipeline in self.pipelines.values_mut() {
             pipeline.set_brush(preset.clone());
         }
+    }
+
+    /// Set blend mode for all pipelines
+    pub fn set_blend_mode(&mut self, mode: BlendMode) {
+        self.blend_mode = mode;
+        for pipeline in self.pipelines.values_mut() {
+            pipeline.set_blend_mode(mode);
+        }
+    }
+
+    /// Set blend mode from IPC type (converts to painting::BlendMode internally)
+    pub fn set_blend_mode_ipc(&mut self, mode: IpcBlendMode) {
+        let paint_mode = match mode {
+            IpcBlendMode::Normal => BlendMode::Normal,
+            IpcBlendMode::Erase => BlendMode::Erase,
+        };
+        self.set_blend_mode(paint_mode);
+    }
+
+    /// Undo the last stroke on a specific pipeline
+    pub fn undo(&mut self, plane_id: u32) -> bool {
+        if let Some(pipeline) = self.pipelines.get_mut(&plane_id) {
+            pipeline.undo()
+        } else {
+            false
+        }
+    }
+
+    /// Undo the last stroke on any pipeline that has undo available
+    /// Returns true if an undo was performed
+    pub fn undo_any(&mut self) -> bool {
+        // Try to undo on each pipeline, starting with those that have undo available
+        for pipeline in self.pipelines.values_mut() {
+            if pipeline.can_undo() {
+                return pipeline.undo();
+            }
+        }
+        false
     }
 }
 

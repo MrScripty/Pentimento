@@ -54,7 +54,4 @@ pub fn color_to_entity_index(color: Vec4) -> u32 {
 
 /// Component marking an entity for ID buffer rendering
 #[derive(Component)]
-pub struct RenderToIdBuffer {
-    /// The entity's ID color
-    pub entity_color: Vec4,
-}
+pub struct RenderToIdBuffer;
