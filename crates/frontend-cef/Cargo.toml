@@ -1,0 +1,22 @@
+[package]
+name = "pentimento-frontend-cef"
+version = "0.1.0"
+edition = "2021"
+description = "CEF (Chromium Embedded Framework) backend for Pentimento"
+
+# Empty workspace to allow standalone compilation for verification
+# Remove this when adding to workspace.members in root Cargo.toml
+[workspace]
+
+[dependencies]
+pentimento-frontend-core = { path = "../frontend-core" }
+pentimento-ipc = { path = "../ipc" }
+
+# CEF bindings
+cef = "143.7"
+
+# Utilities
+urlencoding = "2.1"
+tokio = { version = "1.44", features = ["sync"] }
+serde_json = "1.0"
+tracing = "0.1"

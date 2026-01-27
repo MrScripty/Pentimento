@@ -1,0 +1,14 @@
+[package]
+name = "pentimento-frontend-dioxus"
+version = "0.1.0"
+edition.workspace = true
+description = "Dioxus frontend backend implementation for Pentimento"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pentimento-frontend-core = { path = "../frontend-core" }
+pentimento-ipc = { path = "../ipc" }
+pentimento-dioxus-ui = { path = "../dioxus-ui" }
+
+# Logging
+tracing = "0.1"

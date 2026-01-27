@@ -1,0 +1,30 @@
+[package]
+name = "pentimento-frontend-webkit"
+# NOTE: Change to version.workspace = true when added to workspace
+version = "0.1.0"
+# NOTE: Change to edition.workspace = true when added to workspace
+edition = "2024"
+# NOTE: Change to license.workspace = true when added to workspace
+license = "MIT"
+description = "WebKit/capture mode backend for Pentimento"
+
+# NOTE: Remove this empty workspace table when adding to root workspace
+[workspace]
+
+[dependencies]
+pentimento-frontend-core = { path = "../frontend-core" }
+pentimento-ipc = { path = "../ipc" }
+
+# NOTE: Change to workspace = true when added to workspace
+wry = "0.53"
+tokio = { version = "1.44", features = ["sync", "rt-multi-thread", "macros"] }
+serde_json = "1.0"
+tracing = "0.1"
+image = "0.25"
+thiserror = "2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+cairo-rs = { version = "0.18", features = ["png", "use_glib"] }
+gio = "0.18"
