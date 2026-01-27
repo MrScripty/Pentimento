@@ -341,11 +341,6 @@ impl LinuxWebview {
         self.state == WebviewState::Ready
     }
 
-    /// Get the current state (for debugging)
-    pub fn state(&self) -> WebviewState {
-        self.state
-    }
-
     pub fn capture(&mut self) -> Option<image::RgbaImage> {
         // Check if we have a cached snapshot ready
         if let Some(img) = self.snapshot_cache.borrow_mut().take() {

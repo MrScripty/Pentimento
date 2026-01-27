@@ -175,6 +175,21 @@ impl BlitzDocument {
         had_updates
     }
 
+    /// Mark root scope dirty and poll to trigger incremental re-render.
+    ///
+    /// Use this after sending external messages that the component needs to process.
+    /// Unlike `force_render()` which uses `rebuild()` (appends nodes), this uses
+    /// `render_immediate()` which does incremental DOM diffing - no duplication.
+    pub fn mark_dirty_and_poll(&mut self) {
+        info!("mark_dirty_and_poll: marking root scope dirty");
+
+        // Mark root scope dirty so poll() sees work to do
+        self.doc.vdom.mark_dirty(dioxus_core::ScopeId::ROOT);
+
+        // Poll will now call render_immediate() for incremental update
+        self.poll();
+    }
+
     /// Force a VirtualDom render even if there's no pending work.
     ///
     /// Use this after sending external messages that the component needs to process.
@@ -182,25 +197,55 @@ impl BlitzDocument {
     /// channel messages don't trigger signal changes - the component needs to
     /// render first to poll the channel.
     ///
-    /// Uses `rebuild()` instead of `mark_dirty() + poll()` because poll() in
-    /// dioxus-native-dom only processes async work, not dirty scopes. rebuild()
-    /// forces a complete component tree rebuild that guarantees the component
-    /// function executes.
+    /// Uses `initial_build()` which calls `vdom.rebuild()` to force a complete
+    /// component tree rebuild. This guarantees the component function executes
+    /// and reads channel messages.
+    ///
+    /// IMPORTANT: `rebuild()` APPENDS new nodes to the root instead of replacing.
+    /// We must clear the main element's children first to prevent UI duplication.
     pub fn force_render(&mut self) {
-        info!("force_render: using rebuild() to force component execution");
+        info!("force_render: clearing DOM and rebuilding");
 
-        // Use initial_build() which calls vdom.rebuild() to force a complete
-        // component tree rebuild. This is the same method used for initial setup,
-        // but it's safe to call again - rebuild() regenerates the entire VNode tree.
-        //
-        // Unlike poll() + render_immediate(), rebuild() guarantees the component
-        // function executes from start to finish, reading channel messages.
+        // Clear main element's children before rebuild to prevent duplication.
+        // rebuild() APPENDS to the root, so we must clear first.
+        {
+            let mut inner = self.doc.inner.borrow_mut();
+            // Find main element (html → body → main)
+            if let Some(main_id) = Self::find_main_element_id(&inner) {
+                inner.mutate().remove_and_drop_all_children(main_id);
+            }
+        }
+
+        // Now rebuild will populate a clean main element
         self.doc.initial_build();
 
         // Re-resolve layout with potentially updated DOM
         self.doc.inner.borrow_mut().resolve(0.0);
 
         info!("force_render: rebuild completed");
+    }
+
+    /// Find the main element ID by traversing the DOM (html → body → main).
+    fn find_main_element_id(doc: &blitz_dom::BaseDocument) -> Option<usize> {
+        let root = doc.root_node();
+        for &child_id in &root.children {
+            if let Some(child) = doc.get_node(child_id) {
+                if let Some(el) = child.element_data() {
+                    if el.name.local.as_ref() == "body" {
+                        for &body_child_id in &child.children {
+                            if let Some(body_child) = doc.get_node(body_child_id) {
+                                if let Some(el) = body_child.element_data() {
+                                    if el.name.local.as_ref() == "main" {
+                                        return Some(body_child_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Process pending document messages from the DocumentProxy.

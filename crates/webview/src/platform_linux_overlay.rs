@@ -269,7 +269,7 @@ impl LinuxOverlayWebview {
 
         // Add toolbar rectangle (full width, at top)
         let toolbar_rect = cairo::RectangleInt::new(0, 0, w, toolbar_height);
-        region.union_rectangle(&toolbar_rect);
+        let _ = region.union_rectangle(&toolbar_rect);
 
         // Add sidebar rectangle (right side, below toolbar)
         let sidebar_rect = cairo::RectangleInt::new(
@@ -278,7 +278,7 @@ impl LinuxOverlayWebview {
             sidebar_width,
             h - sidebar_top - sidebar_margin,
         );
-        region.union_rectangle(&sidebar_rect);
+        let _ = region.union_rectangle(&sidebar_rect);
 
         // Set the input shape - only these regions will receive input
         // Everything else (the 3D viewport) will be click-through

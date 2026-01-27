@@ -4,8 +4,9 @@
 
 use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, BevyToUi, BlendMode,
-    CameraCommand, DiffusionRequest, LightingSettings, MaterialCommand, ObjectCommand,
-    PaintCommand, PrimitiveType, UiToBevy,
+    CameraCommand, DiffusionRequest, EditMode, LightingSettings, MaterialCommand,
+    MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand, PrimitiveType,
+    UiToBevy,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -14,11 +15,37 @@ use std::sync::{
 
 /// Shared state that persists between renders.
 /// Used for state that needs to be set from Bevy and read by the component.
-#[derive(Default, Clone)]
+#[derive(Clone, PartialEq)]
 pub struct SharedUiState {
     /// Show add object menu at position
     pub show_add_menu: bool,
     pub add_menu_position: (f32, f32),
+    /// Current edit mode (None/Paint/MeshEdit)
+    pub edit_mode: EditMode,
+    /// Mesh edit mode state (only valid when edit_mode == MeshEdit)
+    pub mesh_edit_active: bool,
+    pub mesh_selection_mode: MeshSelectionMode,
+    pub mesh_edit_tool: MeshEditTool,
+    /// Selection counts
+    pub selected_vertex_count: usize,
+    pub selected_edge_count: usize,
+    pub selected_face_count: usize,
+}
+
+impl Default for SharedUiState {
+    fn default() -> Self {
+        Self {
+            show_add_menu: false,
+            add_menu_position: (0.0, 0.0),
+            edit_mode: EditMode::None,
+            mesh_edit_active: false,
+            mesh_selection_mode: MeshSelectionMode::Vertex,
+            mesh_edit_tool: MeshEditTool::Select,
+            selected_vertex_count: 0,
+            selected_edge_count: 0,
+            selected_face_count: 0,
+        }
+    }
 }
 
 /// Bridge for sending messages from Dioxus UI to Bevy
@@ -93,6 +120,14 @@ impl DioxusBridge {
         state.show_add_menu = show;
     }
 
+    /// Open the add menu at a specific position.
+    /// This is called by the component when Shift+A is pressed.
+    pub fn open_add_menu_at(&self, position: (f32, f32)) {
+        let mut state = self.shared_state.lock().unwrap();
+        state.show_add_menu = true;
+        state.add_menu_position = position;
+    }
+
     /// Try to receive a message from Bevy (non-blocking)
     pub fn try_recv_from_bevy(&self) -> Option<BevyToUi> {
         let lock_result = self.from_bevy.lock();
@@ -101,12 +136,7 @@ impl DioxusBridge {
             return None;
         }
         let guard = lock_result.unwrap();
-        let recv_result = guard.try_recv();
-        match &recv_result {
-            Ok(msg) => tracing::info!("try_recv_from_bevy: received {:?}", msg),
-            Err(e) => tracing::info!("try_recv_from_bevy: channel empty/disconnected: {:?}", e),
-        }
-        recv_result.ok()
+        guard.try_recv().ok()
     }
 
     fn send(&self, msg: UiToBevy) {
@@ -256,6 +286,42 @@ impl DioxusBridge {
         self.send(UiToBevy::PaintCommand(PaintCommand::Undo));
     }
 
+    /// Enable/disable live projection mode (paint projects to meshes in real-time)
+    pub fn set_live_projection(&self, enabled: bool) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetLiveProjection { enabled }));
+    }
+
+    /// Project current canvas contents to all visible meshes (one-shot)
+    pub fn project_to_scene(&self) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::ProjectToScene));
+    }
+
+    // ========================================================================
+    // Mesh edit commands
+    // ========================================================================
+
+    /// Set mesh edit selection mode (Vertex/Edge/Face)
+    pub fn set_mesh_selection_mode(&self, mode: MeshSelectionMode) {
+        self.send(UiToBevy::MeshEditCommand(MeshEditCommand::SetSelectionMode(
+            mode,
+        )));
+    }
+
+    /// Set mesh edit tool
+    pub fn set_mesh_edit_tool(&self, tool: MeshEditTool) {
+        self.send(UiToBevy::MeshEditCommand(MeshEditCommand::SetTool(tool)));
+    }
+
+    /// Select all mesh elements
+    pub fn mesh_select_all(&self) {
+        self.send(UiToBevy::MeshEditCommand(MeshEditCommand::SelectAll));
+    }
+
+    /// Deselect all mesh elements
+    pub fn mesh_deselect_all(&self) {
+        self.send(UiToBevy::MeshEditCommand(MeshEditCommand::DeselectAll));
+    }
+
     // ========================================================================
     // UI dirty notification
     // ========================================================================
@@ -284,25 +350,47 @@ impl DioxusBridgeHandle {
     }
 
     /// Send a message to the UI and set the pending flag.
-    /// For ShowAddObjectMenu, also updates shared state directly.
+    /// For certain messages, also updates shared state directly.
     pub fn send(&self, msg: BevyToUi) {
-        tracing::info!("DioxusBridgeHandle::send() sending {:?}", msg);
-
-        // For ShowAddObjectMenu, update shared state directly so it's available immediately
-        if let BevyToUi::ShowAddObjectMenu { show, position } = &msg {
+        // Update shared state directly for certain messages
+        {
             let mut state = self.shared_state.lock().unwrap();
-            state.show_add_menu = *show;
-            if let Some([x, y]) = position {
-                state.add_menu_position = (*x, *y);
+            match &msg {
+                BevyToUi::ShowAddObjectMenu { show, position } => {
+                    state.show_add_menu = *show;
+                    if let Some([x, y]) = position {
+                        state.add_menu_position = (*x, *y);
+                    }
+                }
+                BevyToUi::EditModeChanged { mode } => {
+                    state.edit_mode = *mode;
+                }
+                BevyToUi::MeshEditModeChanged {
+                    active,
+                    selection_mode,
+                    tool,
+                } => {
+                    state.mesh_edit_active = *active;
+                    state.mesh_selection_mode = *selection_mode;
+                    state.mesh_edit_tool = *tool;
+                }
+                BevyToUi::MeshEditSelectionChanged {
+                    vertex_count,
+                    edge_count,
+                    face_count,
+                } => {
+                    state.selected_vertex_count = *vertex_count;
+                    state.selected_edge_count = *edge_count;
+                    state.selected_face_count = *face_count;
+                }
+                _ => {}
             }
-            tracing::info!("DioxusBridgeHandle: Updated shared state for add menu");
         }
 
         match self.to_ui.send(msg) {
             Ok(()) => {
                 // Set pending flag so component knows to check for messages
                 self.pending_messages.store(true, Ordering::Release);
-                tracing::info!("DioxusBridgeHandle::send() success, pending flag set");
             }
             Err(e) => tracing::error!("DioxusBridgeHandle::send() failed: {:?}", e),
         }

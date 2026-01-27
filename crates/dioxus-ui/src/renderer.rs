@@ -20,12 +20,6 @@ use vello::kurbo::{Affine, RoundedRect};
 use vello::peniko::{Brush, Color, Fill};
 use vello::{AaConfig, RenderParams, Renderer, RendererOptions, Scene};
 
-/// Configuration for the Vello renderer
-pub struct VelloRendererConfig {
-    pub width: u32,
-    pub height: u32,
-}
-
 /// Vello-based renderer that draws UI to a GPU texture
 ///
 /// This renderer uses Vello's GPU compute pipeline to render 2D graphics.

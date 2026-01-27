@@ -81,6 +81,11 @@ pub struct AddObjectMenuProps {
 
 #[component]
 pub fn AddObjectMenu(props: AddObjectMenuProps) -> Element {
+    // Early return pattern (like PaintToolbar) - more reliable for conditional rendering
+    if !props.show {
+        return rsx! {};
+    }
+
     let primitives = [
         (PrimitiveType::Cube, "Cube"),
         (PrimitiveType::Sphere, "Sphere"),
@@ -97,54 +102,52 @@ pub fn AddObjectMenu(props: AddObjectMenuProps) -> Element {
     };
 
     rsx! {
-        if props.show {
-            style { {ADD_MENU_CSS} }
-            // Overlay container - position:absolute inside app-root (position:relative)
-            // This works with Blitz hit-testing
+        style { {ADD_MENU_CSS} }
+        // Overlay container - position:absolute inside app-root (position:relative)
+        // This works with Blitz hit-testing
+        div {
+            class: "add-menu-overlay",
+            // Backdrop for click-outside-to-close
             div {
-                class: "add-menu-overlay",
-                // Backdrop for click-outside-to-close
-                div {
-                    class: "add-menu-backdrop",
-                    onclick: handle_backdrop_click,
-                }
-                // Menu panel positioned at cursor
-                div {
-                    class: "add-menu panel",
-                    style: "left: {props.position.0}px; top: {props.position.1}px;",
-                    onclick: move |e| e.stop_propagation(),
-                    h3 { class: "menu-title", "Add Object" }
-                    div { class: "menu-items",
-                        for (prim_type, name) in primitives.iter() {
-                            {
-                                let bridge = props.bridge.clone();
-                                let on_close = props.on_close.clone();
-                                let prim = *prim_type;
-                                rsx! {
-                                    button {
-                                        class: "menu-item",
-                                        onclick: move |_| {
-                                            bridge.add_object(prim, None, None);
-                                            on_close.call(());
-                                        },
-                                        "{name}"
-                                    }
-                                }
-                            }
-                        }
-                        div { class: "menu-divider" }
+                class: "add-menu-backdrop",
+                onclick: handle_backdrop_click,
+            }
+            // Menu panel positioned at cursor
+            div {
+                class: "add-menu panel",
+                style: "left: {props.position.0}px; top: {props.position.1}px;",
+                onclick: move |e| e.stop_propagation(),
+                h3 { class: "menu-title", "Add Object" }
+                div { class: "menu-items",
+                    for (prim_type, name) in primitives.iter() {
                         {
                             let bridge = props.bridge.clone();
                             let on_close = props.on_close.clone();
+                            let prim = *prim_type;
                             rsx! {
                                 button {
                                     class: "menu-item",
                                     onclick: move |_| {
-                                        bridge.add_paint_canvas(None, None);
+                                        bridge.add_object(prim, None, None);
                                         on_close.call(());
                                     },
-                                    "Paint Canvas"
+                                    "{name}"
                                 }
+                            }
+                        }
+                    }
+                    div { class: "menu-divider" }
+                    {
+                        let bridge = props.bridge.clone();
+                        let on_close = props.on_close.clone();
+                        rsx! {
+                            button {
+                                class: "menu-item",
+                                onclick: move |_| {
+                                    bridge.add_paint_canvas(None, None);
+                                    on_close.call(());
+                                },
+                                "Paint Canvas"
                             }
                         }
                     }

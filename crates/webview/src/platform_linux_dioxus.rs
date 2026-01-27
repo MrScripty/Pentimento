@@ -27,12 +27,8 @@ use tracing::{debug, info};
 /// Dioxus renderer state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DioxusState {
-    /// Dioxus is initializing
-    Initializing,
     /// Ready for capture
     Ready,
-    /// Dioxus encountered an error
-    Error,
 }
 
 /// Native Dioxus-based UI renderer
@@ -62,7 +58,7 @@ impl LinuxDioxusRenderer {
         info!("Creating Dioxus renderer {}x{}", size.0, size.1);
 
         // Create the IPC bridge
-        let (bridge, bridge_handle) = DioxusBridge::new();
+        let (_bridge, bridge_handle) = DioxusBridge::new();
 
         // For now, we'll render a simple transparent overlay
         // The full Dioxus integration will require running the VirtualDOM

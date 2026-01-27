@@ -4,20 +4,23 @@ use dioxus::prelude::*;
 
 use crate::bridge::DioxusBridge;
 use crate::components::color_picker::ColorPicker;
+use crate::components::Slider;
 
 const PAINT_SIDE_PANEL_CSS: &str = r#"
 .paint-side-panel {
-    position: fixed;
-    top: 56px;
-    right: 8px;
-    bottom: 8px;
+    /* Normal flow layout - Blitz hit testing doesn't work with position:fixed */
+    /* Use flexbox layout from parent to position on right side */
     width: 300px;
+    margin: 8px;
     border-radius: 8px;
     overflow-y: auto;
-    z-index: 50;
     background: rgba(30, 30, 30, 0.95);
     backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
+    pointer-events: auto;
+    /* position:relative + z-index ensures this is above the keyboard-focus-trap overlay */
+    position: relative;
+    z-index: 10;
 }
 
 .section {
@@ -63,24 +66,6 @@ const PAINT_SIDE_PANEL_CSS: &str = r#"
     color: rgba(255, 255, 255, 0.6);
 }
 
-.slider {
-    width: 100%;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 2px;
-    appearance: none;
-    cursor: pointer;
-}
-
-.slider::-webkit-slider-thumb {
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    background: white;
-    border-radius: 50%;
-    cursor: pointer;
-}
-
 .property-value {
     font-size: 11px;
     font-family: monospace;
@@ -109,33 +94,29 @@ pub fn PaintSidePanel(props: PaintSidePanelProps) -> Element {
         bridge.set_brush_color(color);
     };
 
-    // Brush size handler
-    let bridge = props.bridge.clone();
-    let handle_size_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            brush_size.set(value);
-            bridge.set_brush_size(value);
-        }
+    // Brush size handler - takes f32 directly for custom Slider
+    let bridge_size = props.bridge.clone();
+    let handle_size_change = move |value: f32| {
+        brush_size.set(value);
+        bridge_size.set_brush_size(value);
     };
 
     // Brush opacity handler
-    let bridge = props.bridge.clone();
-    let handle_opacity_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            let normalized = value / 100.0;
-            brush_opacity.set(normalized);
-            bridge.set_brush_opacity(normalized);
-        }
+    let bridge_opacity = props.bridge.clone();
+    let handle_opacity_change = move |value: f32| {
+        // value is 0-100, normalize to 0-1
+        let normalized = value / 100.0;
+        brush_opacity.set(normalized);
+        bridge_opacity.set_brush_opacity(normalized);
     };
 
     // Brush hardness handler
-    let bridge = props.bridge.clone();
-    let handle_hardness_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            let normalized = value / 100.0;
-            brush_hardness.set(normalized);
-            bridge.set_brush_hardness(normalized);
-        }
+    let bridge_hardness = props.bridge.clone();
+    let handle_hardness_change = move |value: f32| {
+        // value is 0-100, normalize to 0-1
+        let normalized = value / 100.0;
+        brush_hardness.set(normalized);
+        bridge_hardness.set_brush_hardness(normalized);
     };
 
     rsx! {
@@ -157,42 +138,36 @@ pub fn PaintSidePanel(props: PaintSidePanelProps) -> Element {
                 div { class: "property-group",
                     div { class: "property",
                         label { class: "property-label", "Size" }
-                        input {
-                            r#type: "range",
-                            min: "1",
-                            max: "100",
-                            step: "1",
-                            value: "{brush_size}",
-                            oninput: handle_size_change,
-                            class: "slider"
+                        Slider {
+                            value: brush_size(),
+                            min: 1.0,
+                            max: 100.0,
+                            step: 1.0,
+                            on_change: handle_size_change
                         }
                         span { class: "property-value", "{brush_size:.0}px" }
                     }
 
                     div { class: "property",
                         label { class: "property-label", "Opacity" }
-                        input {
-                            r#type: "range",
-                            min: "0",
-                            max: "100",
-                            step: "1",
-                            value: "{brush_opacity() * 100.0}",
-                            oninput: handle_opacity_change,
-                            class: "slider"
+                        Slider {
+                            value: brush_opacity() * 100.0,
+                            min: 0.0,
+                            max: 100.0,
+                            step: 1.0,
+                            on_change: handle_opacity_change
                         }
                         span { class: "property-value", "{(brush_opacity() * 100.0) as i32}%" }
                     }
 
                     div { class: "property",
                         label { class: "property-label", "Hardness" }
-                        input {
-                            r#type: "range",
-                            min: "0",
-                            max: "100",
-                            step: "1",
-                            value: "{brush_hardness() * 100.0}",
-                            oninput: handle_hardness_change,
-                            class: "slider"
+                        Slider {
+                            value: brush_hardness() * 100.0,
+                            min: 0.0,
+                            max: 100.0,
+                            step: 1.0,
+                            on_change: handle_hardness_change
                         }
                         span { class: "property-value", "{(brush_hardness() * 100.0) as i32}%" }
                     }

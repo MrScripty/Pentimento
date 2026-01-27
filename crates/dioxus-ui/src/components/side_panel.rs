@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use pentimento_ipc::{AmbientOcclusionSettings, LightingSettings, PrimitiveType};
 
 use crate::bridge::DioxusBridge;
+use crate::components::Slider;
 
 const SIDE_PANEL_CSS: &str = r#"
 .side-panel {
@@ -17,6 +18,9 @@ const SIDE_PANEL_CSS: &str = r#"
     backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
     pointer-events: auto;
+    /* position:relative + z-index ensures this is above the keyboard-focus-trap overlay */
+    position: relative;
+    z-index: 10;
 }
 
 .section {
@@ -74,24 +78,6 @@ const SIDE_PANEL_CSS: &str = r#"
 .property-label {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.6);
-}
-
-.slider {
-    width: 100%;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 2px;
-    appearance: none;
-    cursor: pointer;
-}
-
-.slider::-webkit-slider-thumb {
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    background: white;
-    border-radius: 50%;
-    cursor: pointer;
 }
 
 .checkbox {
@@ -166,13 +152,6 @@ const SIDE_PANEL_CSS: &str = r#"
 }
 "#;
 
-#[derive(Clone, Default)]
-pub struct MaterialProps {
-    pub base_color: [f32; 4],
-    pub metallic: f32,
-    pub roughness: f32,
-}
-
 #[derive(Props, Clone, PartialEq)]
 pub struct SidePanelProps {
     pub selected_objects: Vec<String>,
@@ -205,84 +184,69 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
     // Add Object section state (internal - popup menu is the primary way to add objects)
     let mut add_objects_open = use_signal(|| false);
 
-    // Material handlers
-    let bridge = props.bridge.clone();
-    let selected = props.selected_objects.clone();
-    let handle_metallic_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            metallic.set(value);
-            if let Some(id) = selected.first() {
-                bridge.update_material_property(
-                    id.clone(),
-                    "metallic".to_string(),
-                    serde_json::json!(value),
-                );
-            }
+    // Material handlers - take f32 directly for custom Slider component
+    let bridge_metallic = props.bridge.clone();
+    let selected_metallic = props.selected_objects.clone();
+    let handle_metallic_change = move |value: f32| {
+        metallic.set(value);
+        if let Some(id) = selected_metallic.first() {
+            bridge_metallic.update_material_property(
+                id.clone(),
+                "metallic".to_string(),
+                serde_json::json!(value),
+            );
         }
     };
 
-    let bridge = props.bridge.clone();
-    let selected = props.selected_objects.clone();
-    let handle_roughness_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            roughness.set(value);
-            if let Some(id) = selected.first() {
-                bridge.update_material_property(
-                    id.clone(),
-                    "roughness".to_string(),
-                    serde_json::json!(value),
-                );
-            }
+    let bridge_roughness = props.bridge.clone();
+    let selected_roughness = props.selected_objects.clone();
+    let handle_roughness_change = move |value: f32| {
+        roughness.set(value);
+        if let Some(id) = selected_roughness.first() {
+            bridge_roughness.update_material_property(
+                id.clone(),
+                "roughness".to_string(),
+                serde_json::json!(value),
+            );
         }
     };
 
     // Lighting handlers
-    let bridge = props.bridge.clone();
-    let handle_time_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            time_of_day.set(value);
-            bridge.update_lighting(LightingSettings {
-                sun_direction: [-0.5, -0.7, -0.5],
-                sun_color: [1.0, 0.98, 0.95],
-                sun_intensity: 10000.0,
-                ambient_color: [0.6, 0.7, 1.0],
-                ambient_intensity: 500.0,
-                time_of_day: value,
-                cloudiness: cloudiness(),
-                use_time_of_day: true,
-            });
-        }
-    };
-
-    let bridge = props.bridge.clone();
-    let handle_cloudiness_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            let normalized = value / 100.0;
-            cloudiness.set(normalized);
-            bridge.update_lighting(LightingSettings {
-                sun_direction: [-0.5, -0.7, -0.5],
-                sun_color: [1.0, 0.98, 0.95],
-                sun_intensity: 10000.0,
-                ambient_color: [0.6, 0.7, 1.0],
-                ambient_intensity: 500.0,
-                time_of_day: time_of_day(),
-                cloudiness: normalized,
-                use_time_of_day: true,
-            });
-        }
-    };
-
-    // AO handlers
-    let bridge = props.bridge.clone();
-    let handle_ao_enabled_change = move |evt: Event<FormData>| {
-        let checked = evt.value() == "true";
-        ao_enabled.set(checked);
-        bridge.update_ambient_occlusion(AmbientOcclusionSettings {
-            enabled: checked,
-            quality_level: ao_quality(),
-            constant_object_thickness: ao_intensity(),
+    let bridge_time = props.bridge.clone();
+    let handle_time_change = move |value: f32| {
+        time_of_day.set(value);
+        bridge_time.update_lighting(LightingSettings {
+            sun_direction: [-0.5, -0.7, -0.5],
+            sun_color: [1.0, 0.98, 0.95],
+            sun_intensity: 10000.0,
+            ambient_color: [0.6, 0.7, 1.0],
+            ambient_intensity: 500.0,
+            time_of_day: value,
+            cloudiness: cloudiness(),
+            use_time_of_day: true,
         });
     };
+
+    let bridge_cloud = props.bridge.clone();
+    let handle_cloudiness_change = move |value: f32| {
+        // value is 0-100, normalize to 0-1
+        let normalized = value / 100.0;
+        cloudiness.set(normalized);
+        bridge_cloud.update_lighting(LightingSettings {
+            sun_direction: [-0.5, -0.7, -0.5],
+            sun_color: [1.0, 0.98, 0.95],
+            sun_intensity: 10000.0,
+            ambient_color: [0.6, 0.7, 1.0],
+            ambient_intensity: 500.0,
+            time_of_day: time_of_day(),
+            cloudiness: normalized,
+            use_time_of_day: true,
+        });
+    };
+
+    // AO handlers - use bridge clone for structural toggle pattern
+    // (Blitz handles DOM add/remove but not attribute updates)
+    let bridge_ao_toggle = props.bridge.clone();
 
     let bridge = props.bridge.clone();
     let handle_ao_quality_change = move |evt: Event<FormData>| {
@@ -296,16 +260,14 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
         }
     };
 
-    let bridge = props.bridge.clone();
-    let handle_ao_intensity_change = move |evt: Event<FormData>| {
-        if let Ok(value) = evt.value().parse::<f32>() {
-            ao_intensity.set(value);
-            bridge.update_ambient_occlusion(AmbientOcclusionSettings {
-                enabled: ao_enabled(),
-                quality_level: ao_quality(),
-                constant_object_thickness: value,
-            });
-        }
+    let bridge_ao_intensity = props.bridge.clone();
+    let handle_ao_intensity_change = move |value: f32| {
+        ao_intensity.set(value);
+        bridge_ao_intensity.update_ambient_occlusion(AmbientOcclusionSettings {
+            enabled: ao_enabled(),
+            quality_level: ao_quality(),
+            constant_object_thickness: value,
+        });
     };
 
     rsx! {
@@ -387,28 +349,24 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
 
                         div { class: "property",
                             label { class: "property-label", "Metallic" }
-                            input {
-                                r#type: "range",
-                                min: "0",
-                                max: "1",
-                                step: "0.01",
-                                value: "{metallic}",
-                                oninput: handle_metallic_change,
-                                class: "slider"
+                            Slider {
+                                value: metallic(),
+                                min: 0.0,
+                                max: 1.0,
+                                step: 0.01,
+                                on_change: handle_metallic_change
                             }
                             span { class: "property-value", "{metallic:.2}" }
                         }
 
                         div { class: "property",
                             label { class: "property-label", "Roughness" }
-                            input {
-                                r#type: "range",
-                                min: "0",
-                                max: "1",
-                                step: "0.01",
-                                value: "{roughness}",
-                                oninput: handle_roughness_change,
-                                class: "slider"
+                            Slider {
+                                value: roughness(),
+                                min: 0.0,
+                                max: 1.0,
+                                step: 0.01,
+                                on_change: handle_roughness_change
                             }
                             span { class: "property-value", "{roughness:.2}" }
                         }
@@ -420,33 +378,38 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
             section { class: "section",
                 h2 { class: "section-title", "Lighting" }
 
+                // DEBUG: Test button to verify clicks work in this area
+                button {
+                    style: "background: red; color: white; padding: 8px; margin: 8px;",
+                    onclick: move |_| {
+                        tracing::info!("TEST BUTTON CLICKED!");
+                    },
+                    "Click Test"
+                }
+
                 div { class: "property-group",
                     h3 { class: "group-title", "Sun / Sky" }
 
                     div { class: "property",
                         label { class: "property-label", "Time of Day" }
-                        input {
-                            r#type: "range",
-                            min: "0",
-                            max: "24",
-                            step: "0.1",
-                            value: "{time_of_day}",
-                            oninput: handle_time_change,
-                            class: "slider"
+                        Slider {
+                            value: time_of_day(),
+                            min: 0.0,
+                            max: 24.0,
+                            step: 0.1,
+                            on_change: handle_time_change
                         }
                         span { class: "property-value", "{format_time(time_of_day())}" }
                     }
 
                     div { class: "property",
                         label { class: "property-label", "Cloudiness" }
-                        input {
-                            r#type: "range",
-                            min: "0",
-                            max: "100",
-                            step: "1",
-                            value: "{cloudiness() * 100.0}",
-                            oninput: handle_cloudiness_change,
-                            class: "slider"
+                        Slider {
+                            value: cloudiness() * 100.0,
+                            min: 0.0,
+                            max: 100.0,
+                            step: 1.0,
+                            on_change: handle_cloudiness_change
                         }
                         span { class: "property-value", "{(cloudiness() * 100.0) as i32}%" }
                     }
@@ -465,13 +428,38 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
                     }
                 } else {
                     div { class: "property-group",
+                        // Use structural if/else for checkbox - Blitz handles DOM add/remove
+                        // but not attribute updates, so we swap the entire element
                         div { class: "property checkbox-property",
                             label { class: "property-label", "Enable SSAO" }
-                            input {
-                                r#type: "checkbox",
-                                checked: "{ao_enabled}",
-                                onchange: handle_ao_enabled_change,
-                                class: "checkbox"
+                            if ao_enabled() {
+                                input {
+                                    r#type: "checkbox",
+                                    checked: true,
+                                    onclick: move |_| {
+                                        ao_enabled.set(false);
+                                        bridge_ao_toggle.update_ambient_occlusion(AmbientOcclusionSettings {
+                                            enabled: false,
+                                            quality_level: ao_quality(),
+                                            constant_object_thickness: ao_intensity(),
+                                        });
+                                    },
+                                    class: "checkbox"
+                                }
+                            } else {
+                                input {
+                                    r#type: "checkbox",
+                                    checked: false,
+                                    onclick: move |_| {
+                                        ao_enabled.set(true);
+                                        bridge_ao_toggle.update_ambient_occlusion(AmbientOcclusionSettings {
+                                            enabled: true,
+                                            quality_level: ao_quality(),
+                                            constant_object_thickness: ao_intensity(),
+                                        });
+                                    },
+                                    class: "checkbox"
+                                }
                             }
                             span {}
                         }
@@ -493,14 +481,12 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
 
                             div { class: "property",
                                 label { class: "property-label", "Intensity" }
-                                input {
-                                    r#type: "range",
-                                    min: "0.0625",
-                                    max: "4",
-                                    step: "0.0625",
-                                    value: "{ao_intensity}",
-                                    oninput: handle_ao_intensity_change,
-                                    class: "slider"
+                                Slider {
+                                    value: ao_intensity(),
+                                    min: 0.0625,
+                                    max: 4.0,
+                                    step: 0.0625,
+                                    on_change: handle_ao_intensity_change
                                 }
                                 span { class: "property-value", "{ao_intensity:.2}" }
                             }

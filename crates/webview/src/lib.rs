@@ -328,12 +328,16 @@ impl CefWebview {
         // Inject any pending messages into JavaScript via the bridge's receiver function
         while let Ok(msg) = self.to_ui_rx.try_recv() {
             if let Ok(json) = serde_json::to_string(&msg) {
+                tracing::debug!("CEF: Injecting message to JS: {}", json);
                 // Call the bridge's receive function (set up by Svelte in native mode)
+                // Also log to console if __PENTIMENTO_RECEIVE__ is not defined
                 let js = format!(
-                    r#"if (window.__PENTIMENTO_RECEIVE__) {{ window.__PENTIMENTO_RECEIVE__('{}'); }}"#,
+                    r#"if (window.__PENTIMENTO_RECEIVE__) {{ window.__PENTIMENTO_RECEIVE__('{}'); }} else {{ console.warn('CEF: __PENTIMENTO_RECEIVE__ not defined, message dropped'); }}"#,
                     json.replace('\\', "\\\\").replace('\'', "\\'")
                 );
-                let _ = self.inner.eval(&js);
+                if let Err(e) = self.inner.eval(&js) {
+                    tracing::warn!("CEF: Failed to eval JS for message injection: {:?}", e);
+                }
             }
         }
     }

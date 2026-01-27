@@ -87,7 +87,8 @@ const COLOR_PICKER_CSS: &str = r#"
     width: 32px;
 }
 
-.hue-slider {
+.hue-track {
+    position: relative;
     flex: 1;
     height: 16px;
     border-radius: 8px;
@@ -100,18 +101,19 @@ const COLOR_PICKER_CSS: &str = r#"
         hsl(300, 100%, 50%),
         hsl(360, 100%, 50%)
     );
-    appearance: none;
     cursor: pointer;
     border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.hue-slider::-webkit-slider-thumb {
-    appearance: none;
+.hue-thumb {
+    position: absolute;
     width: 8px;
     height: 20px;
     background: white;
     border-radius: 4px;
-    cursor: pointer;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
     box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
 }
 "#;
@@ -206,14 +208,36 @@ pub fn ColorPicker(props: ColorPickerProps) -> Element {
         (hue_color[2] * 255.0) as u8
     );
 
-    // Hue slider handler
+    // Hue slider handlers - custom div-based slider
+    let mut is_dragging_hue = use_signal(|| false);
+
     let on_change = props.on_change.clone();
-    let handle_hue_change = move |evt: Event<FormData>| {
-        if let Ok(h) = evt.value().parse::<f32>() {
-            hue.set(h);
-            let color = hsv_to_rgb(h, saturation(), value());
-            on_change.call(color);
+    let handle_hue_mousedown = move |evt: Event<MouseData>| {
+        is_dragging_hue.set(true);
+        let coords = evt.data().element_coordinates();
+        // Track width is approximately 236px (268px - 32px label)
+        let width = 236.0;
+        let h = (coords.x as f32 / width * 360.0).clamp(0.0, 360.0);
+        hue.set(h);
+        let color = hsv_to_rgb(h, saturation(), value());
+        on_change.call(color);
+    };
+
+    let on_change = props.on_change.clone();
+    let handle_hue_mousemove = move |evt: Event<MouseData>| {
+        if !is_dragging_hue() {
+            return;
         }
+        let coords = evt.data().element_coordinates();
+        let width = 236.0;
+        let h = (coords.x as f32 / width * 360.0).clamp(0.0, 360.0);
+        hue.set(h);
+        let color = hsv_to_rgb(h, saturation(), value());
+        on_change.call(color);
+    };
+
+    let handle_hue_mouseup = move |_evt: Event<MouseData>| {
+        is_dragging_hue.set(false);
     };
 
     // SV picker mouse down handler
@@ -316,17 +340,19 @@ pub fn ColorPicker(props: ColorPickerProps) -> Element {
                 }
             }
 
-            // Hue slider
+            // Hue slider - custom div-based since Blitz doesn't support range input styling
             div { class: "hue-slider-container",
                 span { class: "hue-label", "Hue" }
-                input {
-                    r#type: "range",
-                    min: "0",
-                    max: "360",
-                    step: "1",
-                    value: "{hue}",
-                    oninput: handle_hue_change,
-                    class: "hue-slider"
+                div {
+                    class: "hue-track",
+                    onmousedown: handle_hue_mousedown,
+                    onmousemove: handle_hue_mousemove,
+                    onmouseup: handle_hue_mouseup,
+                    onmouseleave: handle_hue_mouseup,
+                    div {
+                        class: "hue-thumb",
+                        style: "left: {hue() / 360.0 * 100.0}%;"
+                    }
                 }
             }
         }
