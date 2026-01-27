@@ -71,6 +71,27 @@ impl CpuSurface {
         ];
     }
 
+    /// Erase a pixel by reducing its alpha
+    /// The erase_amount (0-1) determines how much alpha is removed
+    #[inline]
+    pub fn erase_pixel(&mut self, x: u32, y: u32, erase_amount: f32) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let index = (y as usize) * (self.width as usize) + (x as usize);
+        let dst = self.pixels[index];
+
+        // Reduce alpha by the erase amount
+        // Also fade the color to transparent (destination-out compositing)
+        let remaining = (1.0 - erase_amount).max(0.0);
+        self.pixels[index] = [
+            dst[0] * remaining,
+            dst[1] * remaining,
+            dst[2] * remaining,
+            dst[3] * remaining,
+        ];
+    }
+
     /// Get raw pixel data for GPU upload
     /// Returns the pixel data as a byte slice suitable for wgpu texture upload
     pub fn as_bytes(&self) -> &[u8] {

@@ -11,11 +11,22 @@
 
 use tracing::debug;
 
+use std::collections::{HashMap, HashSet};
+
 use crate::brush::{BrushEngine, BrushPreset, DabOutput};
 use crate::log::{DabParams, StrokeConfig, StrokeLog, StrokeRecorder};
 use crate::tiles::{TileCoord, TiledSurface};
 use crate::types::{BlendMode, SpaceKind};
 use crate::validation::to_size_field;
+
+/// An undo entry containing captured tile data before a stroke
+#[derive(Clone)]
+pub struct UndoEntry {
+    /// Stroke ID this entry corresponds to
+    pub stroke_id: u64,
+    /// Captured tile data (tile coord -> pixel data)
+    pub tiles: HashMap<TileCoord, Vec<[f32; 4]>>,
+}
 
 /// Complete painting pipeline for a canvas
 ///
@@ -36,10 +47,20 @@ pub struct PaintingPipeline {
     log: StrokeLog,
     /// Current brush color
     color: [f32; 4],
+    /// Current blend mode (Normal or Erase)
+    blend_mode: BlendMode,
     /// Current stroke ID (used during active stroke)
     current_stroke_id: Option<u64>,
     /// Current space ID (used during active stroke)
     current_space_id: Option<u32>,
+    /// Tiles captured for undo during current stroke
+    pending_undo_captures: HashMap<TileCoord, Vec<[f32; 4]>>,
+    /// Set of tiles already captured this stroke (to avoid re-capturing)
+    captured_tiles: HashSet<TileCoord>,
+    /// Undo stack (most recent at end)
+    undo_stack: Vec<UndoEntry>,
+    /// Maximum undo levels
+    max_undo_levels: usize,
 }
 
 impl PaintingPipeline {
@@ -51,8 +72,13 @@ impl PaintingPipeline {
             recorder: None,
             log: StrokeLog::new(),
             color: [0.0, 0.0, 0.0, 1.0], // Default to black
+            blend_mode: BlendMode::Normal,
             current_stroke_id: None,
             current_space_id: None,
+            pending_undo_captures: HashMap::new(),
+            captured_tiles: HashSet::new(),
+            undo_stack: Vec::new(),
+            max_undo_levels: 20,
         }
     }
 
@@ -86,6 +112,16 @@ impl PaintingPipeline {
         self.color
     }
 
+    /// Set the blend mode
+    pub fn set_blend_mode(&mut self, mode: BlendMode) {
+        self.blend_mode = mode;
+    }
+
+    /// Get the current blend mode
+    pub fn blend_mode(&self) -> BlendMode {
+        self.blend_mode
+    }
+
     /// Begin a stroke
     ///
     /// - `space_id`: The canvas plane ID this stroke targets
@@ -101,6 +137,10 @@ impl PaintingPipeline {
 
         // Recorder will be initialized on first dab (we need initial position)
         self.recorder = None;
+
+        // Clear pending undo captures for new stroke
+        self.pending_undo_captures.clear();
+        self.captured_tiles.clear();
     }
 
     /// Continue a stroke with new input
@@ -136,7 +176,7 @@ impl PaintingPipeline {
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
                 tool_id: self.brush.preset().id,
-                blend_mode: BlendMode::Normal,
+                blend_mode: self.blend_mode,
                 color: self.color,
                 flags: 0,
                 face_id: 0,
@@ -161,9 +201,13 @@ impl PaintingPipeline {
     fn apply_dab(&mut self, dab: &DabOutput) {
         let radius = dab.size / 2.0;
         debug!(
-            "  apply_dab: pos=({:.1}, {:.1}), radius={:.1}, opacity={:.2}, hardness={:.2}",
-            dab.x, dab.y, radius, dab.opacity, dab.hardness
+            "  apply_dab: pos=({:.1}, {:.1}), radius={:.1}, opacity={:.2}, hardness={:.2}, mode={:?}",
+            dab.x, dab.y, radius, dab.opacity, dab.hardness, self.blend_mode
         );
+
+        // Capture tiles before modification for undo
+        self.capture_tiles_for_dab(dab.x, dab.y, radius);
+
         let result = self.surface.apply_dab(
             dab.x,
             dab.y,
@@ -171,11 +215,52 @@ impl PaintingPipeline {
             self.color,
             dab.opacity,
             dab.hardness,
+            self.blend_mode,
         );
         if let Some((x, y, w, h)) = result {
             debug!("    -> affected region: ({}, {}) {}x{}", x, y, w, h);
         } else {
             debug!("    -> dab outside surface bounds");
+        }
+    }
+
+    /// Capture tile data before a dab modifies them (for undo support)
+    fn capture_tiles_for_dab(&mut self, center_x: f32, center_y: f32, radius: f32) {
+        if radius <= 0.0 {
+            return;
+        }
+
+        let tile_size = self.surface.tile_size() as f32;
+        let width = self.surface.surface().width as f32;
+        let height = self.surface.surface().height as f32;
+
+        // Calculate bounding box of the dab
+        let x_min = (center_x - radius).max(0.0);
+        let y_min = (center_y - radius).max(0.0);
+        let x_max = (center_x + radius).min(width);
+        let y_max = (center_y + radius).min(height);
+
+        if x_min >= x_max || y_min >= y_max {
+            return;
+        }
+
+        // Calculate affected tile range
+        let tile_x_start = (x_min / tile_size) as u32;
+        let tile_y_start = (y_min / tile_size) as u32;
+        let tile_x_end = (x_max / tile_size) as u32;
+        let tile_y_end = (y_max / tile_size) as u32;
+
+        // Capture any tiles not yet captured this stroke
+        for ty in tile_y_start..=tile_y_end {
+            for tx in tile_x_start..=tile_x_end {
+                let coord = TileCoord { x: tx, y: ty };
+                if !self.captured_tiles.contains(&coord) {
+                    // Capture tile data before modification
+                    let tile_data = self.surface.get_tile_data(coord);
+                    self.pending_undo_captures.insert(coord, tile_data);
+                    self.captured_tiles.insert(coord);
+                }
+            }
         }
     }
 
@@ -206,6 +291,24 @@ impl PaintingPipeline {
             }
         }
 
+        // Finalize undo entry if we captured any tiles
+        if !self.pending_undo_captures.is_empty() {
+            let stroke_id = self.current_stroke_id.unwrap_or(0);
+            let entry = UndoEntry {
+                stroke_id,
+                tiles: std::mem::take(&mut self.pending_undo_captures),
+            };
+            self.undo_stack.push(entry);
+
+            // Limit undo stack size
+            while self.undo_stack.len() > self.max_undo_levels {
+                self.undo_stack.remove(0);
+            }
+
+            debug!("Saved undo entry for stroke {} ({} tiles)", stroke_id, self.undo_stack.last().map(|e| e.tiles.len()).unwrap_or(0));
+        }
+
+        self.captured_tiles.clear();
         self.brush.end_stroke();
         self.current_stroke_id = None;
         self.current_space_id = None;
@@ -215,11 +318,15 @@ impl PaintingPipeline {
     ///
     /// This aborts the stroke without saving it to the log.
     /// Note: The visual changes on the surface are NOT reverted.
-    /// For proper undo, a separate undo system would be needed.
+    /// For proper undo, use the undo() method after canceling.
     pub fn cancel_stroke(&mut self) {
         if let Some(mut recorder) = self.recorder.take() {
             let _ = recorder.abort("Cancelled".to_string());
         }
+
+        // Clear pending undo captures (don't save to undo stack)
+        self.pending_undo_captures.clear();
+        self.captured_tiles.clear();
 
         self.brush.end_stroke();
         self.current_stroke_id = None;
@@ -229,6 +336,65 @@ impl PaintingPipeline {
     /// Check if a stroke is currently in progress
     pub fn is_stroking(&self) -> bool {
         self.current_stroke_id.is_some()
+    }
+
+    /// Check if undo is available
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    /// Get the number of undo levels available
+    pub fn undo_count(&self) -> usize {
+        self.undo_stack.len()
+    }
+
+    /// Undo the last stroke
+    ///
+    /// Returns true if an undo was performed, false if no undo available
+    pub fn undo(&mut self) -> bool {
+        let Some(entry) = self.undo_stack.pop() else {
+            debug!("Undo: no entries available");
+            return false;
+        };
+
+        debug!("Undoing stroke {} ({} tiles)", entry.stroke_id, entry.tiles.len());
+
+        // Restore each tile's data
+        for (coord, tile_data) in entry.tiles {
+            self.restore_tile(coord, &tile_data);
+        }
+
+        true
+    }
+
+    /// Restore a tile's pixel data from an undo entry
+    fn restore_tile(&mut self, coord: TileCoord, tile_data: &[[f32; 4]]) {
+        let tile_size = self.surface.tile_size();
+        let tile_start_x = coord.x * tile_size;
+        let tile_start_y = coord.y * tile_size;
+
+        let surface_width = self.surface.surface().width;
+        let surface_height = self.surface.surface().height;
+
+        // Calculate actual tile dimensions (may be smaller at edges)
+        let tile_width = tile_size.min(surface_width.saturating_sub(tile_start_x));
+        let tile_height = tile_size.min(surface_height.saturating_sub(tile_start_y));
+
+        // Write pixels back
+        let mut idx = 0;
+        for dy in 0..tile_height {
+            for dx in 0..tile_width {
+                if idx < tile_data.len() {
+                    let x = tile_start_x + dx;
+                    let y = tile_start_y + dy;
+                    self.surface.surface_mut().set_pixel(x, y, tile_data[idx]);
+                    idx += 1;
+                }
+            }
+        }
+
+        // Mark the tile as dirty for GPU upload
+        self.surface.mark_dirty(tile_start_x, tile_start_y);
     }
 
     /// Take dirty tiles for GPU upload
@@ -297,6 +463,13 @@ impl PaintingPipeline {
     /// Get raw surface data as bytes (for full texture upload)
     pub fn surface_as_bytes(&self) -> &[u8] {
         self.surface.surface().as_bytes()
+    }
+
+    /// Get a single pixel's color
+    ///
+    /// Returns None if coordinates are out of bounds.
+    pub fn get_pixel(&self, x: u32, y: u32) -> Option<[f32; 4]> {
+        self.surface.surface().get_pixel(x, y)
     }
 }
 

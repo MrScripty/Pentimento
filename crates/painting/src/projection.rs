@@ -3,6 +3,9 @@
 //! This module handles projecting brushes onto mesh surfaces using tangent-space
 //! calculations to ensure brushes appear circular on the surface regardless of
 //! viewing angle.
+//!
+//! It also provides utilities for projection painting, where a 2D canvas is
+//! projected onto 3D geometry from a fixed camera position.
 
 use glam::{Vec2, Vec3};
 
@@ -203,6 +206,144 @@ pub fn barycentric_to_ptex_coords(barycentric: Vec3, face_resolution: u32) -> Ve
     )
 }
 
+// ============================================================================
+// Canvas Projection Utilities
+// ============================================================================
+
+/// Parameters describing a canvas plane for projection.
+#[derive(Debug, Clone, Copy)]
+pub struct CanvasPlaneParams {
+    /// Canvas resolution in pixels (width, height)
+    pub resolution: (u32, u32),
+    /// World-space dimensions of the canvas plane
+    pub world_size: (f32, f32),
+}
+
+/// Convert a canvas UV coordinate to a world-space position on the canvas plane.
+///
+/// # Arguments
+/// * `canvas_uv` - UV coordinate on the canvas (0-1 range)
+/// * `canvas_center` - World-space center position of the canvas plane
+/// * `canvas_right` - Right direction vector of the canvas (local +X, normalized)
+/// * `canvas_up` - Up direction vector of the canvas (local +Y, normalized)
+/// * `canvas_params` - Canvas dimensions and resolution
+///
+/// # Returns
+/// World-space position of the UV point on the canvas plane.
+pub fn canvas_uv_to_world(
+    canvas_uv: Vec2,
+    canvas_center: Vec3,
+    canvas_right: Vec3,
+    canvas_up: Vec3,
+    canvas_params: &CanvasPlaneParams,
+) -> Vec3 {
+    // UV is 0-1, convert to local position relative to center
+    // UV (0,0) is top-left, (1,1) is bottom-right
+    // Local coords: X goes right, Y goes up (but UV Y is inverted)
+    let local_x = (canvas_uv.x - 0.5) * canvas_params.world_size.0;
+    let local_y = (0.5 - canvas_uv.y) * canvas_params.world_size.1; // Invert Y for texture coords
+
+    canvas_center + canvas_right * local_x + canvas_up * local_y
+}
+
+/// Construct a ray from the camera through a canvas UV point.
+///
+/// This is the core function for projection painting - it creates a ray
+/// that can be intersected with scene geometry to project paint.
+///
+/// # Arguments
+/// * `camera_pos` - World-space camera position
+/// * `canvas_uv` - UV coordinate on the canvas (0-1 range)
+/// * `canvas_center` - World-space center of the canvas plane
+/// * `canvas_right` - Right direction of the canvas (normalized)
+/// * `canvas_up` - Up direction of the canvas (normalized)
+/// * `canvas_params` - Canvas dimensions
+///
+/// # Returns
+/// Tuple of (ray_origin, ray_direction) where direction is normalized.
+pub fn canvas_uv_to_ray(
+    camera_pos: Vec3,
+    canvas_uv: Vec2,
+    canvas_center: Vec3,
+    canvas_right: Vec3,
+    canvas_up: Vec3,
+    canvas_params: &CanvasPlaneParams,
+) -> (Vec3, Vec3) {
+    let canvas_world_pos = canvas_uv_to_world(
+        canvas_uv,
+        canvas_center,
+        canvas_right,
+        canvas_up,
+        canvas_params,
+    );
+
+    let ray_origin = camera_pos;
+    let ray_direction = (canvas_world_pos - camera_pos).normalize();
+
+    (ray_origin, ray_direction)
+}
+
+/// Convert a pixel coordinate on the canvas to UV.
+///
+/// # Arguments
+/// * `pixel` - Pixel coordinate (x, y)
+/// * `resolution` - Canvas resolution (width, height)
+///
+/// # Returns
+/// UV coordinate in 0-1 range (center of pixel).
+pub fn pixel_to_canvas_uv(pixel: (u32, u32), resolution: (u32, u32)) -> Vec2 {
+    Vec2::new(
+        (pixel.0 as f32 + 0.5) / resolution.0 as f32,
+        (pixel.1 as f32 + 0.5) / resolution.1 as f32,
+    )
+}
+
+/// Extract canvas plane vectors from a 4x4 transform matrix.
+///
+/// # Arguments
+/// * `transform` - 4x4 transformation matrix (column-major, as used by Bevy)
+///
+/// # Returns
+/// Tuple of (center, right, up, forward) vectors.
+pub fn extract_canvas_vectors_from_transform(transform: &[f32; 16]) -> (Vec3, Vec3, Vec3, Vec3) {
+    // Column-major layout: columns are at indices 0-3, 4-7, 8-11, 12-15
+    // Column 0 = X (right), Column 1 = Y (up), Column 2 = Z (forward), Column 3 = translation
+
+    let right = Vec3::new(transform[0], transform[1], transform[2]).normalize();
+    let up = Vec3::new(transform[4], transform[5], transform[6]).normalize();
+    let forward = Vec3::new(transform[8], transform[9], transform[10]).normalize();
+    let center = Vec3::new(transform[12], transform[13], transform[14]);
+
+    (center, right, up, forward)
+}
+
+/// Calculate the world-space size of a brush at a given depth.
+///
+/// When projecting from camera through canvas, the brush size in world units
+/// changes based on the distance to the hit point.
+///
+/// # Arguments
+/// * `brush_pixel_radius` - Brush radius in canvas pixels
+/// * `canvas_params` - Canvas dimensions
+/// * `camera_to_canvas_dist` - Distance from camera to canvas plane
+/// * `camera_to_hit_dist` - Distance from camera to hit point
+///
+/// # Returns
+/// Brush radius in world units at the hit point depth.
+pub fn project_brush_size_to_depth(
+    brush_pixel_radius: f32,
+    canvas_params: &CanvasPlaneParams,
+    camera_to_canvas_dist: f32,
+    camera_to_hit_dist: f32,
+) -> f32 {
+    // Convert pixel radius to world units on canvas
+    let pixels_per_world_unit = canvas_params.resolution.0 as f32 / canvas_params.world_size.0;
+    let canvas_world_radius = brush_pixel_radius / pixels_per_world_unit;
+
+    // Scale by depth ratio
+    canvas_world_radius * (camera_to_hit_dist / camera_to_canvas_dist)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +414,98 @@ mod tests {
         // Scale should be 0.5 UV units per world unit
         assert!((scale.x - 0.5).abs() < 1e-6);
         assert!((scale.y - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_canvas_uv_to_world_center() {
+        let center = Vec3::new(0.0, 0.0, 5.0);
+        let right = Vec3::X;
+        let up = Vec3::Y;
+        let params = CanvasPlaneParams {
+            resolution: (256, 256),
+            world_size: (2.0, 2.0),
+        };
+
+        // UV (0.5, 0.5) should be at center
+        let world = canvas_uv_to_world(Vec2::new(0.5, 0.5), center, right, up, &params);
+        assert!((world - center).length() < 1e-6);
+    }
+
+    #[test]
+    fn test_canvas_uv_to_world_corners() {
+        let center = Vec3::ZERO;
+        let right = Vec3::X;
+        let up = Vec3::Y;
+        let params = CanvasPlaneParams {
+            resolution: (256, 256),
+            world_size: (2.0, 2.0),
+        };
+
+        // UV (0, 0) = top-left corner = (-1, 1, 0) in world (Y inverted)
+        let top_left = canvas_uv_to_world(Vec2::new(0.0, 0.0), center, right, up, &params);
+        assert!((top_left.x - (-1.0)).abs() < 1e-6);
+        assert!((top_left.y - 1.0).abs() < 1e-6);
+
+        // UV (1, 1) = bottom-right corner = (1, -1, 0) in world
+        let bottom_right = canvas_uv_to_world(Vec2::new(1.0, 1.0), center, right, up, &params);
+        assert!((bottom_right.x - 1.0).abs() < 1e-6);
+        assert!((bottom_right.y - (-1.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_canvas_uv_to_ray() {
+        let camera_pos = Vec3::new(0.0, 0.0, 0.0);
+        let canvas_center = Vec3::new(0.0, 0.0, 2.0);
+        let right = Vec3::X;
+        let up = Vec3::Y;
+        let params = CanvasPlaneParams {
+            resolution: (256, 256),
+            world_size: (2.0, 2.0),
+        };
+
+        // Ray through center should point straight at canvas
+        let (origin, dir) = canvas_uv_to_ray(
+            camera_pos,
+            Vec2::new(0.5, 0.5),
+            canvas_center,
+            right,
+            up,
+            &params,
+        );
+
+        assert!((origin - camera_pos).length() < 1e-6);
+        assert!((dir - Vec3::Z).length() < 1e-6); // Points toward +Z
+    }
+
+    #[test]
+    fn test_pixel_to_canvas_uv() {
+        let resolution = (256, 256);
+
+        // First pixel
+        let uv = pixel_to_canvas_uv((0, 0), resolution);
+        assert!((uv.x - 0.5 / 256.0).abs() < 1e-6);
+        assert!((uv.y - 0.5 / 256.0).abs() < 1e-6);
+
+        // Center pixel
+        let uv = pixel_to_canvas_uv((128, 128), resolution);
+        assert!((uv.x - (128.5 / 256.0)).abs() < 1e-6);
+        assert!((uv.y - (128.5 / 256.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_project_brush_size_to_depth() {
+        let params = CanvasPlaneParams {
+            resolution: (256, 256),
+            world_size: (2.0, 2.0),
+        };
+
+        // At same depth as canvas, brush should be same size
+        let size = project_brush_size_to_depth(10.0, &params, 2.0, 2.0);
+        let expected = 10.0 * (2.0 / 256.0); // 10 pixels * world_size/resolution
+        assert!((size - expected).abs() < 1e-6);
+
+        // At twice the depth, brush should be twice as large
+        let size_2x = project_brush_size_to_depth(10.0, &params, 2.0, 4.0);
+        assert!((size_2x - expected * 2.0).abs() < 1e-6);
     }
 }
