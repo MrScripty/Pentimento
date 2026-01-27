@@ -376,6 +376,161 @@ The toolbar uses normal flow layout instead of `position: fixed`:
 
 ---
 
+## Creating Interactive UI Elements
+
+Due to Blitz's hit testing limitations, follow these patterns when creating clickable UI elements.
+
+### Critical Rule: Avoid CSS Positioning
+
+Blitz's hit testing **does not work** with:
+
+- `position: absolute`
+- `position: fixed`
+
+Use **normal document flow** with **flexbox** instead.
+
+### Layout Compatibility Table
+
+| CSS Property | Hit Testing | Use Case |
+|-------------|-------------|----------|
+| Normal flow (no positioning) | ✅ Works | Toolbar, buttons, most UI |
+| `display: flex` | ✅ Works | Layout containers |
+| `position: relative` | ✅ Works | Dropdown anchor points |
+| `position: absolute` | ❌ Broken | **Avoid** |
+| `position: fixed` | ❌ Broken | **Avoid** |
+
+### Pattern 1: Toolbar (Full-Width Header)
+
+```rust
+// CSS - uses normal flow, no positioning
+const TOOLBAR_CSS: &str = r#"
+.toolbar {
+    width: 100%;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    /* NO position: fixed! */
+}
+"#;
+
+// RSX - direct child of app-root
+rsx! {
+    div { class: "app-root",
+        Toolbar { }  // First child = top of page
+    }
+}
+```
+
+### Pattern 2: Side Panel (Right-Aligned)
+
+**Wrong approach (broken):**
+
+```css
+.side-panel {
+    position: absolute;  /* ❌ Blitz can't hit-test this */
+    right: 8px;
+    top: 56px;
+}
+```
+
+**Correct approach (works):**
+
+```css
+/* Parent container */
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    pointer-events: none;  /* Allow click-through */
+}
+
+/* Spacer pushes side panel right */
+.content-spacer {
+    flex: 1;
+    pointer-events: none;
+}
+
+/* Side panel in normal flow */
+.side-panel {
+    width: 300px;
+    margin: 8px;
+    pointer-events: auto;  /* Receive clicks */
+}
+```
+
+```rust
+rsx! {
+    div { class: "main-content",
+        div { class: "content-spacer" }  // Pushes right
+        SidePanel { }  // In normal flow
+    }
+}
+```
+
+### Pattern 3: Dropdown Menus
+
+Dropdown menus CAN use `position: absolute` because they're positioned relative to a `position: relative` parent in normal flow:
+
+```css
+.menu-container {
+    position: relative;  /* Anchor point - in normal flow */
+}
+
+.dropdown {
+    position: absolute;  /* Relative to .menu-container */
+    top: 100%;
+    left: 0;
+}
+```
+
+This works because:
+
+1. The `.menu-container` button is in normal flow (hit-testable)
+2. When clicked, it shows the dropdown
+3. The dropdown items are children of `.menu-container`
+
+### Pattern 4: Clickable Elements
+
+Always ensure interactive elements have:
+
+```css
+.clickable-element {
+    pointer-events: auto;  /* Explicitly enable */
+    cursor: pointer;
+}
+```
+
+### App Layout Structure
+
+The working app layout uses this structure:
+
+```text
+app-root (flex column, pointer-events: none)
+├── Toolbar (normal flow, pointer-events: auto via CSS rule)
+├── AddObjectMenu (conditionally rendered)
+├── PaintToolbar (conditionally rendered)
+└── main-content (flex row, pointer-events: none)
+    ├── content-spacer (flex: 1, click-through)
+    └── SidePanel (normal flow, pointer-events: auto)
+```
+
+### Debugging Hit Testing
+
+When clicks don't work, check the logs:
+
+```text
+Click(x, y) - doc dimensions: WxH
+  -> Custom HIT: <element> class='...' node_id=N
+  -> Blitz HIT:  <element> class='...' node_id=M
+```
+
+- **Custom HIT** = Our recursive bounding-box algorithm (correct)
+- **Blitz HIT** = Blitz's internal algorithm (may be wrong for positioned elements)
+
+If Custom HIT finds the right element but Blitz HIT doesn't, the element is using broken positioning. Refactor to use flexbox.
+
+---
+
 ## Implementation Files
 
 | File | Description |
