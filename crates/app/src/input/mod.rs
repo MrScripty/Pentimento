@@ -38,6 +38,12 @@ impl Plugin for InputPlugin {
         #[cfg(feature = "cef")]
         app.add_systems(PreUpdate, handle_devtools_hotkey.after(InputSystems));
 
+        // Paint undo hotkey (Ctrl+Z)
+        app.add_systems(PreUpdate, handle_paint_undo_hotkey.after(InputSystems));
+
+        // Add object menu hotkey (Shift+A)
+        app.add_systems(PreUpdate, handle_add_menu_hotkey.after(InputSystems));
+
         info!("Input plugin initialized");
     }
 }
@@ -67,19 +73,6 @@ impl Default for MouseState {
     }
 }
 
-/// Scale window coordinates to webview coordinates
-fn scale_to_webview(
-    window_x: f32,
-    window_y: f32,
-    window_width: f32,
-    window_height: f32,
-    display_config: &DisplayConfig,
-) -> (f32, f32) {
-    let scale_x = display_config.width_f32() / window_width;
-    let scale_y = display_config.height_f32() / window_height;
-    (window_x * scale_x, window_y * scale_y)
-}
-
 /// Track mouse cursor position and forward mouse move events (throttled)
 /// This system MUST run before forward_mouse_buttons and forward_mouse_scroll
 fn track_mouse_position(
@@ -87,7 +80,7 @@ fn track_mouse_position(
     mut motion_events: MessageReader<MouseMotion>,
     mut cursor_events: MessageReader<CursorMoved>,
     config: Res<PentimentoConfig>,
-    display_config: Res<DisplayConfig>,
+    _display_config: Res<DisplayConfig>,
     capture_webview: Option<NonSendMut<WebviewResource>>,
     overlay_webview: Option<NonSendMut<OverlayWebviewResource>>,
     #[cfg(feature = "cef")] cef_webview: Option<NonSendMut<CefWebviewResource>>,
@@ -600,6 +593,47 @@ fn handle_devtools_hotkey(
         if let Some(webview) = cef_webview {
             info!("Opening CEF DevTools (Ctrl+Shift+I)");
             webview.webview.show_dev_tools();
+        }
+    }
+}
+
+/// Handle Ctrl+Z for paint undo
+fn handle_paint_undo_hotkey(
+    key_input: Res<ButtonInput<KeyCode>>,
+    mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
+) {
+    let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
+    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
+    let z_pressed = key_input.just_pressed(KeyCode::KeyZ);
+
+    // Ctrl+Z (without shift) for undo
+    if ctrl && !shift && z_pressed {
+        if let Some(ref mut painting) = painting_res {
+            if painting.undo_any() {
+                info!("Paint undo (Ctrl+Z)");
+            }
+        }
+    }
+}
+
+/// Handle Shift+A to open the add object menu
+fn handle_add_menu_hotkey(
+    key_input: Res<ButtonInput<KeyCode>>,
+    mouse_state: Res<MouseState>,
+    mut outbound: Option<ResMut<pentimento_scene::OutboundUiMessages>>,
+) {
+    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
+    let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
+    let a_pressed = key_input.just_pressed(KeyCode::KeyA);
+
+    // Shift+A (without ctrl) opens add menu
+    if shift && !ctrl && a_pressed {
+        if let Some(ref mut outbound) = outbound {
+            info!("Opening add object menu (Shift+A)");
+            outbound.send(pentimento_ipc::BevyToUi::ShowAddObjectMenu {
+                show: true,
+                position: Some([mouse_state.webview_x, mouse_state.webview_y]),
+            });
         }
     }
 }

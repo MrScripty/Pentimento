@@ -75,6 +75,26 @@ pub enum BevyToUi {
     /// Projection mode changed
     ProjectionModeChanged { live_projection: bool },
 
+    /// Mesh edit mode state changed
+    MeshEditModeChanged {
+        /// Whether mesh edit mode is active
+        active: bool,
+        /// Current selection mode (vertex/edge/face)
+        selection_mode: MeshSelectionMode,
+        /// Current active tool
+        tool: MeshEditTool,
+    },
+
+    /// Sub-object selection changed in mesh edit mode
+    MeshEditSelectionChanged {
+        /// Number of selected vertices
+        vertex_count: usize,
+        /// Number of selected edges
+        edge_count: usize,
+        /// Number of selected faces
+        face_count: usize,
+    },
+
     /// Close all open menus (triggered when clicking outside UI)
     CloseMenus,
 }
@@ -127,6 +147,9 @@ pub enum UiToBevy {
 
     /// Paint-specific commands (brush settings, undo, etc.)
     PaintCommand(PaintCommand),
+
+    /// Mesh edit mode commands
+    MeshEditCommand(MeshEditCommand),
 }
 
 // ============================================================================
@@ -423,6 +446,38 @@ pub enum EditMode {
     None,
     /// Paint mode - painting on a canvas plane
     Paint,
+    /// Mesh edit mode - editing vertices, edges, and faces
+    MeshEdit,
+}
+
+/// Sub-object selection mode for mesh editing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MeshSelectionMode {
+    /// Select individual vertices
+    #[default]
+    Vertex,
+    /// Select edges
+    Edge,
+    /// Select faces
+    Face,
+}
+
+/// Active tool in mesh edit mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MeshEditTool {
+    /// Selection tool (default)
+    #[default]
+    Select,
+    /// Extrude geometry
+    Extrude,
+    /// Loop cut
+    LoopCut,
+    /// Knife tool
+    Knife,
+    /// Merge vertices
+    Merge,
+    /// Inset faces
+    Inset,
 }
 
 /// Request to add a paint canvas and enter paint mode
@@ -465,6 +520,21 @@ pub enum PaintCommand {
     SetLiveProjection { enabled: bool },
     /// Project current canvas contents to all visible meshes (one-shot)
     ProjectToScene,
+}
+
+/// Commands for controlling mesh edit mode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MeshEditCommand {
+    /// Set the selection mode (vertex/edge/face)
+    SetSelectionMode(MeshSelectionMode),
+    /// Set the active tool
+    SetTool(MeshEditTool),
+    /// Select all elements
+    SelectAll,
+    /// Deselect all elements
+    DeselectAll,
+    /// Invert selection
+    InvertSelection,
 }
 
 // ============================================================================

@@ -33,7 +33,10 @@ use pentimento_dioxus_ui::{
     PointerDetails, RenderParams, Scene, SharedVelloRenderer, UiEvent,
 };
 use pentimento_ipc::{MouseEvent, PaintCommand, UiToBevy};
-use pentimento_scene::{AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, PaintingResource};
+use pentimento_scene::{
+    AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, PaintingResource, SceneAmbientOcclusion,
+    SceneLighting,
+};
 
 use super::ui_blend_material::{UiBlendMaterial, UiBlendMaterialPlugin};
 
@@ -608,10 +611,9 @@ fn build_ui_scene(world: &mut World) {
             doc_resource.document.handle_event(event.clone());
         }
 
-        // Force render when there were input events to ensure layout recalculation
-        if !events.is_empty() {
-            doc_resource.document.force_render();
-        }
+        // Don't call force_render() here - poll() already handles reactive updates.
+        // force_render() uses rebuild() which APPENDS nodes, causing UI duplication.
+        // Signal changes in event handlers automatically mark scopes dirty for poll().
 
         // Check if a viewport click occurred (click outside UI elements)
         doc_resource.document.take_viewport_clicked()
@@ -727,24 +729,19 @@ fn handle_ui_to_bevy_messages(world: &mut World) {
     };
 
     if !outbound_msgs.is_empty() {
-        info!("Forwarding {} outbound messages to UI bridge", outbound_msgs.len());
         if let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() {
             for msg in outbound_msgs {
-                info!("  -> Processing message: {:?}", msg);
                 bridge.bridge_handle.send(msg);
             }
         } else {
             warn!("No DioxusBridgeResource found!");
         }
 
-        // Force VirtualDom to render so component polls bridge and processes messages.
-        // Normal poll() returns early if no signals changed, but channel messages
-        // don't trigger signals - the component needs to render first.
+        // Mark scope dirty and poll to trigger incremental re-render.
+        // Uses render_immediate() (incremental diffing), not rebuild() (appends nodes).
+        // IPC messages are read by the component during render.
         if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
-            info!("Calling force_render() after forwarding messages");
-            doc_resource.document.force_render();
-        } else {
-            warn!("No BlitzDocumentResource found!");
+            doc_resource.document.mark_dirty_and_poll();
         }
     }
 
@@ -830,6 +827,18 @@ fn handle_ui_to_bevy_messages(world: &mut World) {
                 if let Some(mut events) = world.get_resource_mut::<Messages<AddObjectEvent>>() {
                     events.write(AddObjectEvent(request));
                     info!("Dispatched AddObjectEvent from Dioxus UI");
+                }
+            }
+            UiToBevy::UpdateAmbientOcclusion(settings) => {
+                if let Some(mut ao_resource) = world.get_resource_mut::<SceneAmbientOcclusion>() {
+                    ao_resource.update(settings);
+                    info!("Updated ambient occlusion settings from UI");
+                }
+            }
+            UiToBevy::UpdateLighting(settings) => {
+                if let Some(mut lighting) = world.get_resource_mut::<SceneLighting>() {
+                    lighting.update(settings);
+                    info!("Updated lighting settings from UI");
                 }
             }
             _ => {
