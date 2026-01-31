@@ -250,6 +250,7 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
         EditMode::None => "Object Mode",
         EditMode::Paint => "Paint Mode",
         EditMode::MeshEdit => "Edit Mode",
+        EditMode::Sculpt => "Sculpt Mode",
     };
 
     let in_mesh_edit = shared_state.edit_mode == EditMode::MeshEdit;
