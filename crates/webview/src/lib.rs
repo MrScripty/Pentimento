@@ -28,6 +28,7 @@ pub use platform_linux_cef::LinuxCefWebview;
 #[cfg(all(target_os = "linux", feature = "dioxus"))]
 pub use platform_linux_dioxus::LinuxDioxusRenderer;
 
+use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -513,5 +514,137 @@ impl DioxusWebview {
     /// Try to receive a message from the Dioxus UI (non-blocking)
     pub fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {
         self.inner.try_recv_from_ui()
+    }
+}
+
+// ============================================================================
+// CompositeBackend trait implementations
+// ============================================================================
+
+impl CompositeBackend for OffscreenWebview {
+    fn poll(&mut self) {
+        self.poll();
+    }
+
+    fn is_ready(&self) -> bool {
+        self.is_ready()
+    }
+
+    fn capture_if_dirty(&mut self) -> Option<CaptureResult> {
+        OffscreenWebview::capture_if_dirty(self).map(|img| {
+            let (width, height) = (img.width(), img.height());
+            CaptureResult::Rgba(img.into_raw(), width, height)
+        })
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.size()
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize(width, height);
+    }
+
+    fn send_mouse_event(&mut self, event: MouseEvent) {
+        self.send_mouse_event(event);
+    }
+
+    fn send_keyboard_event(&mut self, event: KeyboardEvent) {
+        self.send_keyboard_event(event);
+    }
+
+    fn send_to_ui(&mut self, msg: BevyToUi) -> Result<(), FrontendError> {
+        OffscreenWebview::send_to_ui(self, msg)
+            .map_err(|e| FrontendError::SendFailed(e.to_string()))
+    }
+
+    fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {
+        OffscreenWebview::try_recv_from_ui(self)
+    }
+}
+
+impl CompositeBackend for OverlayWebview {
+    fn poll(&mut self) {
+        self.poll();
+    }
+
+    fn is_ready(&self) -> bool {
+        self.is_ready()
+    }
+
+    fn capture_if_dirty(&mut self) -> Option<CaptureResult> {
+        // Overlay mode uses compositor-managed rendering, no capture needed
+        Some(CaptureResult::CompositorManaged)
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.size()
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize(width, height);
+    }
+
+    fn send_mouse_event(&mut self, event: MouseEvent) {
+        self.send_mouse_event(event);
+    }
+
+    fn send_keyboard_event(&mut self, event: KeyboardEvent) {
+        self.send_keyboard_event(event);
+    }
+
+    fn send_to_ui(&mut self, msg: BevyToUi) -> Result<(), FrontendError> {
+        OverlayWebview::send_to_ui(self, msg)
+            .map_err(|e| FrontendError::SendFailed(e.to_string()))
+    }
+
+    fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {
+        OverlayWebview::try_recv_from_ui(self)
+    }
+}
+
+#[cfg(feature = "cef")]
+impl CompositeBackend for CefWebview {
+    fn poll(&mut self) {
+        self.poll();
+    }
+
+    fn is_ready(&self) -> bool {
+        self.is_ready()
+    }
+
+    fn capture_if_dirty(&mut self) -> Option<CaptureResult> {
+        CefWebview::capture_if_dirty(self).map(|(data, width, height)| {
+            CaptureResult::Bgra(data, width, height)
+        })
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.size()
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize(width, height);
+    }
+
+    fn send_mouse_event(&mut self, event: MouseEvent) {
+        self.send_mouse_event(event);
+    }
+
+    fn send_keyboard_event(&mut self, event: KeyboardEvent) {
+        self.send_keyboard_event(event);
+    }
+
+    fn send_to_ui(&mut self, msg: BevyToUi) -> Result<(), FrontendError> {
+        CefWebview::send_to_ui(self, msg)
+            .map_err(|e| FrontendError::SendFailed(e.to_string()))
+    }
+
+    fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {
+        CefWebview::try_recv_from_ui(self)
+    }
+
+    fn show_dev_tools(&self) {
+        CefWebview::show_dev_tools(self);
     }
 }

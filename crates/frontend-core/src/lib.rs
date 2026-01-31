@@ -97,4 +97,11 @@ pub trait CompositeBackend {
 
     /// Try to receive a message from the UI (non-blocking)
     fn try_recv_from_ui(&mut self) -> Option<UiToBevy>;
+
+    /// Open developer tools for debugging (CEF only)
+    ///
+    /// Default implementation does nothing. Override in backends that support DevTools.
+    fn show_dev_tools(&self) {
+        // Default: no-op for backends that don't support DevTools
+    }
 }

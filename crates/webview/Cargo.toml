@@ -13,6 +13,7 @@ dioxus = ["dep:pentimento-dioxus-ui"]
 [dependencies]
 pentimento-config = { path = "../config" }
 pentimento-ipc = { path = "../ipc" }
+pentimento-frontend-core = { path = "../frontend-core" }
 
 wry = { workspace = true }
 tokio = { workspace = true }
