@@ -15,6 +15,9 @@
         cloudiness: 0.0,
         sunIntensity: 10000.0,
         ambientIntensity: 500.0,
+        moonPhase: 50,      // 0-100%
+        azimuthAngle: 0,    // 0-360 degrees
+        pollution: 0,       // 0-100%
     });
 
     // Ambient occlusion settings
@@ -60,28 +63,47 @@
         }
     }
 
-    function handleTimeOfDayChange(e: Event) {
-        const value = (e.target as HTMLInputElement).valueAsNumber;
-        lightingSettings.timeOfDay = value;
+    function sendLightingUpdate() {
         bridge.updateLighting({
-            timeOfDay: value,
+            timeOfDay: lightingSettings.timeOfDay,
             cloudiness: lightingSettings.cloudiness,
             sunIntensity: lightingSettings.sunIntensity,
             ambientIntensity: lightingSettings.ambientIntensity,
             useTimeOfDay: true,
+            moonPhase: lightingSettings.moonPhase / 100,
+            azimuthAngle: lightingSettings.azimuthAngle,
+            pollution: lightingSettings.pollution / 100,
         });
+    }
+
+    function handleTimeOfDayChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber;
+        lightingSettings.timeOfDay = value;
+        sendLightingUpdate();
     }
 
     function handleCloudinessChange(e: Event) {
         const value = (e.target as HTMLInputElement).valueAsNumber / 100;
         lightingSettings.cloudiness = value;
-        bridge.updateLighting({
-            timeOfDay: lightingSettings.timeOfDay,
-            cloudiness: value,
-            sunIntensity: lightingSettings.sunIntensity,
-            ambientIntensity: lightingSettings.ambientIntensity,
-            useTimeOfDay: true,
-        });
+        sendLightingUpdate();
+    }
+
+    function handleMoonPhaseChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber;
+        lightingSettings.moonPhase = value;
+        sendLightingUpdate();
+    }
+
+    function handleAzimuthChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber;
+        lightingSettings.azimuthAngle = value;
+        sendLightingUpdate();
+    }
+
+    function handlePollutionChange(e: Event) {
+        const value = (e.target as HTMLInputElement).valueAsNumber;
+        lightingSettings.pollution = value;
+        sendLightingUpdate();
     }
 
     function handleAoEnabledChange(e: Event) {
@@ -118,6 +140,14 @@
         const h = Math.floor(hours);
         const m = Math.floor((hours - h) * 60);
         return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+    }
+
+    function getMoonPhaseLabel(phase: number): string {
+        if (phase < 10) return 'New';
+        if (phase < 40) return 'Crescent';
+        if (phase < 60) return 'Half';
+        if (phase < 90) return 'Gibbous';
+        return 'Full';
     }
 </script>
 
@@ -198,6 +228,55 @@
                     class="slider"
                 />
                 <span class="property-value">{(lightingSettings.cloudiness * 100).toFixed(0)}%</span>
+            </div>
+
+            <div class="property">
+                <label class="property-label" for="azimuth-slider">Sun Angle</label>
+                <input
+                    id="azimuth-slider"
+                    type="range"
+                    min="0"
+                    max="360"
+                    step="1"
+                    value={lightingSettings.azimuthAngle}
+                    oninput={handleAzimuthChange}
+                    class="slider"
+                />
+                <span class="property-value">{lightingSettings.azimuthAngle}°</span>
+            </div>
+
+            <div class="property">
+                <label class="property-label" for="pollution-slider">Pollution</label>
+                <input
+                    id="pollution-slider"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={lightingSettings.pollution}
+                    oninput={handlePollutionChange}
+                    class="slider"
+                />
+                <span class="property-value">{lightingSettings.pollution}%</span>
+            </div>
+        </div>
+
+        <div class="property-group">
+            <h3 class="group-title">Moon</h3>
+
+            <div class="property">
+                <label class="property-label" for="moon-phase-slider">Moon Phase</label>
+                <input
+                    id="moon-phase-slider"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={lightingSettings.moonPhase}
+                    oninput={handleMoonPhaseChange}
+                    class="slider"
+                />
+                <span class="property-value">{getMoonPhaseLabel(lightingSettings.moonPhase)}</span>
             </div>
         </div>
     </section>

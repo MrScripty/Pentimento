@@ -166,6 +166,20 @@ fn format_time(hours: f32) -> String {
     format!("{:02}:{:02}", h, m)
 }
 
+fn get_moon_phase_label(phase: f32) -> &'static str {
+    if phase < 10.0 {
+        "New"
+    } else if phase < 40.0 {
+        "Crescent"
+    } else if phase < 60.0 {
+        "Half"
+    } else if phase < 90.0 {
+        "Gibbous"
+    } else {
+        "Full"
+    }
+}
+
 #[component]
 pub fn SidePanel(props: SidePanelProps) -> Element {
     // Material properties
@@ -175,6 +189,9 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
     // Lighting settings
     let mut time_of_day = use_signal(|| 12.0f32);
     let mut cloudiness = use_signal(|| 0.0f32);
+    let mut moon_phase = use_signal(|| 50.0f32); // 0-100%
+    let mut azimuth_angle = use_signal(|| 0.0f32); // 0-360 degrees
+    let mut pollution = use_signal(|| 0.0f32); // 0-100%
 
     // Ambient occlusion settings
     let mut ao_enabled = use_signal(|| false);
@@ -211,37 +228,57 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
         }
     };
 
-    // Lighting handlers
-    let bridge_time = props.bridge.clone();
-    let handle_time_change = move |value: f32| {
-        time_of_day.set(value);
-        bridge_time.update_lighting(LightingSettings {
-            sun_direction: [-0.5, -0.7, -0.5],
-            sun_color: [1.0, 0.98, 0.95],
-            sun_intensity: 10000.0,
-            ambient_color: [0.6, 0.7, 1.0],
-            ambient_intensity: 500.0,
-            time_of_day: value,
-            cloudiness: cloudiness(),
-            use_time_of_day: true,
-        });
+    // Helper to send all lighting settings
+    let send_lighting_update = {
+        let bridge = props.bridge.clone();
+        move || {
+            bridge.update_lighting(LightingSettings {
+                sun_direction: [-0.5, -0.7, -0.5],
+                sun_color: [1.0, 0.98, 0.95],
+                sun_intensity: 10000.0,
+                ambient_color: [0.6, 0.7, 1.0],
+                ambient_intensity: 500.0,
+                time_of_day: time_of_day(),
+                cloudiness: cloudiness(),
+                use_time_of_day: true,
+                moon_phase: moon_phase() / 100.0,
+                azimuth_angle: azimuth_angle(),
+                pollution: pollution() / 100.0,
+            });
+        }
     };
 
-    let bridge_cloud = props.bridge.clone();
+    // Lighting handlers
+    let send_lighting = send_lighting_update.clone();
+    let handle_time_change = move |value: f32| {
+        time_of_day.set(value);
+        send_lighting();
+    };
+
+    let send_lighting = send_lighting_update.clone();
     let handle_cloudiness_change = move |value: f32| {
         // value is 0-100, normalize to 0-1
         let normalized = value / 100.0;
         cloudiness.set(normalized);
-        bridge_cloud.update_lighting(LightingSettings {
-            sun_direction: [-0.5, -0.7, -0.5],
-            sun_color: [1.0, 0.98, 0.95],
-            sun_intensity: 10000.0,
-            ambient_color: [0.6, 0.7, 1.0],
-            ambient_intensity: 500.0,
-            time_of_day: time_of_day(),
-            cloudiness: normalized,
-            use_time_of_day: true,
-        });
+        send_lighting();
+    };
+
+    let send_lighting = send_lighting_update.clone();
+    let handle_moon_phase_change = move |value: f32| {
+        moon_phase.set(value);
+        send_lighting();
+    };
+
+    let send_lighting = send_lighting_update.clone();
+    let handle_azimuth_change = move |value: f32| {
+        azimuth_angle.set(value);
+        send_lighting();
+    };
+
+    let send_lighting = send_lighting_update.clone();
+    let handle_pollution_change = move |value: f32| {
+        pollution.set(value);
+        send_lighting();
     };
 
     // AO handlers - use bridge clone for structural toggle pattern
@@ -412,6 +449,46 @@ pub fn SidePanel(props: SidePanelProps) -> Element {
                             on_change: handle_cloudiness_change
                         }
                         span { class: "property-value", "{(cloudiness() * 100.0) as i32}%" }
+                    }
+
+                    div { class: "property",
+                        label { class: "property-label", "Sun Angle" }
+                        Slider {
+                            value: azimuth_angle(),
+                            min: 0.0,
+                            max: 360.0,
+                            step: 1.0,
+                            on_change: handle_azimuth_change
+                        }
+                        span { class: "property-value", "{azimuth_angle() as i32}°" }
+                    }
+
+                    div { class: "property",
+                        label { class: "property-label", "Pollution" }
+                        Slider {
+                            value: pollution(),
+                            min: 0.0,
+                            max: 100.0,
+                            step: 1.0,
+                            on_change: handle_pollution_change
+                        }
+                        span { class: "property-value", "{pollution() as i32}%" }
+                    }
+                }
+
+                div { class: "property-group",
+                    h3 { class: "group-title", "Moon" }
+
+                    div { class: "property",
+                        label { class: "property-label", "Moon Phase" }
+                        Slider {
+                            value: moon_phase(),
+                            min: 0.0,
+                            max: 100.0,
+                            step: 1.0,
+                            on_change: handle_moon_phase_change
+                        }
+                        span { class: "property-value", "{get_moon_phase_label(moon_phase())}" }
                     }
                 }
             }

@@ -226,6 +226,9 @@ class BevyBridge {
         timeOfDay?: number;
         cloudiness?: number;
         useTimeOfDay?: boolean;
+        moonPhase?: number;
+        azimuthAngle?: number;
+        pollution?: number;
     }): void {
         this.send({
             type: 'UpdateLighting',
@@ -238,6 +241,9 @@ class BevyBridge {
                 time_of_day: settings.timeOfDay ?? 12.0,
                 cloudiness: settings.cloudiness ?? 0.0,
                 use_time_of_day: settings.useTimeOfDay ?? true,
+                moon_phase: settings.moonPhase ?? 0.5,
+                azimuth_angle: settings.azimuthAngle ?? 0.0,
+                pollution: settings.pollution ?? 0.0,
             }
         });
     }

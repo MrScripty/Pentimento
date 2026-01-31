@@ -45,6 +45,15 @@ pub struct LightingSettings {
     pub cloudiness: f32,
     /// Whether to auto-calculate sun direction from time_of_day
     pub use_time_of_day: bool,
+    /// Moon phase as a percentage (0.0 = new moon, 1.0 = full moon)
+    /// Controls ambient light intensity at night
+    pub moon_phase: f32,
+    /// Azimuth angle in degrees (0-360) for sun/moon direction rotation
+    /// 0 = east, 90 = south, 180 = west, 270 = north
+    pub azimuth_angle: f32,
+    /// Atmospheric pollution level (0.0 = clear, 1.0 = heavy pollution)
+    /// Affects sky color, haze, and light intensity
+    pub pollution: f32,
 }
 
 impl Default for LightingSettings {
@@ -66,6 +75,12 @@ impl Default for LightingSettings {
             cloudiness: 0.0,
             // Use time-based sun positioning
             use_time_of_day: true,
+            // Default half moon
+            moon_phase: 0.5,
+            // Sun rises in the east
+            azimuth_angle: 0.0,
+            // Clear atmosphere
+            pollution: 0.0,
         }
     }
 }
