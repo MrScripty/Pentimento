@@ -15,12 +15,14 @@
 //! - [`BoundaryVertex`] - Tracks vertices shared between adjacent chunks
 
 mod boundary;
-mod merge;
-mod partition;
+pub mod merge;
+pub mod partition;
 
-pub use boundary::BoundaryVertex;
-pub use merge::MergeResult;
-pub use partition::PartitionConfig;
+pub use boundary::{
+    get_original_vertex_id, is_boundary_vertex, sync_vertex_position, BoundaryVertex,
+};
+pub use merge::{merge_chunks, merge_two_chunks, rebalance_chunks, MergeResult};
+pub use partition::{partition_mesh, split_chunk, PartitionConfig};
 
 use crate::ChunkConfig;
 use glam::{Vec3, UVec3};

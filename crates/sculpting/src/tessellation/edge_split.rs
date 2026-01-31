@@ -23,7 +23,7 @@
 //! Each triangle (ABC, ABD) becomes two triangles (AMC, MBC, AMD, MBD).
 
 use glam::{Vec2, Vec3};
-use painting::half_edge::{Face, FaceId, HalfEdge, HalfEdgeId, HalfEdgeMesh, Vertex, VertexId};
+use painting::half_edge::{FaceId, HalfEdgeId, HalfEdgeMesh, Vertex, VertexId};
 
 /// Result of splitting an edge.
 #[derive(Debug, Clone)]
@@ -45,9 +45,9 @@ pub fn split_edge(mesh: &mut HalfEdgeMesh, edge_id: HalfEdgeId) -> Option<SplitR
     let he = mesh.half_edge(edge_id)?;
     let v0_id = he.origin;
     let twin_id = he.twin;
-    let face_id = he.face;
+    let _face_id = he.face;
     let next_id = he.next;
-    let prev_id = he.prev;
+    let _prev_id = he.prev;
 
     // Get the destination vertex (origin of next half-edge)
     let next_he = mesh.half_edge(next_id)?;
@@ -66,7 +66,7 @@ pub fn split_edge(mesh: &mut HalfEdgeMesh, edge_id: HalfEdgeId) -> Option<SplitR
 
     // Create new vertex at midpoint
     let new_vertex_id = VertexId(mesh.vertices().len() as u32);
-    let new_vertex = Vertex {
+    let _new_vertex = Vertex {
         id: new_vertex_id,
         position: mid_pos,
         normal: mid_normal,

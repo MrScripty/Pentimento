@@ -14,7 +14,9 @@ use bevy::prelude::*;
 #[cfg(feature = "bevy")]
 use bevy::asset::Assets;
 
-use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
+use crate::chunking::MeshChunk;
+#[cfg(feature = "bevy")]
+use crate::chunking::{ChunkId, ChunkedMesh};
 use painting::half_edge::VertexId;
 use std::collections::HashSet;
 

@@ -22,10 +22,15 @@ mod edge_collapse;
 mod edge_split;
 mod metrics;
 
-pub use edge_collapse::{can_collapse_edge, collapse_edge, CollapseResult};
-pub use edge_split::{split_edge, SplitResult};
+pub use edge_collapse::{
+    calculate_collapse_position, can_collapse_edge, collapse_edge, would_cause_flip, CollapseResult,
+};
+pub use edge_split::{
+    calculate_split_position, can_split_edge, interpolate_vertex_attributes, split_edge, SplitResult,
+};
 pub use metrics::{
-    calculate_edge_screen_length, evaluate_edge, EdgeEvaluation, ScreenSpaceConfig,
+    calculate_edge_screen_length, calculate_world_edge_length, evaluate_edge, EdgeEvaluation,
+    ScreenSpaceConfig,
 };
 
 use crate::chunking::MeshChunk;

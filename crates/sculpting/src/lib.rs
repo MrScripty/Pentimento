@@ -26,13 +26,16 @@ pub mod brush;
 pub mod chunking;
 pub mod deformation;
 pub mod gpu;
+pub mod pipeline;
 pub mod spatial;
 pub mod tessellation;
 pub mod types;
 
 pub use brush::{BrushInput, BrushPreset, DabResult, FalloffCurve, SculptBrushEngine, StrokeState};
 pub use chunking::{
-    Aabb, BoundaryVertex, ChunkId, ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
+    get_original_vertex_id, is_boundary_vertex, merge_chunks, merge_two_chunks, partition_mesh,
+    rebalance_chunks, split_chunk, sync_vertex_position, Aabb, BoundaryVertex, ChunkId,
+    ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
 };
 pub use deformation::{
     apply_crease, apply_deformation, apply_flatten, apply_grab, apply_inflate, apply_pinch,
@@ -46,11 +49,16 @@ pub use gpu::{
 pub use gpu::{create_chunk_meshes, remove_chunk_meshes, sync_chunk_to_gpu, sync_chunks_to_gpu};
 pub use spatial::{OctreeConfig, VertexOctree};
 pub use tessellation::{
-    can_collapse_edge, collapse_edge, evaluate_edge, split_edge, tessellate_at_brush,
+    calculate_collapse_position, calculate_edge_screen_length, calculate_split_position,
+    calculate_world_edge_length, can_collapse_edge, can_split_edge, collapse_edge, evaluate_edge,
+    interpolate_vertex_attributes, split_edge, tessellate_at_brush, would_cause_flip,
     CollapseResult, EdgeEvaluation, ScreenSpaceConfig, SplitResult, TessellationDecision,
     TessellationStats,
 };
 pub use types::{
     ChunkConfig, DeformationType, SculptDab, SculptStrokeHeader, SculptStrokePacket,
     TessellationAction, TessellationConfig,
+};
+pub use pipeline::{
+    DabProcessResult, PipelineConfig, SculptingPipeline, StrokeEndResult,
 };
