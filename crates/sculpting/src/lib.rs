@@ -22,12 +22,19 @@
 //! - **Spatial**: Octree for efficient brush-to-vertex queries
 //! - **Pipeline**: Orchestrates stroke → deform → tessellate → GPU sync
 
+pub mod brush;
 pub mod chunking;
+pub mod deformation;
 pub mod spatial;
 pub mod types;
 
+pub use brush::{BrushInput, BrushPreset, DabResult, FalloffCurve, SculptBrushEngine, StrokeState};
 pub use chunking::{
     Aabb, BoundaryVertex, ChunkId, ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
+};
+pub use deformation::{
+    apply_crease, apply_deformation, apply_flatten, apply_grab, apply_inflate, apply_pinch,
+    apply_pull, apply_push, apply_smooth, DabInfo, DeformationContext, DeformationResult,
 };
 pub use spatial::{OctreeConfig, VertexOctree};
 pub use types::{
