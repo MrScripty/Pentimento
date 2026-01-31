@@ -55,6 +55,7 @@ pub fn Slider(props: SliderProps) -> Element {
     let current_value = props.value;
     let handle_mousedown = move |evt: Event<MouseData>| {
         let client_x = evt.data().client_coordinates().x;
+        tracing::info!("Slider mousedown: bounds={:?}, client_x={}", element_bounds(), client_x);
 
         // Start dragging
         is_dragging.set(true);
@@ -88,18 +89,18 @@ pub fn Slider(props: SliderProps) -> Element {
         let client_x = evt.data().client_coordinates().x;
         let delta_x = client_x - drag_start_x();
 
-        // Get width from bounds, or use a reasonable fallback
-        // The fallback makes dragging work even before bounds are available
-        let width = element_bounds().map(|(_, w)| w).unwrap_or(200.0);
-
-        if width <= 0.0 {
-            return;
-        }
+        // Get width from bounds, filtering out zero values, with fallback
+        // Blitz's get_client_rect() often returns width=0, so we need the fallback
+        let width = element_bounds()
+            .map(|(_, w)| w)
+            .filter(|w| *w > 0.0)
+            .unwrap_or(200.0);
 
         let delta_normalized = (delta_x / width) as f32;
         let delta_value = delta_normalized * (max - min);
         let new_value = drag_start_value() + delta_value;
         let stepped = (new_value / step).round() * step;
+        tracing::debug!("Slider drag: delta_x={}, width={}, new_value={}", delta_x, width, stepped);
         on_change.call(stepped.clamp(min, max));
     };
 
@@ -146,7 +147,10 @@ pub fn Slider(props: SliderProps) -> Element {
             style: "position: relative; width: 100%; height: 16px; background: rgba(255, 255, 255, 0.1); border: none; border-radius: 2px; cursor: pointer; padding: 0;",
             // Get element bounds on mount using Blitz's get_client_rect()
             onmounted: move |evt| async move {
-                if let Ok(rect) = evt.data().get_client_rect().await {
+                let result = evt.data().get_client_rect().await;
+                tracing::info!("Slider get_client_rect: {:?}", result);
+                if let Ok(rect) = result {
+                    tracing::info!("Slider bounds: left={}, width={}", rect.origin.x, rect.size.width);
                     element_bounds.set(Some((rect.origin.x, rect.size.width)));
                 }
             },

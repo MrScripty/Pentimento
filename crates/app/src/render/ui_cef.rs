@@ -11,7 +11,7 @@ use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use pentimento_ipc::UiToBevy;
-use pentimento_scene::{AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages};
+use pentimento_scene::{AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, SceneLighting};
 use pentimento_webview::CefWebview;
 use std::sync::Arc;
 
@@ -237,7 +237,7 @@ pub fn handle_cef_window_resize(
     }
 }
 
-/// Process IPC messages from the CEF webview
+/// Process IPC messages from the CEF webview (uses unified FrontendResource)
 pub fn handle_cef_ipc_messages(world: &mut World) {
     // Send outbound messages to the UI first
     let outbound_msgs = {
@@ -248,9 +248,10 @@ pub fn handle_cef_ipc_messages(world: &mut World) {
     };
 
     if !outbound_msgs.is_empty() {
-        if let Some(webview_res) = world.get_non_send_resource_mut::<CefWebviewResource>() {
+        // Use unified FrontendResource instead of CefWebviewResource
+        if let Some(mut frontend) = world.get_non_send_resource_mut::<super::FrontendResource>() {
             for msg in outbound_msgs {
-                if let Err(e) = webview_res.webview.send_to_ui(msg) {
+                if let Err(e) = frontend.backend.send_to_ui(msg) {
                     warn!("Failed to send message to CEF UI: {:?}", e);
                 }
             }
@@ -259,11 +260,12 @@ pub fn handle_cef_ipc_messages(world: &mut World) {
 
     // Collect inbound messages (avoid borrow conflicts)
     let messages: Vec<UiToBevy> = {
-        let Some(mut webview_res) = world.get_non_send_resource_mut::<CefWebviewResource>() else {
+        // Use unified FrontendResource instead of CefWebviewResource
+        let Some(mut frontend) = world.get_non_send_resource_mut::<super::FrontendResource>() else {
             return;
         };
         let mut msgs = Vec::new();
-        while let Some(msg) = webview_res.webview.try_recv_from_ui() {
+        while let Some(msg) = frontend.backend.try_recv_from_ui() {
             msgs.push(msg);
         }
         msgs
@@ -289,6 +291,12 @@ pub fn handle_cef_ipc_messages(world: &mut World) {
             }
             UiToBevy::UiDirty => {
                 // Already handled by dirty flag in webview
+            }
+            UiToBevy::UpdateLighting(settings) => {
+                if let Some(mut lighting) = world.get_resource_mut::<SceneLighting>() {
+                    lighting.settings = settings;
+                    info!("Updated lighting settings from CEF UI");
+                }
             }
             _ => {
                 debug!("Unhandled CEF IPC message: {:?}", msg);

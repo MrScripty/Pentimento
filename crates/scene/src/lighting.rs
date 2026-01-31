@@ -108,28 +108,20 @@ fn calculate_sun_intensity(time_of_day: f32, cloudiness: f32, base_intensity: f3
 pub struct SunLight;
 
 /// Resource for current lighting settings
+///
+/// Uses Bevy's built-in change detection - the `update_lighting` system
+/// checks `is_changed()` instead of a manual dirty flag.
 #[derive(Resource)]
 pub struct SceneLighting {
     /// Current lighting configuration
     pub settings: LightingSettings,
-    /// Flag indicating settings have changed and need to be applied
-    pub dirty: bool,
 }
 
 impl Default for SceneLighting {
     fn default() -> Self {
         Self {
             settings: LightingSettings::default(),
-            dirty: true, // Apply on first frame
         }
-    }
-}
-
-impl SceneLighting {
-    /// Update settings and mark as dirty
-    pub fn update(&mut self, settings: LightingSettings) {
-        self.settings = settings;
-        self.dirty = true;
     }
 }
 
@@ -226,12 +218,14 @@ fn setup_lighting(mut commands: Commands, lighting: Res<SceneLighting>) {
 }
 
 /// Update lighting when settings change (atmosphere version)
+///
+/// Uses Bevy's change detection via `is_changed()` instead of a manual dirty flag.
 #[cfg(feature = "atmosphere")]
 fn update_lighting(
-    mut lighting: ResMut<SceneLighting>,
+    lighting: Res<SceneLighting>,
     mut sun_query: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
 ) {
-    if !lighting.dirty {
+    if !lighting.is_changed() {
         return;
     }
 
@@ -257,7 +251,6 @@ fn update_lighting(
         light.illuminance = lux::RAW_SUNLIGHT * cloud_factor;
     }
 
-    lighting.dirty = false;
     info!(
         "Scene lighting updated (atmosphere): time={:.1}h, cloudiness={:.0}%",
         time_of_day,
@@ -266,13 +259,15 @@ fn update_lighting(
 }
 
 /// Update lighting when settings change (non-atmosphere version)
+///
+/// Uses Bevy's change detection via `is_changed()` instead of a manual dirty flag.
 #[cfg(not(feature = "atmosphere"))]
 fn update_lighting(
-    mut lighting: ResMut<SceneLighting>,
+    lighting: Res<SceneLighting>,
     mut sun_query: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
     mut ambient_light: ResMut<GlobalAmbientLight>,
 ) {
-    if !lighting.dirty {
+    if !lighting.is_changed() {
         return;
     }
 
@@ -320,7 +315,6 @@ fn update_lighting(
     ambient_light.color = Color::srgb(ambient_color[0], ambient_color[1], ambient_color[2]);
     ambient_light.brightness = ambient_intensity;
 
-    lighting.dirty = false;
     info!(
         "Scene lighting updated: time={:.1}h, cloudiness={:.0}%",
         time_of_day,
