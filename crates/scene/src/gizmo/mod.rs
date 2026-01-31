@@ -26,7 +26,9 @@ mod state;
 mod transform;
 
 use bevy::prelude::*;
+use pentimento_ipc::EditMode;
 
+use crate::edit_mode::EditModeState;
 #[cfg(feature = "selection")]
 use crate::gizmo_raycast::GizmoGeometry;
 
@@ -52,7 +54,8 @@ impl Plugin for GizmoPlugin {
             app.add_systems(
                 Update,
                 (
-                    detect_gizmo_hover,
+                    sync_gizmo_visibility_with_edit_mode,
+                    detect_gizmo_hover.after(sync_gizmo_visibility_with_edit_mode),
                     handle_gizmo_click.after(detect_gizmo_hover),
                     handle_gizmo_hotkeys.after(handle_gizmo_click),
                     handle_gizmo_mouse_input.after(handle_gizmo_hotkeys),
@@ -61,5 +64,21 @@ impl Plugin for GizmoPlugin {
                 ),
             );
         }
+    }
+}
+
+/// Disable gizmo visibility when in edit modes (Paint, Sculpt, MeshEdit).
+///
+/// The gizmo interferes with brush strokes and vertex selection in these modes,
+/// so we hide it until the user exits back to normal object mode.
+fn sync_gizmo_visibility_with_edit_mode(
+    edit_mode: Res<EditModeState>,
+    mut gizmo_state: ResMut<GizmoState>,
+) {
+    // Gizmo should only be visible in None mode (normal object manipulation)
+    let should_show_gizmo = edit_mode.mode == EditMode::None;
+
+    if gizmo_state.always_visible != should_show_gizmo {
+        gizmo_state.always_visible = should_show_gizmo;
     }
 }

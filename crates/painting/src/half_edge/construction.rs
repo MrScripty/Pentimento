@@ -160,6 +160,24 @@ impl HalfEdgeMesh {
         })
     }
 
+    /// Create a HalfEdgeMesh from raw components.
+    ///
+    /// This constructor is used by the sculpting crate to build meshes
+    /// from chunk data during partitioning and merging operations.
+    pub fn from_raw(
+        vertices: Vec<Vertex>,
+        half_edges: Vec<HalfEdge>,
+        faces: Vec<Face>,
+        edge_map: HashMap<(VertexId, VertexId), HalfEdgeId>,
+    ) -> Self {
+        Self {
+            vertices,
+            half_edges,
+            faces,
+            edge_map,
+        }
+    }
+
     /// Convert back to a Bevy mesh
     pub fn to_bevy_mesh(&self) -> Mesh {
         let mut positions: Vec<[f32; 3]> = Vec::new();

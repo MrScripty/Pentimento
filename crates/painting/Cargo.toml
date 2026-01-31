@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+# Enable Bevy integration for half_edge mesh and related functionality
+# Requires bevy_render for Mesh type
 bevy = ["dep:bevy"]
 
 [dependencies]
@@ -13,4 +15,9 @@ bytemuck = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 glam = { workspace = true }
-bevy = { workspace = true, optional = true }
+
+# Bevy with minimal features for half-edge mesh operations
+bevy = { workspace = true, optional = true, features = [
+    "bevy_asset",
+    "bevy_render",
+] }

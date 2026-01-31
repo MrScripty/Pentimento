@@ -16,4 +16,5 @@ glam = { workspace = true }
 bevy = { workspace = true, optional = true }
 
 # Reference painting crate for shared types and half-edge mesh
-painting = { path = "../painting" }
+# The bevy feature enables half_edge module for mesh topology
+painting = { path = "../painting", features = ["bevy"] }

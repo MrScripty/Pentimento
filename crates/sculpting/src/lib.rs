@@ -19,10 +19,17 @@
 //! - **Deformation**: Vertex displacement algorithms
 //! - **Tessellation**: Edge split/collapse for constant mesh density
 //! - **Chunking**: Spatial partitioning for localized GPU updates
+//! - **Spatial**: Octree for efficient brush-to-vertex queries
 //! - **Pipeline**: Orchestrates stroke → deform → tessellate → GPU sync
 
+pub mod chunking;
+pub mod spatial;
 pub mod types;
 
+pub use chunking::{
+    Aabb, BoundaryVertex, ChunkId, ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
+};
+pub use spatial::{OctreeConfig, VertexOctree};
 pub use types::{
     ChunkConfig, DeformationType, SculptDab, SculptStrokeHeader, SculptStrokePacket,
     TessellationAction, TessellationConfig,
