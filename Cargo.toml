@@ -11,6 +11,7 @@ members = [
     "crates/cef-helper",
     "crates/dioxus-ui",
     "crates/painting",
+    "crates/sculpting",
     "src-tauri",
 ]
 

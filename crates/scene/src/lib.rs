@@ -41,6 +41,9 @@ mod mesh_painting_system;
 mod normal_indicator;
 #[cfg(feature = "selection")]
 mod outline;
+mod render_camera;
+#[cfg(feature = "sculpting")]
+mod sculpt_mode;
 #[cfg(feature = "selection")]
 mod selection;
 #[cfg(feature = "wireframe")]
@@ -84,6 +87,9 @@ pub use mesh_painting_system::{
 pub use normal_indicator::{NormalIndicatorPlugin, NormalIndicatorState};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
+pub use render_camera::{ActiveRenderCamera, RenderCamera, RenderCameraPlugin};
+#[cfg(feature = "sculpting")]
+pub use sculpt_mode::{SculptEvent, SculptModePlugin, SculptState};
 #[cfg(feature = "selection")]
 pub use selection::{Selectable, Selected, SelectionPlugin, SelectionState};
 #[cfg(feature = "wireframe")]
@@ -125,6 +131,7 @@ impl Plugin for ScenePlugin {
         app.add_plugins(PaintingSystemPlugin);
         app.add_plugins(ProjectionModePlugin);
         app.add_plugins(ProjectionPaintingPlugin);
+        app.add_plugins(RenderCameraPlugin);
 
         app.add_systems(Startup, setup_scene);
 
@@ -143,6 +150,11 @@ impl Plugin for ScenePlugin {
             app.add_plugins(MeshPaintModePlugin);
             app.add_plugins(MeshPaintingSystemPlugin);
             app.add_plugins(NormalIndicatorPlugin);
+        }
+
+        #[cfg(feature = "sculpting")]
+        {
+            app.add_plugins(SculptModePlugin);
         }
 
         #[cfg(feature = "selection")]

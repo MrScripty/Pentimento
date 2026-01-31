@@ -104,13 +104,18 @@ impl Plugin for PaintModePlugin {
     }
 }
 
-/// Handle paint mode toggle (P key)
+/// Handle paint mode toggle (Shift+Tab)
 fn handle_paint_mode_toggle(
     key_input: Res<ButtonInput<KeyCode>>,
     mut paint_mode: ResMut<PaintMode>,
     mut paint_events: MessageWriter<PaintEvent>,
 ) {
-    if key_input.just_pressed(KeyCode::KeyP) {
+    // Shift+Tab to toggle paint mode
+    let shift = key_input.pressed(KeyCode::ShiftLeft)
+        || key_input.pressed(KeyCode::ShiftRight);
+    let tab = key_input.just_pressed(KeyCode::Tab);
+
+    if shift && tab {
         paint_mode.active = !paint_mode.active;
         info!(
             "Paint mode {}",

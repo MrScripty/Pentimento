@@ -12,6 +12,8 @@ pub enum EditMode {
     Paint,
     /// Mesh edit mode - editing vertices, edges, and faces
     MeshEdit,
+    /// Sculpt mode - 3D sculpting with dynamic tessellation
+    Sculpt,
 }
 
 /// Sub-object selection mode for mesh editing.

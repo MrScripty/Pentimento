@@ -1,0 +1,19 @@
+[package]
+name = "sculpting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+bevy = ["dep:bevy"]
+
+[dependencies]
+serde = { workspace = true }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+glam = { workspace = true }
+bevy = { workspace = true, optional = true }
+
+# Reference painting crate for shared types and half-edge mesh
+painting = { path = "../painting" }
