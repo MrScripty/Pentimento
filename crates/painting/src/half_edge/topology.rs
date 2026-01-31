@@ -30,6 +30,11 @@ impl HalfEdgeMesh {
         self.faces.get(id.0 as usize)
     }
 
+    /// Get mutable face by ID
+    pub fn face_mut(&mut self, id: FaceId) -> Option<&mut Face> {
+        self.faces.get_mut(id.0 as usize)
+    }
+
     /// Get all vertices
     pub fn vertices(&self) -> &[Vertex] {
         &self.vertices

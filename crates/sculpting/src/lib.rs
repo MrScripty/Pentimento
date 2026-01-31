@@ -25,6 +25,7 @@
 pub mod brush;
 pub mod chunking;
 pub mod deformation;
+pub mod gpu;
 pub mod spatial;
 pub mod types;
 
@@ -36,6 +37,12 @@ pub use deformation::{
     apply_crease, apply_deformation, apply_flatten, apply_grab, apply_inflate, apply_pinch,
     apply_pull, apply_push, apply_smooth, DabInfo, DeformationContext, DeformationResult,
 };
+pub use gpu::{
+    recalculate_face_normals_for_dirty, recalculate_normals_for_dirty,
+    update_normals_after_deformation, DirtyVertices, SyncResult,
+};
+#[cfg(feature = "bevy")]
+pub use gpu::{create_chunk_meshes, remove_chunk_meshes, sync_chunk_to_gpu, sync_chunks_to_gpu};
 pub use spatial::{OctreeConfig, VertexOctree};
 pub use types::{
     ChunkConfig, DeformationType, SculptDab, SculptStrokeHeader, SculptStrokePacket,
