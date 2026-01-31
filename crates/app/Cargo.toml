@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 pentimento-config = { path = "../config", features = ["bevy"] }
 pentimento-webview = { path = "../webview" }
+pentimento-frontend-core = { path = "../frontend-core" }
 pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
 pentimento-diffusion = { path = "../diffusion", optional = true }
@@ -38,7 +39,8 @@ rust-embed = { version = "8.7", features = ["debug-embed", "compression"] }
 gtk = "0.18"
 
 [features]
-default = ["wayland", "wireframe", "selection", "mesh_painting", "mesh_editing", "atmosphere"]
+default = ["wayland", "wireframe", "selection", "mesh_painting", "mesh_editing", "sculpting", "atmosphere"]
+sculpting = ["pentimento-scene/sculpting"]
 wayland = []
 x11 = []
 cef = ["pentimento-webview/cef"]

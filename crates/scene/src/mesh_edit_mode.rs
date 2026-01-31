@@ -117,11 +117,25 @@ fn handle_tab_key_for_mesh_edit(
     key_input: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditModeState>,
     active_plane: Res<ActiveCanvasPlane>,
-    mesh_edit_state: Res<MeshEditState>,
+    _mesh_edit_state: Res<MeshEditState>,
     selected_meshes: Query<Entity, (With<Selected>, With<Mesh3d>)>,
     mut events: MessageWriter<MeshEditEvent>,
 ) {
     if !key_input.just_pressed(KeyCode::Tab) {
+        return;
+    }
+
+    // Don't handle Tab if Ctrl is held (Ctrl+Tab is for sculpt mode)
+    let ctrl = key_input.pressed(KeyCode::ControlLeft)
+        || key_input.pressed(KeyCode::ControlRight);
+    if ctrl {
+        return;
+    }
+
+    // Don't handle Tab if Shift is held (Shift+Tab is for paint mode)
+    let shift = key_input.pressed(KeyCode::ShiftLeft)
+        || key_input.pressed(KeyCode::ShiftRight);
+    if shift {
         return;
     }
 

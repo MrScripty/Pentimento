@@ -11,7 +11,9 @@ use crate::selection::{Selected, SelectionState};
 #[cfg(feature = "selection")]
 use crate::MainCamera;
 
+#[cfg(feature = "selection")]
 use super::state::GizmoState;
+#[cfg(feature = "selection")]
 use super::transform::get_gizmo_transform;
 
 /// Detect which gizmo handle the cursor is hovering over

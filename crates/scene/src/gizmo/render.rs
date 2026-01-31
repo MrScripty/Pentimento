@@ -10,7 +10,9 @@ use crate::gizmo_raycast::{GizmoGeometry, GizmoHandle};
 #[cfg(feature = "selection")]
 use crate::selection::{Selected, SelectionState};
 
+#[cfg(feature = "selection")]
 use super::state::GizmoState;
+#[cfg(feature = "selection")]
 use super::transform::get_gizmo_transform;
 
 /// Render gizmo visualization using Bevy's gizmos API
