@@ -130,6 +130,16 @@ pub struct SculptStrokePacket {
 /// Configuration for tessellation behavior.
 ///
 /// Values are configurable and should not be treated as magic numbers.
+///
+/// ## Edge Collapse Safety
+///
+/// Edge collapse is now enabled by default after implementing safety checks
+/// adapted from SculptGL:
+/// - Ring boundary detection (ring_vertices != ring_faces)
+/// - Edge flip fallback for 3+ shared neighbors
+/// - Face normal flip prevention
+///
+/// See `crates/sculpting/src/tessellation/edge_collapse.rs` for details.
 #[derive(Debug, Clone)]
 pub struct TessellationConfig {
     /// Target edge length in screen pixels (default: 6.0)
@@ -138,6 +148,19 @@ pub struct TessellationConfig {
     pub split_ratio: f32,
     /// Collapse edges smaller than target × collapse_ratio (default: 0.4)
     pub collapse_ratio: f32,
+    /// Minimum face count to preserve - never collapse below this (default: 4)
+    pub min_faces: usize,
+    /// Maximum faces per chunk before refusing to split more edges (default: 50000)
+    pub max_faces_per_chunk: usize,
+    /// Maximum edge splits per dab to prevent runaway growth (default: 50)
+    pub max_splits_per_dab: usize,
+    /// Whether edge collapse is enabled.
+    ///
+    /// Now enabled by default after implementing comprehensive safety checks:
+    /// - Ring boundary detection prevents boundary vertex collapse
+    /// - Edge flip fallback when 3+ shared neighbors detected
+    /// - Face flip prevention checks normal direction changes
+    pub collapse_enabled: bool,
 }
 
 impl Default for TessellationConfig {
@@ -146,6 +169,12 @@ impl Default for TessellationConfig {
             target_pixels: 6.0,
             split_ratio: 1.5,
             collapse_ratio: 0.4,
+            min_faces: 4, // Tetrahedron minimum - never destroy mesh completely
+            max_faces_per_chunk: 50000, // Prevent OOM from exponential growth
+            max_splits_per_dab: 50, // Limit splits per brush dab
+            // ENABLED: Edge collapse now has comprehensive safety checks
+            // See edge_collapse.rs for ring boundary and edge flip fallback logic
+            collapse_enabled: true,
         }
     }
 }

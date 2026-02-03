@@ -3,13 +3,17 @@
 //! Collapsing an edge removes it by merging its two endpoints into one vertex.
 //! This reduces mesh density when detail is no longer needed.
 //!
-//! ## Link Condition
+//! # Safety Checks
 //!
-//! An edge can only be collapsed if it satisfies the "link condition":
-//! the set of vertices adjacent to both endpoints must have exactly 2 vertices
-//! (the two vertices of the triangles sharing the edge).
+//! This module implements safety checks adapted from SculptGL (MIT License,
+//! Copyright Stéphane Ginier) to prevent non-manifold geometry:
 //!
-//! This prevents topology changes like creating non-manifold geometry.
+//! 1. **Ring condition** - For each endpoint, ring_vertices.len() must equal
+//!    ring_faces.len(). If they differ, the vertex is on a boundary.
+//! 2. **Link condition** - Common neighbors must equal 2 (interior) or 1 (boundary).
+//! 3. **Edge flip fallback** - When 3+ shared neighbors exist, suggest edge flip
+//!    instead of collapse to avoid non-manifold topology.
+//! 4. **Flip check** - Collapse must not flip any adjacent face normals.
 //!
 //! ## Algorithm
 //!
@@ -29,10 +33,67 @@
 //!
 //! Vertices A and B are merged into M (typically at the midpoint).
 //! The two triangles sharing edge AB are removed.
+//!
+//! ## Reference
+//!
+//! Adapted from SculptGL Decimation.js (MIT License, Copyright Stéphane Ginier)
+//! Source: <https://github.com/stephomi/sculptgl>
 
 use glam::Vec3;
 use painting::half_edge::{FaceId, HalfEdgeId, HalfEdgeMesh, VertexId};
 use std::collections::HashSet;
+
+// =============================================================================
+// Collapse Check Types
+// =============================================================================
+
+/// Result of checking whether an edge can be collapsed.
+///
+/// This enum represents the three possible outcomes of the safety check:
+/// - `Safe` - Edge can be collapsed, includes the optimal merge position
+/// - `UseEdgeFlip` - Collapse would create non-manifold geometry, but an edge
+///   flip operation can improve mesh quality instead
+/// - `Rejected` - Edge cannot be collapsed or flipped, includes the reason
+#[derive(Debug, Clone, PartialEq)]
+pub enum CollapseCheck {
+    /// Edge can be safely collapsed at the given position
+    Safe(Vec3),
+    /// Collapse would create non-manifold geometry (3+ shared neighbors),
+    /// but an edge flip can improve mesh quality instead
+    UseEdgeFlip,
+    /// Edge cannot be collapsed, with the reason
+    Rejected(CollapseRejection),
+}
+
+/// Reason why an edge collapse was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollapseRejection {
+    /// Edge doesn't exist in the mesh
+    InvalidEdge,
+    /// Origin vertex is on a boundary (ring_vertices != ring_faces)
+    OriginOnBoundary,
+    /// Destination vertex is on a boundary (ring_vertices != ring_faces)
+    DestinationOnBoundary,
+    /// One of the opposite vertices (C or D) is on a boundary
+    OppositeVertexOnBoundary,
+    /// Link condition violated - wrong number of common neighbors
+    LinkConditionFailed,
+    /// Collapse would cause one or more face normals to flip
+    WouldCauseFlip,
+}
+
+impl std::fmt::Display for CollapseRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidEdge => write!(f, "edge does not exist"),
+            Self::OriginOnBoundary => write!(f, "origin vertex is on boundary"),
+            Self::DestinationOnBoundary => write!(f, "destination vertex is on boundary"),
+            Self::OppositeVertexOnBoundary => write!(f, "opposite vertex is on boundary"),
+            Self::LinkConditionFailed => write!(f, "link condition violated"),
+            Self::WouldCauseFlip => write!(f, "would cause face normal flip"),
+        }
+    }
+}
 
 /// Result of collapsing an edge.
 #[derive(Debug, Clone)]
@@ -45,25 +106,96 @@ pub struct CollapseResult {
     pub removed_faces: Vec<FaceId>,
 }
 
-/// Check if an edge can be collapsed without creating invalid topology.
+// =============================================================================
+// Ring Boundary Detection
+// =============================================================================
+
+/// Check if a vertex is on a "ring boundary" using SculptGL's pattern.
 ///
-/// This checks the "link condition": the intersection of the 1-ring neighborhoods
-/// of the two endpoints should only contain the two vertices opposite the edge
-/// (for an interior edge) or one vertex (for a boundary edge).
-pub fn can_collapse_edge(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> bool {
+/// A vertex is considered on a ring boundary if its ring vertex count differs
+/// from its ring face count. For interior vertices in a manifold mesh, these
+/// counts should be equal.
+///
+/// # Reference
+/// Adapted from SculptGL Decimation.js:
+/// ```javascript
+/// if (ring1.length !== tris1.length || ring2.length !== tris2.length)
+///     return;  // vertices on the edge... we don't do anything
+/// ```
+fn is_ring_boundary_vertex(mesh: &HalfEdgeMesh, vertex_id: VertexId) -> bool {
+    let ring_vertices = mesh.get_adjacent_vertices(vertex_id);
+    let ring_faces = mesh.get_vertex_faces(vertex_id);
+
+    // For interior vertices: ring_vertices.len() == ring_faces.len()
+    // For boundary vertices: ring_vertices.len() != ring_faces.len()
+    ring_vertices.len() != ring_faces.len()
+}
+
+// =============================================================================
+// Safety Checks
+// =============================================================================
+
+/// Perform comprehensive safety checks before collapsing an edge.
+///
+/// This function implements all the safety checks from SculptGL's decimation
+/// algorithm to prevent non-manifold geometry:
+///
+/// 1. Validate edge exists
+/// 2. Check ring boundary condition for both endpoints
+/// 3. Check ring boundary condition for opposite vertices
+/// 4. Check link condition (common neighbors count)
+/// 5. If 3+ shared neighbors, suggest edge flip instead
+/// 6. Check for face normal flipping
+///
+/// # Returns
+/// - `CollapseCheck::Safe(position)` - Edge can be safely collapsed
+/// - `CollapseCheck::UseEdgeFlip` - Use edge flip instead of collapse
+/// - `CollapseCheck::Rejected(reason)` - Edge cannot be collapsed
+pub fn can_collapse_edge_safe(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> CollapseCheck {
+    // ===== PHASE 1: Validate edge exists =====
     let Some(he) = mesh.half_edge(edge_id) else {
-        return false;
+        return CollapseCheck::Rejected(CollapseRejection::InvalidEdge);
     };
 
     let v0_id = he.origin;
-
-    // Get destination vertex
     let Some(next_he) = mesh.half_edge(he.next) else {
-        return false;
+        return CollapseCheck::Rejected(CollapseRejection::InvalidEdge);
     };
     let v1_id = next_he.origin;
 
-    // Get 1-ring neighbors of each vertex
+    // ===== PHASE 2: Ring boundary check for edge endpoints =====
+    // From SculptGL: if (ring1.length !== tris1.length || ring2.length !== tris2.length) return;
+    if is_ring_boundary_vertex(mesh, v0_id) {
+        return CollapseCheck::Rejected(CollapseRejection::OriginOnBoundary);
+    }
+    if is_ring_boundary_vertex(mesh, v1_id) {
+        return CollapseCheck::Rejected(CollapseRejection::DestinationOnBoundary);
+    }
+
+    // ===== PHASE 3: Ring boundary check for opposite vertices =====
+    // Get the third vertices of the adjacent faces (C and D in the diagram)
+    let Some(prev_he) = mesh.half_edge(he.prev) else {
+        return CollapseCheck::Rejected(CollapseRejection::InvalidEdge);
+    };
+    let v_opp1 = prev_he.origin; // Opposite vertex in primary face
+
+    // Check opposite vertex in twin face if it exists
+    if let Some(twin_id) = he.twin {
+        if let Some(twin_he) = mesh.half_edge(twin_id) {
+            if let Some(twin_prev) = mesh.half_edge(twin_he.prev) {
+                let v_opp2 = twin_prev.origin;
+
+                // From SculptGL: check opposite vertices too
+                if is_ring_boundary_vertex(mesh, v_opp1) || is_ring_boundary_vertex(mesh, v_opp2) {
+                    return CollapseCheck::Rejected(CollapseRejection::OppositeVertexOnBoundary);
+                }
+            }
+        }
+    } else if is_ring_boundary_vertex(mesh, v_opp1) {
+        return CollapseCheck::Rejected(CollapseRejection::OppositeVertexOnBoundary);
+    }
+
+    // ===== PHASE 4: Get 1-ring neighbors and check link condition =====
     let v0_neighbors: HashSet<VertexId> = mesh
         .get_adjacent_vertices(v0_id)
         .into_iter()
@@ -81,78 +213,144 @@ pub fn can_collapse_edge(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> bool {
         .filter(|&v| v != v0_id && v != v1_id)
         .collect();
 
-    // Link condition: for an interior edge, there should be exactly 2 common vertices
-    // (the vertices of the two adjacent triangles opposite the edge)
-    // For a boundary edge, there should be exactly 1 common vertex
-
-    let is_boundary = he.twin.is_none();
-
-    if is_boundary {
-        common.len() == 1
-    } else {
-        common.len() == 2
+    // ===== PHASE 5: Check for edge flip fallback =====
+    // From SculptGL: if (Utils.intersectionArrays(ring1, ring2).length >= 3) { /* edge flip */ }
+    if common.len() >= 3 {
+        return CollapseCheck::UseEdgeFlip;
     }
+
+    // ===== PHASE 6: Standard link condition =====
+    let is_boundary = he.twin.is_none();
+    let expected_common = if is_boundary { 1 } else { 2 };
+
+    if common.len() != expected_common {
+        return CollapseCheck::Rejected(CollapseRejection::LinkConditionFailed);
+    }
+
+    // ===== PHASE 7: Calculate collapse position and check for flips =====
+    let Some(new_pos) = calculate_collapse_position(mesh, edge_id) else {
+        return CollapseCheck::Rejected(CollapseRejection::InvalidEdge);
+    };
+
+    if would_cause_flip(mesh, edge_id, new_pos) {
+        return CollapseCheck::Rejected(CollapseRejection::WouldCauseFlip);
+    }
+
+    CollapseCheck::Safe(new_pos)
+}
+
+/// Legacy compatibility wrapper - returns bool for simple checks.
+///
+/// For new code, prefer `can_collapse_edge_safe()` which provides
+/// more detailed feedback including edge flip suggestions.
+pub fn can_collapse_edge(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> bool {
+    matches!(can_collapse_edge_safe(mesh, edge_id), CollapseCheck::Safe(_))
 }
 
 /// Collapse an edge by merging its endpoints.
 ///
 /// The first vertex (origin of the half-edge) survives and is moved to
-/// the midpoint. The second vertex and the adjacent faces are removed.
+/// the optimal collapse position. The second vertex and the adjacent faces
+/// are removed.
+///
+/// # Invariants Maintained
+/// - Mesh remains manifold (no edges with 3+ faces)
+/// - All vertices have valence >= 3
+/// - Half-edge twin pointers remain symmetric
+/// - Face traversal loops remain valid
+///
+/// # Preconditions
+/// - Edge satisfies link condition (common neighbors == 2 for interior, 1 for boundary)
+/// - Neither endpoint is a ring boundary vertex
+/// - Neither opposite vertex is a ring boundary vertex
+/// - Collapse would not cause face flipping
+///
+/// # Postconditions
+/// - Face count reduced by exactly 2 (interior edge) or 1 (boundary edge)
+/// - Vertex count reduced by exactly 1
+/// - Edge count reduced by exactly 3 (interior) or 2 (boundary)
 ///
 /// Returns None if the collapse would create invalid topology.
+/// Use `can_collapse_edge_safe()` to get detailed rejection reasons.
 pub fn collapse_edge(mesh: &mut HalfEdgeMesh, edge_id: HalfEdgeId) -> Option<CollapseResult> {
-    if !can_collapse_edge(mesh, edge_id) {
-        return None;
+    // Use the comprehensive safety check
+    let check = can_collapse_edge_safe(mesh, edge_id);
+
+    match check {
+        CollapseCheck::Safe(new_pos) => {
+            // Get vertex IDs before the collapse
+            let he = mesh.half_edge(edge_id)?;
+            let v0_id = he.origin;
+            let next_he = mesh.half_edge(he.next)?;
+            let v1_id = next_he.origin;
+
+            // Delegate to the HalfEdgeMesh's collapse_edge_topology method
+            let removed_faces = mesh.collapse_edge_topology(edge_id)?;
+
+            // Move surviving vertex to optimal position
+            mesh.set_vertex_position(v0_id, new_pos);
+
+            Some(CollapseResult {
+                surviving_vertex: v0_id,
+                removed_vertex: v1_id,
+                removed_faces,
+            })
+        }
+        CollapseCheck::UseEdgeFlip | CollapseCheck::Rejected(_) => None,
     }
+}
 
-    let he = mesh.half_edge(edge_id)?;
-    let v0_id = he.origin;
-    let twin_id = he.twin;
-    let face_id = he.face;
+/// Attempt to collapse an edge, with edge flip fallback.
+///
+/// This function provides the full tessellation workflow:
+/// 1. If edge can be safely collapsed, collapse it
+/// 2. If edge flip is suggested (3+ shared neighbors), perform the flip
+/// 3. Otherwise, return None
+///
+/// # Returns
+/// - `Some(CollapseOrFlipResult::Collapsed(result))` - Edge was collapsed
+/// - `Some(CollapseOrFlipResult::Flipped)` - Edge was flipped instead
+/// - `None` - Neither operation was possible
+pub fn collapse_or_flip_edge(
+    mesh: &mut HalfEdgeMesh,
+    edge_id: HalfEdgeId,
+) -> Option<CollapseOrFlipResult> {
+    let check = can_collapse_edge_safe(mesh, edge_id);
 
-    // Get destination vertex
-    let next_he = mesh.half_edge(he.next)?;
-    let v1_id = next_he.origin;
+    match check {
+        CollapseCheck::Safe(new_pos) => {
+            let he = mesh.half_edge(edge_id)?;
+            let v0_id = he.origin;
+            let next_he = mesh.half_edge(he.next)?;
+            let v1_id = next_he.origin;
 
-    // Calculate midpoint position for the surviving vertex
-    let v0 = mesh.vertex(v0_id)?;
-    let v1 = mesh.vertex(v1_id)?;
-    let mid_pos = (v0.position + v1.position) * 0.5;
-    let mid_normal = (v0.normal + v1.normal).normalize_or_zero();
+            let removed_faces = mesh.collapse_edge_topology(edge_id)?;
+            mesh.set_vertex_position(v0_id, new_pos);
 
-    // Collect faces to remove
-    let mut removed_faces = Vec::new();
-    if let Some(fid) = face_id {
-        removed_faces.push(fid);
-    }
-    if let Some(tid) = twin_id {
-        if let Some(twin_he) = mesh.half_edge(tid) {
-            if let Some(twin_face_id) = twin_he.face {
-                removed_faces.push(twin_face_id);
+            Some(CollapseOrFlipResult::Collapsed(CollapseResult {
+                surviving_vertex: v0_id,
+                removed_vertex: v1_id,
+                removed_faces,
+            }))
+        }
+        CollapseCheck::UseEdgeFlip => {
+            if mesh.flip_edge_topology(edge_id) {
+                Some(CollapseOrFlipResult::Flipped)
+            } else {
+                None
             }
         }
+        CollapseCheck::Rejected(_) => None,
     }
+}
 
-    // TODO: Implement the actual collapse operation
-    // This requires:
-    // 1. Move v0 to midpoint
-    // 2. Redirect all half-edges pointing to v1 to point to v0
-    // 3. Remove the faces sharing the collapsed edge
-    // 4. Update all half-edge connectivity
-    // 5. Remove v1 from the vertex list (or mark as invalid)
-
-    // For now, just move the surviving vertex to midpoint
-    // Full implementation requires mesh mutation support
-    mesh.set_vertex_position(v0_id, mid_pos);
-    if let Some(v) = mesh.vertex_mut(v0_id) {
-        v.normal = mid_normal;
-    }
-
-    Some(CollapseResult {
-        surviving_vertex: v0_id,
-        removed_vertex: v1_id,
-        removed_faces,
-    })
+/// Result of attempting to collapse or flip an edge.
+#[derive(Debug, Clone)]
+pub enum CollapseOrFlipResult {
+    /// Edge was successfully collapsed
+    Collapsed(CollapseResult),
+    /// Edge was flipped instead of collapsed (due to 3+ shared neighbors)
+    Flipped,
 }
 
 /// Calculate the optimal position for the vertex after collapse.
@@ -249,5 +447,64 @@ mod tests {
         assert_eq!(result.surviving_vertex, VertexId(0));
         assert_eq!(result.removed_vertex, VertexId(1));
         assert_eq!(result.removed_faces.len(), 2);
+    }
+
+    #[test]
+    fn test_collapse_check_variants() {
+        // Test Safe variant
+        let safe = CollapseCheck::Safe(Vec3::new(0.5, 0.0, 0.0));
+        assert!(matches!(safe, CollapseCheck::Safe(_)));
+
+        // Test UseEdgeFlip variant
+        let flip = CollapseCheck::UseEdgeFlip;
+        assert!(matches!(flip, CollapseCheck::UseEdgeFlip));
+
+        // Test Rejected variants
+        let rejected = CollapseCheck::Rejected(CollapseRejection::OriginOnBoundary);
+        assert!(matches!(
+            rejected,
+            CollapseCheck::Rejected(CollapseRejection::OriginOnBoundary)
+        ));
+    }
+
+    #[test]
+    fn test_collapse_rejection_display() {
+        assert_eq!(
+            CollapseRejection::InvalidEdge.to_string(),
+            "edge does not exist"
+        );
+        assert_eq!(
+            CollapseRejection::OriginOnBoundary.to_string(),
+            "origin vertex is on boundary"
+        );
+        assert_eq!(
+            CollapseRejection::DestinationOnBoundary.to_string(),
+            "destination vertex is on boundary"
+        );
+        assert_eq!(
+            CollapseRejection::OppositeVertexOnBoundary.to_string(),
+            "opposite vertex is on boundary"
+        );
+        assert_eq!(
+            CollapseRejection::LinkConditionFailed.to_string(),
+            "link condition violated"
+        );
+        assert_eq!(
+            CollapseRejection::WouldCauseFlip.to_string(),
+            "would cause face normal flip"
+        );
+    }
+
+    #[test]
+    fn test_collapse_or_flip_result_structure() {
+        let collapsed = CollapseOrFlipResult::Collapsed(CollapseResult {
+            surviving_vertex: VertexId(0),
+            removed_vertex: VertexId(1),
+            removed_faces: vec![FaceId(0)],
+        });
+        assert!(matches!(collapsed, CollapseOrFlipResult::Collapsed(_)));
+
+        let flipped = CollapseOrFlipResult::Flipped;
+        assert!(matches!(flipped, CollapseOrFlipResult::Flipped));
     }
 }

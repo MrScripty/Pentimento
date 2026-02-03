@@ -12,6 +12,7 @@ mod validation;
 use std::collections::HashMap;
 
 pub use types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
+pub use validation::ManifoldError;
 
 use types::HalfEdge as HalfEdgeInternal;
 use types::Vertex as VertexInternal;

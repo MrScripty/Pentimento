@@ -19,6 +19,7 @@ use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig};
 use glam::Vec3;
 use painting::half_edge::VertexId;
 use std::collections::{HashMap, HashSet};
+use tracing::{debug, error, info, trace};
 
 /// Result of processing a single dab through the pipeline.
 #[derive(Debug, Default)]
@@ -58,9 +59,15 @@ pub struct PipelineConfig {
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
+            // Tessellation now enabled by default after implementing:
+            // - Comprehensive edge collapse safety checks (ring boundary, edge flip)
+            // - Curvature-aware split positioning
+            // - Mesh quality validation
+            // See tessellation module for implementation details.
             tessellation_enabled: true,
             tessellation_config: TessellationConfig::default(),
             chunk_config: ChunkConfig::default(),
+            // Chunk rebalancing enabled - works with improved tessellation
             rebalance_after_stroke: true,
         }
     }
@@ -164,10 +171,13 @@ impl SculptingPipeline {
         input: BrushInput,
         chunked_mesh: &mut ChunkedMesh,
     ) -> DabProcessResult {
+        debug!("process_input: START pos={:?}", input.position);
         let mut result = DabProcessResult::default();
 
         // Generate dabs from brush input
+        debug!("process_input: generating dabs");
         let dabs = self.brush_engine.update_stroke(input);
+        debug!("process_input: generated {} dabs", dabs.len());
 
         // Get stroke state info for direction calculation (copy what we need)
         let (last_pos, first_pos) = match &self.active_stroke_state {
@@ -248,6 +258,15 @@ impl SculptingPipeline {
         first_dab_position: Option<Vec3>,
         chunked_mesh: &mut ChunkedMesh,
     ) -> DabProcessResult {
+        // INFO-level logging for debugging exponential face growth - always visible
+        info!(
+            "SCULPT DAB: faces={}, vertices={}, chunks={}",
+            chunked_mesh.total_face_count(),
+            chunked_mesh.total_vertex_count(),
+            chunked_mesh.chunk_count()
+        );
+        debug!("apply_dab_internal: START brush_center={:?}", dab.position);
+        trace!("apply_dab_internal: START brush_center={:?}", dab.position);
         let mut result = DabProcessResult::default();
 
         let brush_center = dab.position;
@@ -265,23 +284,35 @@ impl SculptingPipeline {
             .unwrap_or(Vec3::ZERO);
 
         // Find affected chunks
+        debug!("apply_dab_internal: finding chunks in sphere");
         let affected_chunk_ids = chunked_mesh.chunks_intersecting_sphere(brush_center, influence_radius);
+        debug!("apply_dab_internal: found {} affected chunks", affected_chunk_ids.len());
+        trace!("apply_dab_internal: found {} affected chunks", affected_chunk_ids.len());
+
+        // Extract the next_original_vertex_id counter to avoid borrow conflicts.
+        // We'll write it back after the loop. This counter is used to assign globally
+        // unique IDs to tessellation-created vertices, preventing ID collisions during chunk merges.
+        let mut next_original_vertex_id = chunked_mesh.next_original_vertex_id;
 
         for chunk_id in affected_chunk_ids {
+            trace!("apply_dab_internal: processing chunk {:?}", chunk_id);
             let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
                 Some(c) => c,
                 None => continue,
             };
 
             // Build octree if needed
+            trace!("apply_dab_internal: ensuring octree for chunk {:?}", chunk_id);
             self.ensure_octree(chunk_id, chunk);
 
             // Query vertices in brush radius
+            trace!("apply_dab_internal: querying vertices in radius");
             let octree = self.chunk_octrees.get(&chunk_id).unwrap();
             let affected_vertices: Vec<VertexId> = octree
                 .query_sphere(brush_center, brush_radius)
                 .into_iter()
                 .collect();
+            trace!("apply_dab_internal: found {} affected vertices", affected_vertices.len());
 
             if affected_vertices.is_empty() {
                 continue;
@@ -296,6 +327,7 @@ impl SculptingPipeline {
             };
 
             // Apply deformation
+            trace!("apply_dab_internal: applying deformation");
             let falloff = self.brush_engine.preset.falloff;
             let deformation_type = self.brush_engine.preset.deformation_type;
 
@@ -316,6 +348,7 @@ impl SculptingPipeline {
             chunk.mark_dirty();
 
             // Update normals for affected region
+            trace!("apply_dab_internal: updating normals");
             let dirty = DirtyVertices {
                 modified: affected_vertices.into_iter().collect(),
             };
@@ -324,19 +357,69 @@ impl SculptingPipeline {
             // Invalidate octree (positions changed)
             self.chunk_octrees.remove(&chunk_id);
 
+            // Validate mesh BEFORE tessellation in debug builds
+            // This helps isolate whether corruption comes from chunk split or tessellation
+            #[cfg(debug_assertions)]
+            if let Err(e) = chunk.mesh.validate_connectivity() {
+                error!("MESH CORRUPT BEFORE tessellation: {}", e);
+                panic!("Mesh corrupted before tessellation - bug is in chunk split: {}", e);
+            }
+
             // Apply tessellation if enabled
             if self.config.tessellation_enabled {
+                trace!("apply_dab_internal: starting tessellation");
                 let tess_stats = tessellate_at_brush(
                     chunk,
                     brush_center,
                     brush_radius,
                     &self.config.tessellation_config,
                     &self.screen_config,
+                    &mut next_original_vertex_id,
+                );
+                trace!(
+                    "apply_dab_internal: tessellation done - split={}, collapsed={}",
+                    tess_stats.edges_split,
+                    tess_stats.edges_collapsed
+                );
+
+                // Validate mesh after tessellation in debug builds
+                #[cfg(debug_assertions)]
+                if let Err(e) = chunk.mesh.validate_connectivity() {
+                    error!("MESH CORRUPTION after tessellation: {}", e);
+                    panic!("Mesh corrupted by tessellation: {}", e);
+                }
+
+                // INFO-level logging for tessellation results
+                info!(
+                    "SCULPT TESS: split={}, collapsed={}, chunk_faces={}",
+                    tess_stats.edges_split,
+                    tess_stats.edges_collapsed,
+                    chunk.mesh.face_count()
                 );
 
                 if tess_stats.edges_split > 0 || tess_stats.edges_collapsed > 0 {
                     chunk.mark_topology_changed();
                     // Octree already invalidated above
+
+                    // CRITICAL: Recalculate normals after tessellation changed topology.
+                    // New faces inherit the original face's normal which is now wrong,
+                    // and new vertices only have interpolated normals that don't match
+                    // the actual post-split geometry.
+                    trace!("apply_dab_internal: recalculating normals after tessellation");
+                    let tessellated_vertices: HashSet<VertexId> = chunk
+                        .mesh
+                        .vertices()
+                        .iter()
+                        .filter(|v| {
+                            v.position.distance_squared(brush_center)
+                                <= (brush_radius * 1.5).powi(2)
+                        })
+                        .map(|v| v.id)
+                        .collect();
+                    let tess_dirty = DirtyVertices {
+                        modified: tessellated_vertices,
+                    };
+                    update_normals_after_deformation(chunk, &tess_dirty);
                 }
 
                 let existing = result.tessellation.get_or_insert(TessellationStats::default());
@@ -345,9 +428,14 @@ impl SculptingPipeline {
             }
         }
 
+        // Write back the updated vertex ID counter to the chunked mesh
+        chunked_mesh.next_original_vertex_id = next_original_vertex_id;
+
         // Sync boundary vertices across chunks
+        trace!("apply_dab_internal: syncing boundary vertices");
         self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
 
+        trace!("apply_dab_internal: END");
         result
     }
 
@@ -513,10 +601,13 @@ mod tests {
     #[test]
     fn test_pipeline_config_default() {
         let config = PipelineConfig::default();
+        // Tessellation now enabled by default with comprehensive safety checks
         assert!(config.tessellation_enabled);
         assert!(config.rebalance_after_stroke);
         assert_eq!(config.tessellation_config.target_pixels, 6.0);
         assert_eq!(config.chunk_config.target_faces, 10000);
+        // Edge collapse is enabled with safety checks
+        assert!(config.tessellation_config.collapse_enabled);
     }
 
     #[test]

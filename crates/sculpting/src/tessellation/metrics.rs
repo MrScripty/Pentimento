@@ -1,11 +1,15 @@
-//! Edge length metrics for tessellation decisions.
+//! Edge length metrics and mesh quality evaluation for tessellation.
 //!
-//! This module provides screen-space edge length calculation and
-//! threshold-based evaluation for split/collapse decisions.
+//! This module provides:
+//! - Screen-space edge length calculation
+//! - Threshold-based split/collapse decisions
+//! - Mesh quality metrics (aspect ratio, valence, degenerate faces)
 
 use crate::tessellation::TessellationDecision;
 use crate::types::TessellationConfig;
 use glam::{Mat4, Vec3, Vec4};
+use painting::half_edge::{FaceId, HalfEdgeMesh, VertexId};
+use tracing::debug;
 
 /// Screen-space configuration for edge evaluation.
 #[derive(Debug, Clone)]
@@ -150,6 +154,16 @@ pub fn evaluate_edge(
         TessellationDecision::None
     };
 
+    // Log first few edge evaluations to verify calculations are reasonable
+    static LOGGED_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let count = LOGGED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if count < 5 {
+        debug!(
+            "evaluate_edge: screen_length={:.1}px, split_thresh={:.1}, collapse_thresh={:.1}, decision={:?}",
+            screen_length, split_threshold, collapse_threshold, decision
+        );
+    }
+
     EdgeEvaluation {
         screen_length,
         decision,
@@ -159,6 +173,261 @@ pub fn evaluate_edge(
 /// Calculate world-space edge length (for non-screen-space fallback).
 pub fn calculate_world_edge_length(v0: Vec3, v1: Vec3) -> f32 {
     v0.distance(v1)
+}
+
+// =============================================================================
+// Mesh Quality Metrics
+// =============================================================================
+
+/// Mesh quality metrics for monitoring tessellation health.
+///
+/// These metrics help detect potential mesh corruption or quality issues
+/// during dynamic tessellation operations.
+#[derive(Debug, Clone, Default)]
+pub struct MeshQuality {
+    /// Minimum aspect ratio of any triangle (0-1, 1 = equilateral)
+    pub min_aspect_ratio: f32,
+    /// Maximum aspect ratio of any triangle
+    pub max_aspect_ratio: f32,
+    /// Average aspect ratio across all triangles
+    pub avg_aspect_ratio: f32,
+    /// Minimum vertex valence (number of edges per vertex)
+    pub min_valence: usize,
+    /// Maximum vertex valence
+    pub max_valence: usize,
+    /// Average vertex valence
+    pub avg_valence: f32,
+    /// Number of degenerate triangles (near-zero area)
+    pub degenerate_faces: usize,
+    /// Number of non-manifold vertices (ring mismatch)
+    pub non_manifold_vertices: usize,
+    /// Number of non-manifold edges (more than 2 adjacent faces)
+    pub non_manifold_edges: usize,
+}
+
+impl MeshQuality {
+    /// Check if mesh quality is acceptable for sculpting.
+    ///
+    /// Returns true if:
+    /// - No degenerate faces
+    /// - No non-manifold geometry
+    /// - All valences >= 3
+    /// - Minimum aspect ratio > 0.01
+    pub fn is_acceptable(&self) -> bool {
+        self.degenerate_faces == 0
+            && self.non_manifold_vertices == 0
+            && self.non_manifold_edges == 0
+            && self.min_valence >= 3
+            && self.min_aspect_ratio > 0.01
+    }
+
+    /// Get a human-readable summary of any quality issues.
+    pub fn issues_summary(&self) -> Option<String> {
+        let mut issues = Vec::new();
+
+        if self.degenerate_faces > 0 {
+            issues.push(format!("{} degenerate faces", self.degenerate_faces));
+        }
+        if self.non_manifold_vertices > 0 {
+            issues.push(format!(
+                "{} non-manifold vertices",
+                self.non_manifold_vertices
+            ));
+        }
+        if self.non_manifold_edges > 0 {
+            issues.push(format!("{} non-manifold edges", self.non_manifold_edges));
+        }
+        if self.min_valence < 3 {
+            issues.push(format!("min valence {} < 3", self.min_valence));
+        }
+        if self.min_aspect_ratio <= 0.01 {
+            issues.push(format!(
+                "min aspect ratio {:.4} (near-degenerate)",
+                self.min_aspect_ratio
+            ));
+        }
+
+        if issues.is_empty() {
+            None
+        } else {
+            Some(issues.join(", "))
+        }
+    }
+}
+
+/// Calculate mesh quality metrics.
+///
+/// This function analyzes the mesh to compute quality metrics useful for
+/// monitoring tessellation health and detecting potential issues.
+pub fn calculate_mesh_quality(mesh: &HalfEdgeMesh) -> MeshQuality {
+    let mut quality = MeshQuality {
+        min_aspect_ratio: f32::MAX,
+        max_aspect_ratio: 0.0,
+        avg_aspect_ratio: 0.0,
+        min_valence: usize::MAX,
+        max_valence: 0,
+        avg_valence: 0.0,
+        degenerate_faces: 0,
+        non_manifold_vertices: 0,
+        non_manifold_edges: 0,
+    };
+
+    let mut total_aspect_ratio = 0.0;
+    let mut face_count = 0;
+
+    // Calculate face-based metrics
+    for i in 0..mesh.face_count() {
+        let face_id = FaceId(i as u32);
+        let verts = mesh.get_face_vertices(face_id);
+
+        if verts.len() < 3 {
+            quality.degenerate_faces += 1;
+            continue;
+        }
+
+        // Get vertex positions
+        let positions: Vec<Vec3> = verts
+            .iter()
+            .filter_map(|&vid| mesh.vertex(vid).map(|v| v.position))
+            .collect();
+
+        if positions.len() < 3 {
+            quality.degenerate_faces += 1;
+            continue;
+        }
+
+        // Calculate aspect ratio (ratio of shortest to longest edge)
+        let e0 = positions[1] - positions[0];
+        let e1 = positions[2] - positions[1];
+        let e2 = positions[0] - positions[2];
+
+        let l0 = e0.length();
+        let l1 = e1.length();
+        let l2 = e2.length();
+
+        let min_edge = l0.min(l1).min(l2);
+        let max_edge = l0.max(l1).max(l2);
+
+        // Check for degenerate (zero-area) triangles
+        let area = e0.cross(-e2).length() * 0.5;
+        if area < 1e-10 {
+            quality.degenerate_faces += 1;
+            continue;
+        }
+
+        let aspect_ratio = if max_edge > 0.0 {
+            min_edge / max_edge
+        } else {
+            0.0
+        };
+
+        quality.min_aspect_ratio = quality.min_aspect_ratio.min(aspect_ratio);
+        quality.max_aspect_ratio = quality.max_aspect_ratio.max(aspect_ratio);
+        total_aspect_ratio += aspect_ratio;
+        face_count += 1;
+    }
+
+    if face_count > 0 {
+        quality.avg_aspect_ratio = total_aspect_ratio / face_count as f32;
+    }
+
+    // Calculate vertex-based metrics
+    let mut total_valence = 0;
+    let mut vertex_count = 0;
+
+    for vertex in mesh.vertices() {
+        // Skip orphaned vertices
+        if vertex.outgoing_half_edge.is_none() {
+            continue;
+        }
+
+        let neighbors = mesh.get_adjacent_vertices(vertex.id);
+        let faces = mesh.get_vertex_faces(vertex.id);
+        let valence = neighbors.len();
+
+        // Check for non-manifold vertices (ring mismatch)
+        // For interior vertices: neighbors.len() == faces.len()
+        // For boundary vertices: neighbors.len() == faces.len() + 1
+        let is_boundary = mesh.is_boundary_vertex(vertex.id);
+        let expected_diff = if is_boundary { 1 } else { 0 };
+        if neighbors.len().saturating_sub(faces.len()) != expected_diff
+            && !neighbors.is_empty()
+            && !faces.is_empty()
+        {
+            quality.non_manifold_vertices += 1;
+        }
+
+        if valence > 0 {
+            quality.min_valence = quality.min_valence.min(valence);
+            quality.max_valence = quality.max_valence.max(valence);
+            total_valence += valence;
+            vertex_count += 1;
+        }
+    }
+
+    if vertex_count > 0 {
+        quality.avg_valence = total_valence as f32 / vertex_count as f32;
+    }
+    if quality.min_valence == usize::MAX {
+        quality.min_valence = 0;
+    }
+    if quality.min_aspect_ratio == f32::MAX {
+        quality.min_aspect_ratio = 0.0;
+    }
+
+    // Check for non-manifold edges (edges with more than 2 adjacent faces)
+    // This is expensive, so we only check a sample
+    for he in mesh.half_edges() {
+        if he.face.is_none() {
+            continue;
+        }
+        // An edge is non-manifold if it has a twin with a twin pointing somewhere else
+        // (more than 2 faces share the edge)
+        if let Some(twin_id) = he.twin {
+            if let Some(twin) = mesh.half_edge(twin_id) {
+                if twin.twin != Some(he.id) {
+                    quality.non_manifold_edges += 1;
+                }
+            }
+        }
+    }
+
+    quality
+}
+
+/// Validate that a vertex has acceptable valence for sculpting.
+///
+/// Vertices with valence < 3 or > 20 may cause issues during tessellation.
+pub fn is_valid_valence(mesh: &HalfEdgeMesh, vertex_id: VertexId) -> bool {
+    let neighbors = mesh.get_adjacent_vertices(vertex_id);
+    let valence = neighbors.len();
+    valence >= 3 && valence <= 20
+}
+
+/// Calculate the aspect ratio of a triangle (0-1, 1 = equilateral).
+///
+/// Returns the ratio of the shortest edge to the longest edge.
+pub fn calculate_triangle_aspect_ratio(p0: Vec3, p1: Vec3, p2: Vec3) -> f32 {
+    let e0 = (p1 - p0).length();
+    let e1 = (p2 - p1).length();
+    let e2 = (p0 - p2).length();
+
+    let min_edge = e0.min(e1).min(e2);
+    let max_edge = e0.max(e1).max(e2);
+
+    if max_edge > 0.0 {
+        min_edge / max_edge
+    } else {
+        0.0
+    }
+}
+
+/// Check if a triangle is degenerate (near-zero area).
+pub fn is_degenerate_triangle(p0: Vec3, p1: Vec3, p2: Vec3, tolerance: f32) -> bool {
+    let e0 = p1 - p0;
+    let e1 = p2 - p0;
+    let area = e0.cross(e1).length() * 0.5;
+    area < tolerance
 }
 
 #[cfg(test)]

@@ -3,6 +3,16 @@
 //! Splitting an edge creates a new vertex at the midpoint and subdivides
 //! adjacent triangles. This increases mesh density for finer detail.
 //!
+//! ## Curvature-Aware Positioning
+//!
+//! Instead of placing the new vertex at the simple midpoint, this module
+//! supports curvature-aware positioning that preserves surface curvature:
+//!
+//! 1. Calculate the angle between the vertex normals at the edge endpoints
+//! 2. Offset the midpoint along the averaged normal proportionally to the angle
+//!
+//! This prevents flattening of curved surfaces during subdivision.
+//!
 //! ## Algorithm
 //!
 //! For an edge shared by two triangles:
@@ -19,11 +29,16 @@
 //!        D                    D
 //! ```
 //!
-//! The new vertex M is created at the midpoint of edge AB.
+//! The new vertex M is created at the (optionally curvature-offset) midpoint of edge AB.
 //! Each triangle (ABC, ABD) becomes two triangles (AMC, MBC, AMD, MBD).
+//!
+//! ## Reference
+//!
+//! Curvature-aware positioning adapted from SculptGL Subdivision.js
+//! (MIT License, Copyright Stéphane Ginier)
 
 use glam::{Vec2, Vec3};
-use painting::half_edge::{FaceId, HalfEdgeId, HalfEdgeMesh, Vertex, VertexId};
+use painting::half_edge::{FaceId, HalfEdgeId, HalfEdgeMesh, VertexId};
 
 /// Result of splitting an edge.
 #[derive(Debug, Clone)]
@@ -41,71 +56,13 @@ pub struct SplitResult {
 /// Creates a new vertex at the edge midpoint and subdivides adjacent faces.
 /// Returns None if the edge doesn't exist or can't be split.
 pub fn split_edge(mesh: &mut HalfEdgeMesh, edge_id: HalfEdgeId) -> Option<SplitResult> {
-    // Get the half-edge and its endpoints
-    let he = mesh.half_edge(edge_id)?;
-    let v0_id = he.origin;
-    let twin_id = he.twin;
-    let _face_id = he.face;
-    let next_id = he.next;
-    let _prev_id = he.prev;
+    // Delegate to the HalfEdgeMesh's split_edge_topology method
+    let (new_vertex, new_faces) = mesh.split_edge_topology(edge_id)?;
 
-    // Get the destination vertex (origin of next half-edge)
-    let next_he = mesh.half_edge(next_id)?;
-    let v1_id = next_he.origin;
-
-    // Get vertex positions for midpoint calculation
-    let v0 = mesh.vertex(v0_id)?;
-    let v1 = mesh.vertex(v1_id)?;
-
-    let mid_pos = (v0.position + v1.position) * 0.5;
-    let mid_normal = (v0.normal + v1.normal).normalize_or_zero();
-    let mid_uv = match (v0.uv, v1.uv) {
-        (Some(uv0), Some(uv1)) => Some((uv0 + uv1) * 0.5),
-        _ => None,
-    };
-
-    // Create new vertex at midpoint
-    let new_vertex_id = VertexId(mesh.vertices().len() as u32);
-    let _new_vertex = Vertex {
-        id: new_vertex_id,
-        position: mid_pos,
-        normal: mid_normal,
-        uv: mid_uv,
-        outgoing_half_edge: None, // Will be set later
-        source_index: u32::MAX,   // New vertex, no source
-    };
-
-    // For simplicity, we'll use a simplified split that works for triangle meshes
-    // A full implementation would need to handle:
-    // 1. The primary face being split
-    // 2. The twin face (if exists) being split
-    // 3. Updating all half-edge connectivity
-
-    // This is a placeholder that indicates the structure
-    // Full implementation requires careful half-edge manipulation
-
-    // For now, return a basic result indicating what would happen
-    // TODO: Implement full half-edge split with proper connectivity updates
-
-    // Check if this is a boundary edge (no twin)
-    let _is_boundary = twin_id.is_none();
-
-    // The full implementation would:
-    // 1. Add the new vertex to mesh.vertices
-    // 2. Create new half-edges for the split edge
-    // 3. Create new faces from the split triangles
-    // 4. Update all prev/next/twin pointers
-    // 5. Update face.half_edge pointers
-    // 6. Update vertex.outgoing_half_edge pointers
-
-    // For the initial implementation, we'll mark this as needing
-    // the half-edge mesh to support dynamic modification
-
-    // Placeholder: just indicate what vertex would be created
     Some(SplitResult {
-        new_vertex: new_vertex_id,
-        new_faces: Vec::new(),
-        new_half_edges: Vec::new(),
+        new_vertex,
+        new_faces,
+        new_half_edges: Vec::new(), // Not tracked separately
     })
 }
 
@@ -145,7 +102,7 @@ pub fn can_split_edge(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> bool {
 /// Calculate the position for a new vertex when splitting an edge.
 ///
 /// By default, uses simple linear interpolation (midpoint).
-/// Can be extended to use Loop subdivision weights or other schemes.
+/// For curvature-preserving splits, use `calculate_curvature_aware_split_position`.
 pub fn calculate_split_position(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Option<Vec3> {
     let he = mesh.half_edge(edge_id)?;
     let v0 = mesh.vertex(he.origin)?;
@@ -154,6 +111,122 @@ pub fn calculate_split_position(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Opt
     let v1 = mesh.vertex(next_he.origin)?;
 
     Some((v0.position + v1.position) * 0.5)
+}
+
+/// Calculate curvature-aware split position for preserving surface curvature.
+///
+/// Instead of placing the new vertex at the simple midpoint, this function
+/// offsets it along the averaged normal based on the angle between the
+/// endpoint normals. This preserves surface curvature instead of flattening it.
+///
+/// # Algorithm
+///
+/// 1. Calculate midpoint of edge AB
+/// 2. Compute averaged normal: (n0 + n1) / 2
+/// 3. Calculate angle between n0 and n1: θ = acos(n0 · n1)
+/// 4. Calculate offset: θ * 0.12 * edge_length
+/// 5. Determine direction based on edge-normal relationship
+/// 6. New position = midpoint + averaged_normal * offset
+///
+/// # Reference
+///
+/// Adapted from SculptGL Subdivision.js:
+/// ```javascript
+/// var dot = n1x * n2x + n1y * n2y + n1z * n2z;
+/// var angle = Math.acos(dot);
+/// var offset = angle * 0.12 * edgeLength;
+/// // Direction based on edge/normal relationship
+/// if ((edgex * (n1x - n2x) + edgey * (n1y - n2y) + edgez * (n1z - n2z)) < 0)
+///     offset = -offset;
+/// vAr[id] = (v1x + v2x) * 0.5 + n1n2x * offset;
+/// ```
+pub fn calculate_curvature_aware_split_position(
+    mesh: &HalfEdgeMesh,
+    edge_id: HalfEdgeId,
+) -> Option<Vec3> {
+    let he = mesh.half_edge(edge_id)?;
+    let v0 = mesh.vertex(he.origin)?;
+
+    let next_he = mesh.half_edge(he.next)?;
+    let v1 = mesh.vertex(next_he.origin)?;
+
+    // Get positions and normals
+    let p0 = v0.position;
+    let p1 = v1.position;
+    let n0 = v0.normal.normalize_or_zero();
+    let n1 = v1.normal.normalize_or_zero();
+
+    // Calculate midpoint
+    let midpoint = (p0 + p1) * 0.5;
+
+    // Calculate averaged normal
+    let avg_normal = n0 + n1;
+    let avg_normal_len_sq = avg_normal.length_squared();
+
+    // If normals are opposite or zero, fall back to linear midpoint
+    if avg_normal_len_sq < 0.001 {
+        return Some(midpoint);
+    }
+
+    // Calculate angle between normals
+    let dot = n0.dot(n1).clamp(-1.0, 1.0);
+    let angle = dot.acos();
+
+    // If angle is very small, just use midpoint
+    if angle < 0.01 {
+        return Some(midpoint);
+    }
+
+    // Calculate edge vector and length
+    let edge = p0 - p1;
+    let edge_length = edge.length();
+
+    // Calculate offset proportional to angle and edge length
+    // The 0.12 factor comes from SculptGL - empirically tuned for good results
+    const CURVATURE_FACTOR: f32 = 0.12;
+    let mut offset = angle * CURVATURE_FACTOR * edge_length;
+
+    // Normalize the offset by the averaged normal length
+    offset /= avg_normal_len_sq.sqrt();
+
+    // Determine direction: if edge aligns with normal difference, flip offset
+    // This ensures we offset in the correct direction to preserve curvature
+    let normal_diff = n0 - n1;
+    if edge.dot(normal_diff) < 0.0 {
+        offset = -offset;
+    }
+
+    // Calculate final position
+    let new_position = midpoint + avg_normal * offset;
+
+    Some(new_position)
+}
+
+/// Split an edge with curvature-aware positioning.
+///
+/// This is a convenience wrapper that uses curvature-aware positioning
+/// instead of simple midpoint positioning.
+pub fn split_edge_curvature_aware(
+    mesh: &mut HalfEdgeMesh,
+    edge_id: HalfEdgeId,
+) -> Option<SplitResult> {
+    // Calculate the curvature-aware position first
+    let new_pos = calculate_curvature_aware_split_position(mesh, edge_id)?;
+
+    // Perform the standard split
+    let (new_vertex, new_faces) = mesh.split_edge_topology(edge_id)?;
+
+    // Update the new vertex position to the curvature-aware position
+    mesh.set_vertex_position(new_vertex, new_pos);
+
+    // The split already set an interpolated normal from the edge endpoints,
+    // which is a reasonable approximation for curvature-aware splits.
+
+    Some(SplitResult {
+        new_vertex,
+        new_faces,
+        new_half_edges: Vec::new(),
+    })
 }
 
 /// Calculate interpolated attributes for a split vertex.
