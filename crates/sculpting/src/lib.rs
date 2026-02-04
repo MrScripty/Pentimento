@@ -39,8 +39,9 @@ pub use chunking::{
     ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
 };
 pub use deformation::{
-    apply_crease, apply_deformation, apply_flatten, apply_grab, apply_inflate, apply_pinch,
-    apply_pull, apply_push, apply_smooth, DabInfo, DeformationContext, DeformationResult,
+    apply_autosmooth, apply_crease, apply_deformation, apply_flatten, apply_grab, apply_inflate,
+    apply_pinch, apply_pull, apply_push, apply_smooth, DabInfo, DeformationContext,
+    DeformationResult,
 };
 pub use gpu::{
     recalculate_face_normals_for_dirty, recalculate_normals_for_dirty,

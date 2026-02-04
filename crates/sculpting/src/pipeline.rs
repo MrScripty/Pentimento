@@ -12,7 +12,7 @@
 use crate::brush::{BrushInput, BrushPreset, DabResult, SculptBrushEngine};
 use crate::budget::VertexBudget;
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
-use crate::deformation::{apply_deformation, DabInfo};
+use crate::deformation::{apply_autosmooth, apply_deformation, DabInfo};
 use crate::gpu::{update_normals_after_deformation, DirtyVertices};
 use crate::spatial::{Aabb as SpatialAabb, VertexOctree};
 use crate::tessellation::{
@@ -368,6 +368,18 @@ impl SculptingPipeline {
                 Some(stroke_direction),
                 Some(stroke_delta),
             );
+
+            // Auto-smooth to dampen high-frequency dab ripples
+            let autosmooth = self.brush_engine.preset.autosmooth;
+            if autosmooth > 0.0 && !affected_vertices.is_empty() {
+                apply_autosmooth(
+                    &mut chunk.mesh,
+                    &affected_vertices,
+                    &dab_info,
+                    falloff,
+                    autosmooth,
+                );
+            }
 
             result.vertices_modified += affected_vertices.len();
             result.chunks_affected.push(chunk_id);

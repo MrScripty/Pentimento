@@ -239,6 +239,72 @@ pub fn apply_smooth(
     original_positions
 }
 
+/// Apply tangent-plane-projected Laplacian smooth to dampen dab ripples.
+///
+/// For each affected vertex: compute neighbor average, project the offset
+/// onto the tangent plane (strip normal component), blend with configurable
+/// strength. Two-pass: compute all targets first, then apply.
+pub fn apply_autosmooth(
+    mesh: &mut HalfEdgeMesh,
+    vertices: &[VertexId],
+    dab: &DabInfo,
+    falloff: FalloffCurve,
+    autosmooth_strength: f32,
+) {
+    if autosmooth_strength <= 0.0 || vertices.is_empty() {
+        return;
+    }
+
+    // Pass 1: compute target positions without modifying mesh
+    let mut targets: Vec<(VertexId, Vec3)> = Vec::new();
+
+    for &vid in vertices {
+        let Some(vertex) = mesh.vertex(vid) else {
+            continue;
+        };
+
+        let distance = vertex.position.distance(dab.position);
+        if distance > dab.radius {
+            continue;
+        }
+
+        let neighbors = mesh.get_adjacent_vertices(vid);
+        if neighbors.is_empty() {
+            continue;
+        }
+
+        // Compute average neighbor position (Laplacian target)
+        let mut avg = Vec3::ZERO;
+        let mut count = 0;
+        for nid in neighbors {
+            if let Some(n) = mesh.vertex(nid) {
+                avg += n.position;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            continue;
+        }
+        avg /= count as f32;
+
+        // Laplacian offset projected onto tangent plane
+        let offset = avg - vertex.position;
+        let normal = vertex.normal.normalize_or_zero();
+        let tangent_offset = offset - normal * offset.dot(normal);
+
+        // Scale by falloff and autosmooth strength
+        let normalized_dist = distance / dab.radius;
+        let effective = falloff.evaluate(normalized_dist) * autosmooth_strength;
+
+        targets.push((vid, vertex.position + tangent_offset * effective));
+    }
+
+    // Pass 2: apply all modifications
+    for (vid, pos) in targets {
+        mesh.set_vertex_position(vid, pos);
+    }
+}
+
 /// Apply flatten deformation - moves vertices toward average plane.
 pub fn apply_flatten(
     mesh: &mut HalfEdgeMesh,

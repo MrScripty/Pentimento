@@ -71,6 +71,14 @@ pub struct BrushPreset {
     pub pressure_affects_strength: bool,
     /// Spacing between dabs as fraction of radius (0.1 = 10% of radius)
     pub spacing: f32,
+    /// Auto-smooth strength applied after each dab (0.0 = off, 1.0 = full).
+    /// Dampens high-frequency surface ripples from dab boundaries.
+    #[serde(default = "default_autosmooth")]
+    pub autosmooth: f32,
+}
+
+fn default_autosmooth() -> f32 {
+    0.5
 }
 
 impl Default for BrushPreset {
@@ -84,6 +92,7 @@ impl Default for BrushPreset {
             pressure_affects_radius: false,
             pressure_affects_strength: true,
             spacing: 0.25,
+            autosmooth: 0.5,
         }
     }
 }
@@ -113,6 +122,7 @@ impl BrushPreset {
             name: "Smooth".to_string(),
             deformation_type: DeformationType::Smooth,
             strength: 0.3,
+            autosmooth: 0.0,
             ..Default::default()
         }
     }
@@ -156,6 +166,7 @@ impl BrushPreset {
             strength: 1.0,
             falloff: FalloffCurve::Smooth,
             spacing: 0.0, // Continuous, no spacing
+            autosmooth: 0.0,
             ..Default::default()
         }
     }
