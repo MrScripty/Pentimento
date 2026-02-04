@@ -57,20 +57,13 @@ pub fn partition_mesh(mesh: &HalfEdgeMesh, config: &PartitionConfig) -> ChunkedM
     // won't collide with original mesh vertices or each other across chunks.
     chunked_mesh.next_original_vertex_id = mesh.vertex_count() as u32;
 
-    // TEMPORARY: Always create a single chunk to debug tessellation without chunking
-    // TODO: Remove this and restore partitioning once tessellation bugs are fixed
-    let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
-    chunked_mesh.add_chunk(chunk);
-
-    // DISABLED: Partitioning into multiple chunks
-    // if mesh.face_count() <= config.max_faces {
-    //     let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
-    //     chunked_mesh.add_chunk(chunk);
-    // } else {
-    //     // Recursively partition
-    //     let all_faces: Vec<FaceId> = (0..mesh.face_count() as u32).map(FaceId).collect();
-    //     recursive_partition(mesh, &all_faces, config, &mut chunked_mesh);
-    // }
+    if mesh.face_count() <= config.max_faces {
+        let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
+        chunked_mesh.add_chunk(chunk);
+    } else {
+        let all_faces: Vec<FaceId> = (0..mesh.face_count() as u32).map(FaceId).collect();
+        recursive_partition(mesh, &all_faces, config, &mut chunked_mesh);
+    }
 
     // Build boundary relationships
     boundary::build_boundary_relationships(&mut chunked_mesh);

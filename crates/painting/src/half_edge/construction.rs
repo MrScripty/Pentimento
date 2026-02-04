@@ -47,6 +47,67 @@ impl HalfEdgeMesh {
             ));
         }
 
+        // === Vertex Welding ===
+        // Bevy's UV sphere (and other primitives) duplicate vertices at UV seams
+        // for correct UV mapping. Without welding, these create boundary edges
+        // (half-edges with twin=None) in the half-edge mesh. Boundary edges break
+        // the ring walk in `is_ring_boundary_vertex`, causing it to miss boundary
+        // vertices, which allows unsafe edge collapses that create non-manifold
+        // geometry and visible mesh tearing.
+        //
+        // Welding merges positionally-identical vertices so the mesh becomes a
+        // proper closed manifold where all ring walks complete full loops.
+        let quantize = |p: &[f32; 3]| -> [i64; 3] {
+            [
+                (p[0] * 1_000_000.0) as i64,
+                (p[1] * 1_000_000.0) as i64,
+                (p[2] * 1_000_000.0) as i64,
+            ]
+        };
+
+        let mut position_to_canonical: HashMap<[i64; 3], usize> = HashMap::new();
+        let mut canonical_map: Vec<usize> = Vec::with_capacity(positions.len());
+
+        for (i, pos) in positions.iter().enumerate() {
+            let key = quantize(pos);
+            let canonical = *position_to_canonical.entry(key).or_insert(i);
+            canonical_map.push(canonical);
+        }
+
+        let welded_count = canonical_map
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| **c != *i)
+            .count();
+        if welded_count > 0 {
+            tracing::debug!(
+                "from_bevy_mesh: welded {} duplicate vertices ({} unique of {} total)",
+                welded_count,
+                position_to_canonical.len(),
+                positions.len()
+            );
+        }
+
+        let indices: Vec<u32> = indices
+            .iter()
+            .map(|&i| canonical_map[i as usize] as u32)
+            .collect();
+
+        // Remove degenerate triangles (two or more identical vertices after welding)
+        let indices: Vec<u32> = indices
+            .chunks(3)
+            .filter(|tri| {
+                tri.len() == 3 && tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2]
+            })
+            .flat_map(|tri| tri.iter().copied())
+            .collect();
+
+        if indices.len() % 3 != 0 {
+            return Err(HalfEdgeError::InvalidTopology(
+                "Index count not divisible by 3 after welding".to_string(),
+            ));
+        }
+
         // Create vertices
         let mut vertices: Vec<Vertex> = positions
             .iter()

@@ -266,6 +266,16 @@ impl SculptingPipeline {
     }
 
     /// Apply a single dab to the chunked mesh (internal implementation).
+    ///
+    /// Uses a two-pass approach to ensure boundary consistency:
+    /// 1. **Pass 1**: Deform vertices + update normals in all affected chunks
+    /// 2. **Boundary sync**: Synchronize boundary vertex positions across chunks
+    /// 3. **Pass 2**: Tessellate all affected chunks (with up-to-date boundary data)
+    /// 4. **Final sync**: Synchronize any new positions from tessellation smoothing
+    ///
+    /// This ordering ensures tessellation operates on consistent vertex positions
+    /// across chunk boundaries, preventing asymmetric tessellation decisions that
+    /// cause mesh tearing.
     fn apply_dab_internal(
         &mut self,
         dab: &DabResult,
@@ -312,25 +322,26 @@ impl SculptingPipeline {
             self.budget.update_current(chunked_mesh.total_vertex_count());
         }
 
-        for chunk_id in affected_chunk_ids {
-            trace!("apply_dab_internal: processing chunk {:?}", chunk_id);
+        // ===== PASS 1: DEFORM all affected chunks =====
+        // Deform vertices and update normals before any tessellation happens.
+        // This ensures boundary sync (between passes) propagates the final
+        // deformed positions to all chunks.
+        for &chunk_id in &affected_chunk_ids {
+            trace!("apply_dab_internal: deforming chunk {:?}", chunk_id);
             let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
                 Some(c) => c,
                 None => continue,
             };
 
             // Build octree if needed
-            trace!("apply_dab_internal: ensuring octree for chunk {:?}", chunk_id);
             self.ensure_octree(chunk_id, chunk);
 
             // Query vertices in brush radius
-            trace!("apply_dab_internal: querying vertices in radius");
             let octree = self.chunk_octrees.get(&chunk_id).unwrap();
             let affected_vertices: Vec<VertexId> = octree
                 .query_sphere(brush_center, brush_radius)
                 .into_iter()
                 .collect();
-            trace!("apply_dab_internal: found {} affected vertices", affected_vertices.len());
 
             if affected_vertices.is_empty() {
                 continue;
@@ -345,7 +356,6 @@ impl SculptingPipeline {
             };
 
             // Apply deformation
-            trace!("apply_dab_internal: applying deformation");
             let falloff = self.brush_engine.preset.falloff;
             let deformation_type = self.brush_engine.preset.deformation_type;
 
@@ -366,7 +376,6 @@ impl SculptingPipeline {
             chunk.mark_dirty();
 
             // Update normals for affected region
-            trace!("apply_dab_internal: updating normals");
             let dirty = DirtyVertices {
                 modified: affected_vertices.into_iter().collect(),
             };
@@ -374,18 +383,44 @@ impl SculptingPipeline {
 
             // Invalidate octree (positions changed)
             self.chunk_octrees.remove(&chunk_id);
+        }
 
-            // Validate mesh BEFORE tessellation in debug builds
-            // This helps isolate whether corruption comes from chunk split or tessellation
-            #[cfg(debug_assertions)]
-            if let Err(e) = chunk.mesh.validate_connectivity() {
-                error!("MESH CORRUPT BEFORE tessellation: {}", e);
-                panic!("Mesh corrupted before tessellation - bug is in chunk split: {}", e);
-            }
+        // ===== BOUNDARY SYNC between deformation and tessellation =====
+        // Synchronize boundary vertex positions so tessellation in each chunk
+        // sees consistent positions/normals at chunk boundaries. Without this,
+        // tessellation evaluates curvature using stale boundary data from
+        // neighboring chunks, causing inconsistent split/collapse decisions.
+        if !result.chunks_affected.is_empty() {
+            trace!("apply_dab_internal: mid-pass boundary sync");
+            self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
+        }
 
-            // Apply tessellation if enabled
-            if self.config.tessellation_enabled {
-                trace!("apply_dab_internal: starting tessellation");
+        // ===== PASS 2: TESSELLATE all affected chunks =====
+        // Now tessellation operates on consistent boundary data across all chunks.
+        if self.config.tessellation_enabled {
+            for &chunk_id in &result.chunks_affected.clone() {
+                let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                // Validate mesh BEFORE tessellation in debug builds.
+                // Gated behind env var to allow skipping during interactive testing:
+                //   PENTIMENTO_SKIP_MESH_VALIDATION=1 cargo run
+                #[cfg(debug_assertions)]
+                if std::env::var("PENTIMENTO_SKIP_MESH_VALIDATION").is_err() {
+                    if let Err(e) = chunk.mesh.validate_connectivity() {
+                        error!("MESH CORRUPT BEFORE tessellation: {}", e);
+                        panic!("Mesh corrupted before tessellation - bug is in chunk split: {}", e);
+                    }
+                }
+
+                let tess_start = std::time::Instant::now();
+                debug!(
+                    "apply_dab_internal: starting tessellation (faces={}, verts={})",
+                    chunk.mesh.face_count(),
+                    chunk.mesh.vertex_count()
+                );
                 let tess_stats = match self.config.tessellation_config.mode {
                     TessellationMode::BudgetCurvature => {
                         tessellate_at_brush_budget(
@@ -406,17 +441,21 @@ impl SculptingPipeline {
                         &mut next_original_vertex_id,
                     ),
                 };
-                trace!(
-                    "apply_dab_internal: tessellation done - split={}, collapsed={}",
+                debug!(
+                    "apply_dab_internal: tessellation done in {:?} - split={}, collapsed={}, faces={}",
+                    tess_start.elapsed(),
                     tess_stats.edges_split,
-                    tess_stats.edges_collapsed
+                    tess_stats.edges_collapsed,
+                    chunk.mesh.face_count(),
                 );
 
                 // Validate mesh after tessellation in debug builds
                 #[cfg(debug_assertions)]
-                if let Err(e) = chunk.mesh.validate_connectivity() {
-                    error!("MESH CORRUPTION after tessellation: {}", e);
-                    panic!("Mesh corrupted by tessellation: {}", e);
+                if std::env::var("PENTIMENTO_SKIP_MESH_VALIDATION").is_err() {
+                    if let Err(e) = chunk.mesh.validate_connectivity() {
+                        error!("MESH CORRUPTION after tessellation: {}", e);
+                        panic!("Mesh corrupted by tessellation: {}", e);
+                    }
                 }
 
                 debug!(
@@ -428,7 +467,6 @@ impl SculptingPipeline {
 
                 if tess_stats.edges_split > 0 || tess_stats.edges_collapsed > 0 {
                     chunk.mark_topology_changed();
-                    // Octree already invalidated above
 
                     // CRITICAL: Recalculate normals after tessellation changed topology.
                     // New faces inherit the original face's normal which is now wrong,
@@ -460,8 +498,10 @@ impl SculptingPipeline {
         // Write back the updated vertex ID counter to the chunked mesh
         chunked_mesh.next_original_vertex_id = next_original_vertex_id;
 
-        // Sync boundary vertices across chunks
-        trace!("apply_dab_internal: syncing boundary vertices");
+        // Final boundary sync: propagate any position changes from tessellation
+        // smoothing (tangent-plane smooth applies small position adjustments to
+        // new split vertices and their neighbors).
+        trace!("apply_dab_internal: final boundary sync");
         self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
 
         trace!("apply_dab_internal: END");
@@ -509,6 +549,64 @@ impl SculptingPipeline {
 
         // Recalculate boundary normals
         chunked_mesh.recalculate_boundary_normals();
+
+        // Verify boundary consistency in debug builds
+        #[cfg(debug_assertions)]
+        if std::env::var("PENTIMENTO_SKIP_MESH_VALIDATION").is_err() {
+            Self::verify_boundary_consistency(chunked_mesh);
+        }
+    }
+
+    /// Verify that boundary vertices have consistent original IDs and positions
+    /// across all chunks that share them. Logs errors for any inconsistencies.
+    #[cfg(debug_assertions)]
+    fn verify_boundary_consistency(chunked_mesh: &ChunkedMesh) {
+        for (&chunk_id, chunk) in &chunked_mesh.chunks {
+            for (&local_id, refs) in &chunk.boundary_vertices {
+                let Some(&original_id) = chunk.local_to_original.get(&local_id) else {
+                    error!(
+                        "BOUNDARY CONSISTENCY: vertex {:?} in chunk {:?} has no \
+                         original ID mapping! This will cause mesh tearing.",
+                        local_id, chunk_id
+                    );
+                    continue;
+                };
+                let our_pos = chunk.mesh.vertex(local_id).map(|v| v.position);
+                for bref in refs {
+                    // Verify the neighbor chunk has the same original ID
+                    if let Some(neighbor) = chunked_mesh.chunks.get(&bref.chunk_id) {
+                        if let Some(&neighbor_original) =
+                            neighbor.local_to_original.get(&bref.vertex_id)
+                        {
+                            if neighbor_original != original_id {
+                                error!(
+                                    "BOUNDARY CONSISTENCY: original ID mismatch! \
+                                     chunk {:?} vertex {:?} has original={:?}, but \
+                                     neighbor chunk {:?} vertex {:?} has original={:?}",
+                                    chunk_id, local_id, original_id,
+                                    bref.chunk_id, bref.vertex_id, neighbor_original
+                                );
+                            }
+                        }
+                        // Verify positions are synchronized
+                        let their_pos =
+                            neighbor.mesh.vertex(bref.vertex_id).map(|v| v.position);
+                        if let (Some(ours), Some(theirs)) = (our_pos, their_pos) {
+                            let dist = ours.distance(theirs);
+                            if dist > 1e-5 {
+                                debug!(
+                                    "BOUNDARY CONSISTENCY: position desync for \
+                                     original={:?}: chunk {:?}={:?} vs chunk {:?}={:?} \
+                                     (delta={})",
+                                    original_id, chunk_id, ours,
+                                    bref.chunk_id, theirs, dist
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Rebalance chunks after a stroke ends.

@@ -188,6 +188,10 @@ pub struct TessellationConfig {
     /// Each iteration runs a full split+collapse pass. Iterating allows edges
     /// created by splits to be evaluated and further refined.
     pub max_tessellation_iterations: usize,
+    /// Maximum edge splits per pass (default: 200).
+    /// Prevents runaway mesh growth from a single dab by capping how many
+    /// edges can be split in one split pass.
+    pub max_splits_per_pass: usize,
     /// Whether edge collapse is enabled.
     ///
     /// Now enabled by default after implementing comprehensive safety checks:
@@ -214,6 +218,7 @@ impl Default for TessellationConfig {
             min_faces: 4,
             max_faces_per_chunk: 50000,
             max_tessellation_iterations: 3,
+            max_splits_per_pass: 200,
             collapse_enabled: true,
         }
     }

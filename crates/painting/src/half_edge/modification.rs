@@ -124,41 +124,62 @@ impl HalfEdgeMesh {
             return false;
         }
 
+        // ===== PHASE 2b: NON-MANIFOLD PRE-CHECK =====
+        // Flipping edge A-B creates edge C-D. If C→D or D→C already exists
+        // from a DIFFERENT face, the flip would silently overwrite that face's
+        // edge_map entry, creating a "shadow face" with a duplicate directed
+        // edge. This produces non-manifold geometry that causes mesh tearing.
+        for &(from, to) in &[(v_d, v_c), (v_c, v_d)] {
+            if let Some(&existing_he) = self.edge_map.get(&(from, to)) {
+                let existing_face = self.half_edges[existing_he.0 as usize].face;
+                if let Some(ef) = existing_face {
+                    if ef != face1 && ef != face2 {
+                        trace!(
+                            "flip_edge_topology: ABORT - new edge ({:?}->{:?}) already \
+                             owned by face {:?}, would create non-manifold geometry",
+                            from, to, ef
+                        );
+                        return false;
+                    }
+                }
+            }
+        }
+
         // ===== PHASE 3: REWIRE HALF-EDGES =====
         // After flip:
-        // Face 1 becomes ACD: edge goes from C to D
-        // Face 2 becomes DBC: twin edge goes from D to C
+        // Face 1 becomes ADC: he_ad(A→D) → he_dc(D→C) → he_ca(C→A)
+        // Face 2 becomes BCD: he_bc(B→C) → he_cd(C→D) → he_db(D→B)
 
-        // Update he_ab to become he_cd (C -> D)
-        self.half_edges[he_ab.0 as usize].origin = v_c;
-        self.half_edges[he_ab.0 as usize].next = he_db;
-        self.half_edges[he_ab.0 as usize].prev = he_ca;
+        // Update he_ab to become he_dc (D → C)
+        self.half_edges[he_ab.0 as usize].origin = v_d;
+        self.half_edges[he_ab.0 as usize].next = he_ca;
+        self.half_edges[he_ab.0 as usize].prev = he_ad;
         self.half_edges[he_ab.0 as usize].face = Some(face1);
 
-        // Update he_ba to become he_dc (D -> C)
-        self.half_edges[he_ba.0 as usize].origin = v_d;
-        self.half_edges[he_ba.0 as usize].next = he_bc;
-        self.half_edges[he_ba.0 as usize].prev = he_ad;
+        // Update he_ba to become he_cd (C → D)
+        self.half_edges[he_ba.0 as usize].origin = v_c;
+        self.half_edges[he_ba.0 as usize].next = he_db;
+        self.half_edges[he_ba.0 as usize].prev = he_bc;
         self.half_edges[he_ba.0 as usize].face = Some(face2);
 
-        // Update he_bc: now in face2, prev is he_dc, next is he_ca→he_ad
+        // Update he_bc: moves to face2, between he_db and he_cd
         self.half_edges[he_bc.0 as usize].face = Some(face2);
-        self.half_edges[he_bc.0 as usize].prev = he_ba; // he_dc
-        self.half_edges[he_bc.0 as usize].next = he_ad;
+        self.half_edges[he_bc.0 as usize].prev = he_db;
+        self.half_edges[he_bc.0 as usize].next = he_ba; // he_cd
 
-        // Update he_ca: now stays in face1, prev is he_db, next is he_cd
-        self.half_edges[he_ca.0 as usize].prev = he_db;
-        self.half_edges[he_ca.0 as usize].next = he_ab; // he_cd
+        // Update he_ca: stays in face1, between he_dc and he_ad
+        self.half_edges[he_ca.0 as usize].prev = he_ab; // he_dc
+        self.half_edges[he_ca.0 as usize].next = he_ad;
 
-        // Update he_ad: now in face2, prev is he_bc, next is he_dc
-        self.half_edges[he_ad.0 as usize].face = Some(face2);
-        self.half_edges[he_ad.0 as usize].prev = he_bc;
-        self.half_edges[he_ad.0 as usize].next = he_ba; // he_dc
+        // Update he_ad: moves to face1, between he_ca and he_dc
+        self.half_edges[he_ad.0 as usize].face = Some(face1);
+        self.half_edges[he_ad.0 as usize].prev = he_ca;
+        self.half_edges[he_ad.0 as usize].next = he_ab; // he_dc
 
-        // Update he_db: now in face1, prev is he_cd, next is he_ca
-        self.half_edges[he_db.0 as usize].face = Some(face1);
-        self.half_edges[he_db.0 as usize].prev = he_ab; // he_cd
-        self.half_edges[he_db.0 as usize].next = he_ca;
+        // Update he_db: stays in face2, between he_cd and he_bc
+        self.half_edges[he_db.0 as usize].face = Some(face2);
+        self.half_edges[he_db.0 as usize].prev = he_ba; // he_cd
+        self.half_edges[he_db.0 as usize].next = he_bc;
 
         // ===== PHASE 4: UPDATE FACES =====
         self.faces[face1.0 as usize].half_edge = he_ab; // he_cd
@@ -167,8 +188,8 @@ impl HalfEdgeMesh {
         // ===== PHASE 5: UPDATE EDGE MAP =====
         self.edge_map.remove(&(v_a, v_b));
         self.edge_map.remove(&(v_b, v_a));
-        self.edge_map.insert((v_c, v_d), he_ab);
-        self.edge_map.insert((v_d, v_c), he_ba);
+        self.edge_map.insert((v_d, v_c), he_ab); // he_ab is now D→C
+        self.edge_map.insert((v_c, v_d), he_ba); // he_ba is now C→D
 
         // ===== PHASE 6: UPDATE VERTEX OUTGOING EDGES =====
         // A and B may have had their outgoing edge pointing to the flipped edge
@@ -188,7 +209,7 @@ impl HalfEdgeMesh {
                     .map_or(true, |h| h.origin != v_c || h.face.is_none())
             })
         {
-            self.vertices[v_c.0 as usize].outgoing_half_edge = Some(he_ab); // he_cd
+            self.vertices[v_c.0 as usize].outgoing_half_edge = Some(he_ba); // he_cd (C→D)
         }
         if self.vertices[v_d.0 as usize]
             .outgoing_half_edge
@@ -197,7 +218,7 @@ impl HalfEdgeMesh {
                     .map_or(true, |h| h.origin != v_d || h.face.is_none())
             })
         {
-            self.vertices[v_d.0 as usize].outgoing_half_edge = Some(he_ba); // he_dc
+            self.vertices[v_d.0 as usize].outgoing_half_edge = Some(he_ab); // he_dc (D→C)
         }
 
         // ===== PHASE 7: RECALCULATE FACE NORMALS =====
@@ -219,7 +240,7 @@ impl HalfEdgeMesh {
         }
 
         trace!(
-            "flip_edge_topology: flipped edge {:?} from ({:?}->{:?}) to ({:?}->{:?})",
+            "flip_edge_topology: flipped edge {:?} from ({:?}->{:?}) to ({:?}<->{:?})",
             edge_id,
             v_a,
             v_b,
@@ -586,14 +607,61 @@ impl HalfEdgeMesh {
             }
         }
 
-        // Collect all vertices from orphaned half-edges that need outgoing edge updates
+        // Collect all vertices from orphaned half-edges that need outgoing edge updates.
         // This includes v0, v2 (third vertex of face ABC), and v3 (third vertex of face ABD)
-        // but NOT v1 which is being removed
+        // but NOT v1 which is being removed.
         let mut vertices_to_fix: Vec<VertexId> = vec![v0_id];
         for &he_id in &orphaned_half_edges {
             let origin = self.half_edges[he_id.0 as usize].origin;
             if origin != v1_id && !vertices_to_fix.contains(&origin) {
                 vertices_to_fix.push(origin);
+            }
+        }
+
+        // Save twin IDs from orphaned edges BEFORE orphaning clears them.
+        // These are needed later to find valid outgoing edges for vertices_to_fix.
+        let saved_orphan_twins: Vec<(HalfEdgeId, Option<HalfEdgeId>)> = orphaned_half_edges
+            .iter()
+            .map(|&he_id| (he_id, self.half_edges[he_id.0 as usize].twin))
+            .collect();
+
+        // Walk v1's 1-ring BEFORE orphaning to collect outgoing half-edges and neighbors.
+        // After orphaning, v1's ring may be broken (outgoing_half_edge might point to an
+        // orphaned edge), so we must do this first.
+        let mut v1_outgoing: Vec<HalfEdgeId> = Vec::new();
+        let mut v1_neighbors: Vec<VertexId> = Vec::new();
+        if let Some(start_he_id) = self.vertices[v1_id.0 as usize].outgoing_half_edge {
+            let mut current = start_he_id;
+            let mut visited = std::collections::HashSet::new();
+            let mut iterations = 0;
+            loop {
+                iterations += 1;
+                if iterations > 100 || visited.contains(&current) {
+                    break;
+                }
+                visited.insert(current);
+
+                let he = &self.half_edges[current.0 as usize];
+                if he.face.is_some() && he.origin == v1_id {
+                    v1_outgoing.push(current);
+                    // Collect destination vertex (neighbor of v1)
+                    let dest_origin = self.half_edges[he.next.0 as usize].origin;
+                    if !v1_neighbors.contains(&dest_origin) {
+                        v1_neighbors.push(dest_origin);
+                    }
+                }
+
+                // Move to next outgoing half-edge: prev → twin
+                let prev_he = &self.half_edges[he.prev.0 as usize];
+                if let Some(twin) = prev_he.twin {
+                    current = twin;
+                } else {
+                    break; // Boundary
+                }
+
+                if current == start_he_id {
+                    break;
+                }
             }
         }
 
@@ -615,51 +683,69 @@ impl HalfEdgeMesh {
             self.half_edges[he_id.0 as usize].twin = None;
         }
 
-        // Redirect half-edges from v1 to v0 (only non-orphaned ones)
-        for he in self.half_edges.iter_mut() {
-            if he.origin == v1_id && he.face.is_some() {
-                he.origin = v0_id;
-            }
+        // Remove orphaned edges from v1_outgoing (they were orphaned above)
+        v1_outgoing.retain(|he_id| self.half_edges[he_id.0 as usize].face.is_some());
+
+        // Redirect v1's remaining (non-orphaned) outgoing half-edges to originate from v0 (O(valence))
+        for &he_id in &v1_outgoing {
+            self.half_edges[he_id.0 as usize].origin = v0_id;
         }
 
-        // Update edge map for redirected edges (from == v1 entries)
-        let keys_to_update: Vec<_> = self
-            .edge_map
-            .iter()
-            .filter(|((from, _), _)| *from == v1_id)
-            .map(|(k, v)| (*k, *v))
-            .collect();
-        for ((from, to), he_id) in keys_to_update {
-            self.edge_map.remove(&(from, to));
-            // Only keep non-orphaned edges in the map
+        // Update edge_map for redirected edges: remove (v1, dest) entries,
+        // insert (v0, dest) entries (O(valence))
+        for &he_id in &v1_outgoing {
+            let dest = self.half_edges[self.half_edges[he_id.0 as usize].next.0 as usize].origin;
+            self.edge_map.remove(&(v1_id, dest));
             if self.half_edges[he_id.0 as usize].face.is_some() {
-                self.edge_map.insert((v0_id, to), he_id);
+                // Diagnostic: detect if we're about to overwrite a live edge_map entry.
+                // This would create a "shadow face" and non-manifold geometry.
+                if let Some(&existing) = self.edge_map.get(&(v0_id, dest)) {
+                    if self.half_edges[existing.0 as usize].face.is_some() {
+                        tracing::error!(
+                            "collapse_edge_topology: OVERWRITE ({:?}->{:?}): \
+                             existing he={:?} face={:?}, new he={:?}",
+                            v0_id,
+                            dest,
+                            existing,
+                            self.half_edges[existing.0 as usize].face,
+                            he_id
+                        );
+                    }
+                }
+                self.edge_map.insert((v0_id, dest), he_id);
             }
         }
 
-        // Also update edge_map entries where destination was v1 (now v0).
-        // Without this, stale (X, v1) entries remain and can cause issues
-        // in subsequent operations (flips, collapses).
-        let dest_keys_to_update: Vec<_> = self
-            .edge_map
-            .iter()
-            .filter(|((_, to), _)| *to == v1_id)
-            .map(|(k, v)| (*k, *v))
-            .collect();
-        for ((from, _to), he_id) in dest_keys_to_update {
-            self.edge_map.remove(&(from, v1_id));
-            if self.half_edges[he_id.0 as usize].face.is_some() {
-                self.edge_map.insert((from, v0_id), he_id);
+        // Update edge_map entries where destination was v1 (now v0).
+        // For each neighbor X of v1, look up edge_map[(X, v1)] directly (O(valence) lookups).
+        for &neighbor in &v1_neighbors {
+            if let Some(he_id) = self.edge_map.remove(&(neighbor, v1_id)) {
+                if self.half_edges[he_id.0 as usize].face.is_some() {
+                    // Diagnostic: detect shadow face creation on incoming edges
+                    if let Some(&existing) = self.edge_map.get(&(neighbor, v0_id)) {
+                        if self.half_edges[existing.0 as usize].face.is_some() {
+                            tracing::error!(
+                                "collapse_edge_topology: OVERWRITE ({:?}->{:?}): \
+                                 existing he={:?} face={:?}, new he={:?}",
+                                neighbor,
+                                v0_id,
+                                existing,
+                                self.half_edges[existing.0 as usize].face,
+                                he_id
+                            );
+                        }
+                    }
+                    self.edge_map.insert((neighbor, v0_id), he_id);
+                }
             }
         }
 
-        // Detect and clean up degenerate half-edges created by the redirect.
-        // When non-manifold duplicate edges exist (from merge), redirecting v1→v0
-        // can create half-edges where origin == next.origin (degenerate).
-        // Their entire face must be orphaned.
+        // Detect degenerate half-edges created by the redirect (O(valence)).
+        // Only check redirected edges — only they can have degenerate v0→v0 edges.
         let mut degenerate_faces: Vec<FaceId> = Vec::new();
-        for he in self.half_edges.iter() {
-            if he.face.is_some() && he.origin == v0_id {
+        for &he_id in &v1_outgoing {
+            let he = &self.half_edges[he_id.0 as usize];
+            if he.face.is_some() {
                 let dest = self.half_edges[he.next.0 as usize].origin;
                 if dest == v0_id {
                     if let Some(fid) = he.face {
@@ -698,16 +784,46 @@ impl HalfEdgeMesh {
         self.vertices[v0_id.0 as usize].position = mid_pos;
         self.vertices[v0_id.0 as usize].normal = mid_normal;
 
-        // Fix outgoing_half_edge for ALL affected vertices (v0, v2, v3, etc.)
-        // This is critical: if any vertex's outgoing edge points to an orphaned half-edge,
-        // mesh traversal will fail
+        // Fix outgoing_half_edge for affected vertices (O(valence) per vertex).
+        // Uses saved twin info and redirected edges — no O(E) scans.
         for vid in vertices_to_fix {
-            self.vertices[vid.0 as usize].outgoing_half_edge = self
-                .half_edges
-                .iter()
-                .enumerate()
-                .find(|(_, he)| he.origin == vid && he.face.is_some())
-                .map(|(i, _)| HalfEdgeId(i as u32));
+            // First check if existing outgoing edge is still valid
+            if let Some(existing) = self.vertices[vid.0 as usize].outgoing_half_edge {
+                let he = &self.half_edges[existing.0 as usize];
+                if he.origin == vid && he.face.is_some() {
+                    continue; // Still valid, no fix needed
+                }
+            }
+
+            let mut found = None;
+
+            if vid == v0_id {
+                // For v0: use redirected edges from v1 (now originating from v0)
+                for &he_id in &v1_outgoing {
+                    let he = &self.half_edges[he_id.0 as usize];
+                    if he.origin == v0_id && he.face.is_some() {
+                        found = Some(he_id);
+                        break;
+                    }
+                }
+            }
+
+            // For v2, v3, etc.: use saved twins from orphaned edges.
+            // If an orphaned edge went INTO vid (its next.origin == vid), then
+            // the twin of that orphaned edge originates from vid and is still live.
+            if found.is_none() {
+                for &(_orphaned_id, twin_opt) in &saved_orphan_twins {
+                    if let Some(twin_id) = twin_opt {
+                        let twin_he = &self.half_edges[twin_id.0 as usize];
+                        if twin_he.origin == vid && twin_he.face.is_some() {
+                            found = Some(twin_id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            self.vertices[vid.0 as usize].outgoing_half_edge = found;
         }
 
         // Mark v1 as having no outgoing edge (effectively removed)
@@ -738,6 +854,14 @@ impl HalfEdgeMesh {
     /// A `CompactionMap` mapping old IDs to new IDs for all three element types.
     pub fn compact(&mut self) -> CompactionMap {
         use std::collections::HashSet;
+
+        let compact_start = std::time::Instant::now();
+        tracing::debug!(
+            "compact: START ({} verts, {} half-edges, {} faces)",
+            self.vertices.len(),
+            self.half_edges.len(),
+            self.faces.len()
+        );
 
         // Phase 1a: Identify live faces
         // A face is live if its half_edge points to a half-edge that belongs to it
@@ -802,6 +926,72 @@ impl HalfEdgeMesh {
             );
         }
 
+        // Phase 1b-extra: Detect non-manifold edges (duplicate directed edges across faces).
+        // This catches "shadow faces" created when flip_edge_topology overwrites an existing
+        // edge_map entry. Both faces are live but share a directed edge, which violates
+        // manifold topology and causes mesh tearing during merge.
+        {
+            let mut temp_edge_owners: HashMap<(VertexId, VertexId), FaceId> =
+                HashMap::with_capacity(live_he_ids.len());
+            let mut nonmanifold_face_ids: Vec<FaceId> = Vec::new();
+
+            for &face_id in &live_face_ids {
+                if degenerate_face_ids.contains(&face_id) {
+                    continue;
+                }
+                let face = &self.faces[face_id.0 as usize];
+                let start = face.half_edge;
+                let mut current = start;
+                let mut is_nonmanifold = false;
+                loop {
+                    let he = &self.half_edges[current.0 as usize];
+                    let dest = self.half_edges[he.next.0 as usize].origin;
+                    if let Some(&earlier_face) = temp_edge_owners.get(&(he.origin, dest)) {
+                        tracing::warn!(
+                            "compact: NON-MANIFOLD directed edge ({:?}->{:?}) shared by \
+                             face {:?} and {:?}. Removing face {:?}.",
+                            he.origin, dest, earlier_face, face_id, face_id
+                        );
+                        is_nonmanifold = true;
+                        break;
+                    }
+                    temp_edge_owners.insert((he.origin, dest), face_id);
+                    current = he.next;
+                    if current == start {
+                        break;
+                    }
+                }
+                if is_nonmanifold {
+                    nonmanifold_face_ids.push(face_id);
+                }
+            }
+
+            // Remove non-manifold faces and their half-edges from live sets
+            for &fid in &nonmanifold_face_ids {
+                live_face_ids.remove(&fid);
+                degenerate_face_ids.insert(fid);
+
+                // Remove this face's half-edges from live_he_ids
+                let face = &self.faces[fid.0 as usize];
+                let start = face.half_edge;
+                let mut current = start;
+                loop {
+                    live_he_ids.remove(&current);
+                    current = self.half_edges[current.0 as usize].next;
+                    if current == start {
+                        break;
+                    }
+                }
+            }
+
+            if !nonmanifold_face_ids.is_empty() {
+                tracing::warn!(
+                    "compact: removed {} non-manifold faces (duplicate directed edges)",
+                    nonmanifold_face_ids.len()
+                );
+            }
+        }
+
         // Phase 1c: From live half-edges, collect live vertices
         let mut live_vertex_ids: HashSet<VertexId> = HashSet::new();
         for &he_id in &live_he_ids {
@@ -823,10 +1013,49 @@ impl HalfEdgeMesh {
             }
         }
 
+        // Phase 2b: Pre-filter half-edges before assigning IDs.
+        // A live half-edge must have: live origin vertex, live next, live prev.
+        // Iteratively exclude half-edges that fail these checks, since excluding
+        // one can cascade to others (a half-edge whose next was excluded must also
+        // be excluded). This prevents the old bug where `continue` in Phase 3
+        // caused array index/ID misalignment.
+        let mut included_he_ids = live_he_ids.clone();
+        loop {
+            let to_exclude: Vec<HalfEdgeId> = included_he_ids
+                .iter()
+                .filter(|&&he_id| {
+                    let he = &self.half_edges[he_id.0 as usize];
+                    let origin_ok = live_vertex_ids.contains(&he.origin);
+                    let next_ok = included_he_ids.contains(&he.next);
+                    let prev_ok = included_he_ids.contains(&he.prev);
+                    !origin_ok || !next_ok || !prev_ok
+                })
+                .copied()
+                .collect();
+            if to_exclude.is_empty() {
+                break;
+            }
+            for he_id in &to_exclude {
+                let he = &self.half_edges[he_id.0 as usize];
+                tracing::warn!(
+                    "compact: excluding live half-edge {:?} (origin={:?}, next={:?}, prev={:?}) - dead references",
+                    he_id, he.origin, he.next, he.prev
+                );
+                included_he_ids.remove(he_id);
+            }
+        }
+
+        // Also exclude faces whose starting half-edge was excluded
+        live_face_ids.retain(|&fid| {
+            let face = &self.faces[fid.0 as usize];
+            included_he_ids.contains(&face.half_edge)
+        });
+
+        // Build half-edge and face maps from the filtered sets
         let mut new_he_idx = 0u32;
         for i in 0..self.half_edges.len() {
             let he_id = HalfEdgeId(i as u32);
-            if live_he_ids.contains(&he_id) {
+            if included_he_ids.contains(&he_id) {
                 half_edge_map.insert(he_id, HalfEdgeId(new_he_idx));
                 new_he_idx += 1;
             }
@@ -862,7 +1091,9 @@ impl HalfEdgeMesh {
             degenerate_face_ids.len()
         );
 
-        // Phase 3: Build new arrays with remapped IDs (defensive .get() to avoid panics)
+        // Phase 3: Build new arrays with remapped IDs.
+        // Half-edges were pre-filtered in Phase 2b, so no defensive skipping needed here.
+        // This guarantees that array indices always match half-edge IDs.
         let mut new_vertices: Vec<Vertex> = Vec::with_capacity(vertex_map.len());
         for (i, v) in self.vertices.iter().enumerate() {
             let vid = VertexId(i as u32);
@@ -884,29 +1115,10 @@ impl HalfEdgeMesh {
         for (i, he) in self.half_edges.iter().enumerate() {
             let he_id = HalfEdgeId(i as u32);
             if let Some(&new_id) = half_edge_map.get(&he_id) {
-                // Defensive: skip if origin vertex isn't live (shouldn't happen with
-                // reachability, but prevents panic on any remaining edge case)
-                let Some(&new_origin) = vertex_map.get(&he.origin) else {
-                    trace!(
-                        "compact: WARN half-edge {:?} references dead vertex {:?}, skipping",
-                        he_id, he.origin
-                    );
-                    continue;
-                };
-                let Some(&new_next) = half_edge_map.get(&he.next) else {
-                    trace!(
-                        "compact: WARN half-edge {:?} references dead next {:?}, skipping",
-                        he_id, he.next
-                    );
-                    continue;
-                };
-                let Some(&new_prev) = half_edge_map.get(&he.prev) else {
-                    trace!(
-                        "compact: WARN half-edge {:?} references dead prev {:?}, skipping",
-                        he_id, he.prev
-                    );
-                    continue;
-                };
+                // All references are guaranteed valid by Phase 2b pre-filtering.
+                let new_origin = vertex_map[&he.origin];
+                let new_next = half_edge_map[&he.next];
+                let new_prev = half_edge_map[&he.prev];
 
                 new_half_edges.push(HalfEdge {
                     id: new_id,
@@ -918,6 +1130,13 @@ impl HalfEdgeMesh {
                 });
             }
         }
+
+        // Sanity check: array length must match map size (guaranteed by pre-filtering)
+        debug_assert_eq!(
+            new_half_edges.len(),
+            half_edge_map.len(),
+            "compact: half-edge array/map size mismatch after pre-filtered build"
+        );
 
         let mut new_faces: Vec<Face> = Vec::with_capacity(face_map.len());
         for (i, f) in self.faces.iter().enumerate() {
@@ -938,15 +1157,16 @@ impl HalfEdgeMesh {
             }
         }
 
-        // Phase 3: Rebuild edge_map with remapped IDs
-        let mut new_edge_map: HashMap<(VertexId, VertexId), HalfEdgeId> = HashMap::new();
-        for (&(from, to), &he_id) in &self.edge_map {
-            if let (Some(&new_from), Some(&new_to), Some(&new_he)) = (
-                vertex_map.get(&from),
-                vertex_map.get(&to),
-                half_edge_map.get(&he_id),
-            ) {
-                new_edge_map.insert((new_from, new_to), new_he);
+        // Phase 3: Rebuild edge_map from scratch using live half-edges.
+        // The old edge_map may have stale entries from collapse redirects where
+        // the key (origin, dest) no longer matches the half-edge's actual direction.
+        // Walking the new arrays guarantees correctness.
+        let mut new_edge_map: HashMap<(VertexId, VertexId), HalfEdgeId> =
+            HashMap::with_capacity(new_half_edges.len());
+        for he in &new_half_edges {
+            if he.face.is_some() {
+                let dest = new_half_edges[he.next.0 as usize].origin;
+                new_edge_map.insert((he.origin, dest), he.id);
             }
         }
 
@@ -968,8 +1188,13 @@ impl HalfEdgeMesh {
             }
         }
 
-        trace!(
-            "compact: result {} vertices, {} half-edges, {} faces",
+        // Phase 5b: Rebuild twin pointers from the fresh edge_map.
+        // This guarantees twin consistency regardless of what the collapse code did.
+        self.rebuild_twins_from_edge_map();
+
+        tracing::debug!(
+            "compact: END in {:?} ({} vertices, {} half-edges, {} faces)",
+            compact_start.elapsed(),
             self.vertices.len(),
             self.half_edges.len(),
             self.faces.len()

@@ -974,7 +974,11 @@ fn sync_sculpt_chunks_to_gpu(
 
     if has_topology_change || cached_vertex_mapping.is_none() {
         // Full rebuild path: merge all chunks and rebuild Bevy mesh
+        debug!("sync_sculpt_to_gpu: merging chunks (topology_changed={}, cached={})",
+              has_topology_change, cached_vertex_mapping.is_some());
+        let merge_start = std::time::Instant::now();
         let merged = sculpting::merge_chunks(chunked_mesh);
+        debug!("sync_sculpt_to_gpu: merge done in {:?} ({} faces)", merge_start.elapsed(), merged.mesh.face_count());
 
         if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
             if let Some(new_mesh) = half_edge_to_bevy_mesh(&merged.mesh) {

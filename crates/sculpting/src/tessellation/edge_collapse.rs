@@ -110,25 +110,58 @@ pub struct CollapseResult {
 // Ring Boundary Detection
 // =============================================================================
 
-/// Check if a vertex is on a "ring boundary" using SculptGL's pattern.
+/// Check if a vertex is on a mesh boundary (has any incident boundary edge).
 ///
-/// A vertex is considered on a ring boundary if its ring vertex count differs
-/// from its ring face count. For interior vertices in a manifold mesh, these
-/// counts should be equal.
+/// A boundary vertex has at least one outgoing half-edge with `twin=None`.
+/// This is detected by walking the ring: if the walk completes a full loop
+/// back to the start, the vertex is interior; if it hits a missing twin,
+/// the vertex is on a boundary.
+///
+/// # Why not compare ring counts?
+/// The previous implementation compared `get_adjacent_vertices().len()` with
+/// `get_vertex_faces().len()`. Both functions use the same directional ring
+/// walk (`prev → twin`) which breaks at the same boundary point. The counts
+/// are always equal for boundary vertices, so boundaries were never detected.
 ///
 /// # Reference
-/// Adapted from SculptGL Decimation.js:
-/// ```javascript
-/// if (ring1.length !== tris1.length || ring2.length !== tris2.length)
-///     return;  // vertices on the edge... we don't do anything
-/// ```
+/// Adapted from SculptGL Decimation.js ring boundary check, corrected to
+/// work with our half-edge ring walk pattern.
 fn is_ring_boundary_vertex(mesh: &HalfEdgeMesh, vertex_id: VertexId) -> bool {
-    let ring_vertices = mesh.get_adjacent_vertices(vertex_id);
-    let ring_faces = mesh.get_vertex_faces(vertex_id);
+    let Some(vertex) = mesh.vertex(vertex_id) else {
+        return true;
+    };
+    let Some(start) = vertex.outgoing_half_edge else {
+        return true;
+    };
 
-    // For interior vertices: ring_vertices.len() == ring_faces.len()
-    // For boundary vertices: ring_vertices.len() != ring_faces.len()
-    ring_vertices.len() != ring_faces.len()
+    let mut current = start;
+    let mut iterations = 0;
+    loop {
+        iterations += 1;
+        if iterations > 100 {
+            return true; // Safety limit — treat as boundary
+        }
+
+        let Some(he) = mesh.half_edge(current) else {
+            return true;
+        };
+        // Check if the current outgoing half-edge itself is a boundary
+        if he.twin.is_none() {
+            return true;
+        }
+        let Some(prev_he) = mesh.half_edge(he.prev) else {
+            return true;
+        };
+        match prev_he.twin {
+            Some(twin) => {
+                current = twin;
+                if current == start {
+                    return false; // Full loop completed — interior vertex
+                }
+            }
+            None => return true, // Boundary edge found
+        }
+    }
 }
 
 // =============================================================================

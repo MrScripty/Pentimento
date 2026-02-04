@@ -46,7 +46,7 @@ use glam::Vec3;
 use painting::half_edge::{HalfEdgeId, HalfEdgeMesh, VertexId};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 /// Tessellation decision for a single edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,7 +93,7 @@ pub fn tessellate_at_brush(
 
     // Check if chunk is already at max face limit
     if chunk.mesh.face_count() >= config.max_faces_per_chunk {
-        info!(
+        debug!(
             "tessellate: at max faces ({} >= {}), skipping",
             chunk.mesh.face_count(),
             config.max_faces_per_chunk
@@ -103,9 +103,11 @@ pub fn tessellate_at_brush(
 
     // Convergence loop: iterate split+collapse until no changes or max iterations
     for iteration in 0..config.max_tessellation_iterations {
+        let iter_start = std::time::Instant::now();
         let mut collapses_this_iter = 0usize;
 
         // ===== SPLIT PASS =====
+        debug!("  tessellate iter {}: starting split_pass (faces={})", iteration, chunk.mesh.face_count());
         let splits_this_iter = split_pass(
             chunk,
             brush_center,
@@ -121,6 +123,7 @@ pub fn tessellate_at_brush(
         }
 
         // ===== COLLAPSE PASS =====
+        debug!("  tessellate iter {}: starting collapse_pass (faces={}, splits={})", iteration, chunk.mesh.face_count(), splits_this_iter);
         if config.collapse_enabled && chunk.mesh.face_count() > config.min_faces {
             collapses_this_iter = collapse_pass(
                 chunk,
@@ -128,6 +131,7 @@ pub fn tessellate_at_brush(
                 influence_radius,
                 config,
                 screen_config,
+                next_original_vertex_id,
             );
 
             stats.edges_collapsed += collapses_this_iter;
@@ -137,8 +141,8 @@ pub fn tessellate_at_brush(
         }
 
         debug!(
-            "tessellate iteration {}: split={}, collapsed={}, faces={}",
-            iteration, splits_this_iter, collapses_this_iter, chunk.mesh.face_count()
+            "  tessellate iter {}: done in {:?} - split={}, collapsed={}, faces={}",
+            iteration, iter_start.elapsed(), splits_this_iter, collapses_this_iter, chunk.mesh.face_count()
         );
 
         // Converged - no more changes needed
@@ -148,7 +152,7 @@ pub fn tessellate_at_brush(
 
         // Safety check: don't exceed max face count
         if chunk.mesh.face_count() >= config.max_faces_per_chunk {
-            info!(
+            debug!(
                 "tessellate: reached max faces ({}) during iteration, stopping",
                 chunk.mesh.face_count()
             );
@@ -201,7 +205,7 @@ pub fn tessellate_at_brush_budget(
 
     // Check if chunk is already at max face limit
     if chunk.mesh.face_count() >= config.max_faces_per_chunk {
-        info!(
+        debug!(
             "tessellate_budget: at max faces ({} >= {}), skipping",
             chunk.mesh.face_count(),
             config.max_faces_per_chunk
@@ -236,6 +240,7 @@ pub fn tessellate_at_brush_budget(
                 influence_radius,
                 config,
                 budget,
+                next_original_vertex_id,
             );
 
             stats.edges_collapsed += collapses_this_iter;
@@ -256,7 +261,7 @@ pub fn tessellate_at_brush_budget(
 
         // Safety check: don't exceed max face count
         if chunk.mesh.face_count() >= config.max_faces_per_chunk {
-            info!(
+            debug!(
                 "tessellate_budget: reached max faces ({}) during iteration, stopping",
                 chunk.mesh.face_count()
             );
@@ -353,15 +358,24 @@ fn split_pass_budget(
             break;
         }
 
+        // Cap splits per pass to prevent runaway mesh growth
+        if actual_splits >= config.max_splits_per_pass {
+            break;
+        }
+
         // Deduplicate: skip if this edge was already split
         let key = if v0.0 < v1.0 { (v0, v1) } else { (v1, v0) };
         if midpoint_map.contains_key(&key) {
             continue;
         }
 
-        // Skip boundary edges
+        // Skip true cross-chunk boundary edges (both endpoints are boundary vertices).
+        // Edges where only ONE endpoint is boundary are interior to this chunk and
+        // safe to split — the new midpoint will be an interior vertex.
+        // Previously this used `||` which created a "dead zone" around all boundary
+        // vertices where tessellation couldn't operate, causing density discontinuities.
         if chunk.boundary_vertices.contains_key(&v0)
-            || chunk.boundary_vertices.contains_key(&v1)
+            && chunk.boundary_vertices.contains_key(&v1)
         {
             continue;
         }
@@ -410,6 +424,7 @@ fn collapse_pass_budget(
     influence_radius: f32,
     config: &TessellationConfig,
     budget: &mut VertexBudget,
+    next_original_vertex_id: &mut u32,
 ) -> usize {
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
     let over_budget = budget.is_over_budget();
@@ -451,6 +466,9 @@ fn collapse_pass_budget(
     });
 
     let mut actual_collapses = 0usize;
+    let mut actual_flips = 0usize;
+    // Track vertices affected by previous collapses this pass (see collapse_pass for details).
+    let mut dirty_vertices: HashSet<VertexId> = HashSet::new();
 
     for (v0, v1, _curvature) in collapse_candidates {
         if chunk.mesh.face_count() <= config.min_faces {
@@ -469,25 +487,53 @@ fn collapse_pass_budget(
             continue;
         }
 
+        // Skip if either vertex was affected by a prior collapse this pass
+        if dirty_vertices.contains(&v0) || dirty_vertices.contains(&v1) {
+            continue;
+        }
+
         // Look up CURRENT half-edge ID
         let Some(edge_id) = chunk.mesh.find_half_edge(v0, v1) else {
             continue;
         };
 
+        // Collect neighbors BEFORE topology changes (ring walks are still intact)
+        let neighbors_v0 = chunk.mesh.get_adjacent_vertices(v0);
+        let neighbors_v1 = chunk.mesh.get_adjacent_vertices(v1);
+
         match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
             Some(CollapseOrFlipResult::Collapsed(_)) => {
                 actual_collapses += 1;
                 budget.record_collapse();
+                dirty_vertices.insert(v0);
+                dirty_vertices.insert(v1);
+                for v in neighbors_v0 { dirty_vertices.insert(v); }
+                for v in neighbors_v1 { dirty_vertices.insert(v); }
             }
             Some(CollapseOrFlipResult::Flipped) => {
-                // Edge flip improves quality but doesn't count as a collapse
+                actual_flips += 1;
+                dirty_vertices.insert(v0);
+                dirty_vertices.insert(v1);
+                for v in neighbors_v0 { dirty_vertices.insert(v); }
+                for v in neighbors_v1 { dirty_vertices.insert(v); }
             }
             None => {}
         }
     }
 
-    // Compact after collapses to remove dead elements
-    if actual_collapses > 0 {
+    // Compact after collapses or flips to remove dead elements and rebuild edge_map.
+    // Flips can create edge_map inconsistencies that need cleanup even if no collapses occurred.
+    if actual_collapses > 0 || actual_flips > 0 {
+        // Save boundary vertex original IDs BEFORE compact can lose them.
+        // Compact's liveness detection may falsely mark boundary vertices as dead,
+        // causing their local_to_original mapping to be silently lost. We save the
+        // mapping here so we can recover it after compact.
+        let boundary_originals: HashMap<VertexId, VertexId> = chunk
+            .boundary_vertices
+            .keys()
+            .filter_map(|&lid| chunk.local_to_original.get(&lid).map(|&oid| (lid, oid)))
+            .collect();
+
         let compaction = chunk.mesh.compact();
 
         // Update local_to_original and original_to_local with remapped vertex IDs
@@ -512,6 +558,31 @@ fn collapse_pass_budget(
                 chunk.boundary_vertices.insert(new_local, refs);
             }
         }
+
+        // Recover any boundary vertex mappings that were lost during compact.
+        // If compact removed a boundary vertex from vertex_map but it survived
+        // in the mesh (e.g., due to liveness detection disagreement), restore
+        // its original ID to maintain cross-chunk identity.
+        let mut boundary_recovered = 0;
+        for (&old_local, &original) in &boundary_originals {
+            if let Some(&new_local) = compaction.vertex_map.get(&old_local) {
+                if !chunk.local_to_original.contains_key(&new_local) {
+                    chunk.local_to_original.insert(new_local, original);
+                    chunk.original_to_local.insert(original, new_local);
+                    boundary_recovered += 1;
+                }
+            }
+        }
+        if boundary_recovered > 0 {
+            tracing::warn!(
+                "collapse_pass_budget: recovered {} boundary vertex mappings that \
+                 would have been lost during compact",
+                boundary_recovered
+            );
+        }
+
+        // Safety net: ensure ALL mesh vertices have local_to_original mappings.
+        repair_vertex_mappings(chunk, next_original_vertex_id);
     }
 
     actual_collapses
@@ -561,15 +632,24 @@ fn split_pass(
             break;
         }
 
+        // Cap splits per pass to prevent runaway mesh growth
+        if actual_splits >= config.max_splits_per_pass {
+            break;
+        }
+
         // Deduplicate: skip if this edge was already split
         let key = if v0.0 < v1.0 { (v0, v1) } else { (v1, v0) };
         if midpoint_map.contains_key(&key) {
             continue;
         }
 
-        // Skip boundary edges
+        // Skip true cross-chunk boundary edges (both endpoints are boundary vertices).
+        // Edges where only ONE endpoint is boundary are interior to this chunk and
+        // safe to split — the new midpoint will be an interior vertex.
+        // Previously this used `||` which created a "dead zone" around all boundary
+        // vertices where tessellation couldn't operate, causing density discontinuities.
         if chunk.boundary_vertices.contains_key(&v0)
-            || chunk.boundary_vertices.contains_key(&v1)
+            && chunk.boundary_vertices.contains_key(&v1)
         {
             continue;
         }
@@ -621,6 +701,7 @@ fn collapse_pass(
     influence_radius: f32,
     config: &TessellationConfig,
     screen_config: &ScreenSpaceConfig,
+    next_original_vertex_id: &mut u32,
 ) -> usize {
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
 
@@ -651,6 +732,12 @@ fn collapse_pass(
     });
 
     let mut actual_collapses = 0usize;
+    let mut actual_flips = 0usize;
+    // Track vertices affected by previous collapses this pass.
+    // Sequential collapses can break ring walks (orphaned edges clear twin pointers
+    // on neighboring edges), causing incomplete vertex redirects and edge_map corruption.
+    // Skip any collapse involving a vertex whose ring may be broken.
+    let mut dirty_vertices: HashSet<VertexId> = HashSet::new();
 
     for (v0, v1) in edges_to_collapse {
         if chunk.mesh.face_count() <= config.min_faces {
@@ -664,24 +751,54 @@ fn collapse_pass(
             continue;
         }
 
+        // Skip if either vertex was affected by a prior collapse this pass
+        if dirty_vertices.contains(&v0) || dirty_vertices.contains(&v1) {
+            continue;
+        }
+
         // Look up CURRENT half-edge ID
         let Some(edge_id) = chunk.mesh.find_half_edge(v0, v1) else {
             continue;
         };
 
+        // Collect neighbors BEFORE topology changes (ring walks are still intact)
+        let neighbors_v0 = chunk.mesh.get_adjacent_vertices(v0);
+        let neighbors_v1 = chunk.mesh.get_adjacent_vertices(v1);
+
         match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
             Some(CollapseOrFlipResult::Collapsed(_)) => {
                 actual_collapses += 1;
+                // Mark all affected vertices as dirty to prevent cascading corruption
+                dirty_vertices.insert(v0);
+                dirty_vertices.insert(v1);
+                for v in neighbors_v0 { dirty_vertices.insert(v); }
+                for v in neighbors_v1 { dirty_vertices.insert(v); }
             }
             Some(CollapseOrFlipResult::Flipped) => {
-                // Edge flip improves quality but doesn't count as a collapse
+                actual_flips += 1;
+                // Flip also modifies topology around these vertices
+                dirty_vertices.insert(v0);
+                dirty_vertices.insert(v1);
+                for v in neighbors_v0 { dirty_vertices.insert(v); }
+                for v in neighbors_v1 { dirty_vertices.insert(v); }
             }
             None => {}
         }
     }
 
-    // Compact after collapses to remove dead elements
-    if actual_collapses > 0 {
+    // Compact after collapses or flips to remove dead elements and rebuild edge_map.
+    // Flips can create edge_map inconsistencies that need cleanup even if no collapses occurred.
+    if actual_collapses > 0 || actual_flips > 0 {
+        // Save boundary vertex original IDs BEFORE compact can lose them.
+        // Compact's liveness detection may falsely mark boundary vertices as dead,
+        // causing their local_to_original mapping to be silently lost. We save the
+        // mapping here so we can recover it after compact.
+        let boundary_originals: HashMap<VertexId, VertexId> = chunk
+            .boundary_vertices
+            .keys()
+            .filter_map(|&lid| chunk.local_to_original.get(&lid).map(|&oid| (lid, oid)))
+            .collect();
+
         let compaction = chunk.mesh.compact();
 
         // Update local_to_original and original_to_local with remapped vertex IDs
@@ -706,6 +823,35 @@ fn collapse_pass(
                 chunk.boundary_vertices.insert(new_local, refs);
             }
         }
+
+        // Recover any boundary vertex mappings that were lost during compact.
+        // If compact removed a boundary vertex from vertex_map but it survived
+        // in the mesh (e.g., due to liveness detection disagreement), restore
+        // its original ID to maintain cross-chunk identity.
+        let mut boundary_recovered = 0;
+        for (&old_local, &original) in &boundary_originals {
+            if let Some(&new_local) = compaction.vertex_map.get(&old_local) {
+                if !chunk.local_to_original.contains_key(&new_local) {
+                    chunk.local_to_original.insert(new_local, original);
+                    chunk.original_to_local.insert(original, new_local);
+                    boundary_recovered += 1;
+                }
+            }
+        }
+        if boundary_recovered > 0 {
+            tracing::warn!(
+                "collapse_pass: recovered {} boundary vertex mappings that \
+                 would have been lost during compact",
+                boundary_recovered
+            );
+        }
+
+        // Safety net: ensure ALL mesh vertices have local_to_original mappings.
+        // After compact(), some vertices may lose their mapping if compact's liveness
+        // detection differs from the mapping update (e.g., degenerate face removal
+        // or defensive half-edge skipping). Missing mappings cause merge_chunks to
+        // skip faces, creating visible holes in the mesh.
+        repair_vertex_mappings(chunk, next_original_vertex_id);
     }
 
     actual_collapses
@@ -863,6 +1009,66 @@ fn evaluate_edge_in_chunk(
     };
 
     evaluate_edge(v0_pos, v1_pos, config, screen_config)
+}
+
+/// Ensure all mesh vertices have `local_to_original` mappings.
+///
+/// After `compact()`, some vertices may lose their mapping if the compaction's
+/// liveness detection disagrees with the mapping update. For example:
+/// - Degenerate face removal can orphan vertices that are later re-linked
+/// - Defensive half-edge skipping in compact can desync the vertex map
+/// - Edge flip fallback can create new topology not tracked by the mapping
+///
+/// Missing mappings cause `merge_chunks` to skip faces referencing those vertices,
+/// creating visible holes in the rendered mesh.
+///
+/// This function scans all mesh vertices and assigns new globally unique original
+/// IDs to any that lack a mapping.
+fn repair_vertex_mappings(chunk: &mut MeshChunk, next_original_vertex_id: &mut u32) {
+    let mut repaired_interior = 0;
+    let mut recovered_boundary = 0;
+    for i in 0..chunk.mesh.vertex_count() {
+        let vid = VertexId(i as u32);
+        if !chunk.local_to_original.contains_key(&vid) {
+            // First, try to recover the original ID from boundary vertex info.
+            // Boundary vertices store the original_vertex_id in their references,
+            // so we can recover the cross-chunk identity even if the mapping was lost.
+            if let Some(boundary_refs) = chunk.boundary_vertices.get(&vid) {
+                if let Some(first_ref) = boundary_refs.first() {
+                    chunk
+                        .local_to_original
+                        .insert(vid, first_ref.original_vertex_id);
+                    chunk
+                        .original_to_local
+                        .insert(first_ref.original_vertex_id, vid);
+                    recovered_boundary += 1;
+                    continue;
+                }
+            }
+            // Interior vertex: assign a new globally unique ID
+            let unique_original_id = VertexId(*next_original_vertex_id);
+            *next_original_vertex_id += 1;
+            chunk.local_to_original.insert(vid, unique_original_id);
+            chunk.original_to_local.insert(unique_original_id, vid);
+            repaired_interior += 1;
+        }
+    }
+    if recovered_boundary > 0 {
+        tracing::error!(
+            "repair_vertex_mappings: recovered {} BOUNDARY vertex mappings from \
+             boundary_vertices info. This indicates compact incorrectly removed \
+             boundary vertices. Without recovery, these would cause mesh tearing.",
+            recovered_boundary
+        );
+    }
+    if repaired_interior > 0 {
+        tracing::warn!(
+            "repair_vertex_mappings: assigned {} missing interior mappings \
+             ({} total vertices). This indicates a mapping bug in collapse/compact.",
+            repaired_interior,
+            chunk.mesh.vertex_count()
+        );
+    }
 }
 
 /// Validate that a chunk mesh is fully traversable after tessellation.

@@ -78,14 +78,23 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
     // After chunk split/merge, the same face can appear in multiple chunks.
     let mut processed_faces: HashSet<Vec<u32>> = HashSet::new();
 
+    // Diagnostic counters for face loss tracking
+    let mut faces_total_input = 0usize;
+    let mut faces_skipped_invalid = 0usize;
+    let mut faces_skipped_unmapped = 0usize;
+    let mut faces_skipped_dedup = 0usize;
+    let mut faces_skipped_nonmanifold = 0usize;
+
     for chunk in chunked_mesh.chunks.values() {
         for face in chunk.mesh.faces() {
+            faces_total_input += 1;
+
             // Get vertices in this face (in chunk-local IDs)
             let local_verts = chunk.mesh.get_face_vertices(face.id);
 
             // Skip collapsed/invalid faces (these have < 3 vertices after collapse operations)
             if local_verts.len() < 3 {
-                // This is expected for faces that were removed by edge collapse
+                faces_skipped_invalid += 1;
                 continue;
             }
 
@@ -101,6 +110,7 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                 .collect();
 
             if unified_verts.len() != local_verts.len() {
+                faces_skipped_unmapped += 1;
                 // Log detailed info about which vertices failed to map
                 let mut missing_info = Vec::new();
                 for &local_id in &local_verts {
@@ -119,9 +129,10 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                     }
                 }
                 warn!(
-                    "merge_chunks: skipping face {:?} - {} vertices mapped, {} expected. \
+                    "merge_chunks: skipping face {:?} in chunk {:?} - {} vertices mapped, {} expected. \
                      Missing: [{}]. This is likely a tessellation bug.",
                     face.id,
+                    chunk.id,
                     unified_verts.len(),
                     local_verts.len(),
                     missing_info.join(", ")
@@ -134,14 +145,36 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
             face_signature.sort();
 
             if processed_faces.contains(&face_signature) {
-                // This face already exists from another chunk - skip it
+                faces_skipped_dedup += 1;
                 continue;
             }
             processed_faces.insert(face_signature);
 
+            // Pre-check: verify no edge of this face already exists in edge_map.
+            // If any does, skip the ENTIRE face to prevent partially-constructed
+            // faces with missing edge_map references (which cause broken topology).
+            let num_verts = unified_verts.len();
+            let mut has_duplicate_edge = false;
+            for i in 0..num_verts {
+                let origin = unified_verts[i];
+                let dest = unified_verts[(i + 1) % num_verts];
+                if edge_map.contains_key(&(origin, dest)) {
+                    has_duplicate_edge = true;
+                    break;
+                }
+            }
+            if has_duplicate_edge {
+                faces_skipped_nonmanifold += 1;
+                warn!(
+                    "merge_chunks: skipping face with non-manifold edge (vertices: {:?}). \
+                     This indicates tessellation created duplicate directed edges.",
+                    unified_verts.iter().map(|v| v.0).collect::<Vec<_>>()
+                );
+                continue;
+            }
+
             let new_face_id = FaceId(faces.len() as u32);
             let base_he_idx = half_edges.len() as u32;
-            let num_verts = unified_verts.len();
 
             for i in 0..num_verts {
                 let he_id = HalfEdgeId(base_he_idx + i as u32);
@@ -169,15 +202,6 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                     half_edges[he_id.0 as usize].twin = Some(twin_id);
                     half_edges[twin_id.0 as usize].twin = Some(he_id);
                 }
-                // Check for duplicate edge before inserting — skip to prevent non-manifold geometry
-                if let Some(&existing_he) = edge_map.get(&(origin, dest)) {
-                    warn!(
-                        "merge_chunks: DUPLICATE EDGE detected! edge ({:?} -> {:?}) already has HE {:?}, \
-                         skipping HE {:?}. This indicates non-manifold geometry from tessellation.",
-                        origin, dest, existing_he, he_id
-                    );
-                    continue;
-                }
                 edge_map.insert((origin, dest), he_id);
             }
 
@@ -187,6 +211,24 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                 normal: face.normal,
             });
         }
+    }
+
+    // Log face loss summary for debugging mesh tearing
+    let faces_merged = faces.len();
+    let faces_lost = faces_total_input.saturating_sub(faces_merged + faces_skipped_dedup);
+    if faces_skipped_unmapped > 0 || faces_skipped_invalid > 0 || faces_skipped_nonmanifold > 0 {
+        warn!(
+            "merge_chunks: FACE LOSS REPORT - input={}, merged={}, \
+             skipped_unmapped={}, skipped_dedup={}, skipped_invalid={}, \
+             skipped_nonmanifold={}, net_lost={}",
+            faces_total_input,
+            faces_merged,
+            faces_skipped_unmapped,
+            faces_skipped_dedup,
+            faces_skipped_invalid,
+            faces_skipped_nonmanifold,
+            faces_lost
+        );
     }
 
     let mesh = HalfEdgeMesh::from_raw(vertices, half_edges, faces, edge_map);
@@ -304,9 +346,28 @@ pub fn merge_two_chunks(
             }
             processed_faces.insert(face_signature);
 
+            // Pre-check: verify no edge of this face already exists in edge_map.
+            // Skip the ENTIRE face to prevent partially-constructed faces.
+            let num_verts = new_verts.len();
+            let mut has_duplicate_edge = false;
+            for i in 0..num_verts {
+                let origin = new_verts[i];
+                let dest = new_verts[(i + 1) % num_verts];
+                if edge_map.contains_key(&(origin, dest)) {
+                    has_duplicate_edge = true;
+                    break;
+                }
+            }
+            if has_duplicate_edge {
+                warn!(
+                    "merge_two_chunks: skipping face with non-manifold edge (vertices: {:?})",
+                    new_verts.iter().map(|v| v.0).collect::<Vec<_>>()
+                );
+                continue;
+            }
+
             let new_face_id = FaceId(faces.len() as u32);
             let base_he_idx = half_edges.len() as u32;
-            let num_verts = new_verts.len();
 
             for i in 0..num_verts {
                 let he_id = HalfEdgeId(base_he_idx + i as u32);
@@ -331,10 +392,6 @@ pub fn merge_two_chunks(
                 if let Some(&twin_id) = edge_map.get(&(dest, origin)) {
                     half_edges[he_id.0 as usize].twin = Some(twin_id);
                     half_edges[twin_id.0 as usize].twin = Some(he_id);
-                }
-                // Skip duplicate edges to prevent non-manifold geometry
-                if edge_map.contains_key(&(origin, dest)) {
-                    continue;
                 }
                 edge_map.insert((origin, dest), he_id);
             }
