@@ -1,10 +1,26 @@
 //! Modification methods for HalfEdgeMesh.
 
 use bevy::prelude::*;
+use std::collections::HashMap;
 use tracing::trace;
 
 use super::types::{Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
 use super::HalfEdgeMesh;
+
+/// Result of mesh compaction - maps old IDs to new IDs.
+///
+/// After edge collapse, dead elements (orphaned half-edges, removed faces,
+/// disconnected vertices) remain in the arrays. Compaction removes them and
+/// remaps all IDs to be contiguous.
+///
+/// Modeled after SculptGL's `applyDeletion()` which uses swap-and-pop to
+/// remove dead triangles/vertices after decimation.
+#[derive(Debug)]
+pub struct CompactionMap {
+    pub vertex_map: HashMap<VertexId, VertexId>,
+    pub half_edge_map: HashMap<HalfEdgeId, HalfEdgeId>,
+    pub face_map: HashMap<FaceId, FaceId>,
+}
 
 impl HalfEdgeMesh {
     /// Set the position of a vertex
@@ -606,7 +622,7 @@ impl HalfEdgeMesh {
             }
         }
 
-        // Update edge map for redirected edges
+        // Update edge map for redirected edges (from == v1 entries)
         let keys_to_update: Vec<_> = self
             .edge_map
             .iter()
@@ -618,6 +634,63 @@ impl HalfEdgeMesh {
             // Only keep non-orphaned edges in the map
             if self.half_edges[he_id.0 as usize].face.is_some() {
                 self.edge_map.insert((v0_id, to), he_id);
+            }
+        }
+
+        // Also update edge_map entries where destination was v1 (now v0).
+        // Without this, stale (X, v1) entries remain and can cause issues
+        // in subsequent operations (flips, collapses).
+        let dest_keys_to_update: Vec<_> = self
+            .edge_map
+            .iter()
+            .filter(|((_, to), _)| *to == v1_id)
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        for ((from, _to), he_id) in dest_keys_to_update {
+            self.edge_map.remove(&(from, v1_id));
+            if self.half_edges[he_id.0 as usize].face.is_some() {
+                self.edge_map.insert((from, v0_id), he_id);
+            }
+        }
+
+        // Detect and clean up degenerate half-edges created by the redirect.
+        // When non-manifold duplicate edges exist (from merge), redirecting v1→v0
+        // can create half-edges where origin == next.origin (degenerate).
+        // Their entire face must be orphaned.
+        let mut degenerate_faces: Vec<FaceId> = Vec::new();
+        for he in self.half_edges.iter() {
+            if he.face.is_some() && he.origin == v0_id {
+                let dest = self.half_edges[he.next.0 as usize].origin;
+                if dest == v0_id {
+                    if let Some(fid) = he.face {
+                        if !degenerate_faces.contains(&fid) {
+                            degenerate_faces.push(fid);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !degenerate_faces.is_empty() {
+            trace!(
+                "collapse_edge_topology: cleaning up {} degenerate faces",
+                degenerate_faces.len()
+            );
+            for &fid in &degenerate_faces {
+                for he_id in self.get_face_half_edges(fid) {
+                    // Disconnect twin
+                    if let Some(twin) = self.half_edges[he_id.0 as usize].twin {
+                        self.half_edges[twin.0 as usize].twin = None;
+                    }
+                    // Remove from edge map
+                    if let Some(dest) = self.get_half_edge_dest(he_id) {
+                        let origin = self.half_edges[he_id.0 as usize].origin;
+                        self.edge_map.remove(&(origin, dest));
+                    }
+                    self.half_edges[he_id.0 as usize].face = None;
+                    self.half_edges[he_id.0 as usize].twin = None;
+                }
+                removed_faces.push(fid);
             }
         }
 
@@ -641,11 +714,302 @@ impl HalfEdgeMesh {
         self.vertices[v1_id.0 as usize].outgoing_half_edge = None;
 
         trace!(
-            "collapse_edge_topology: END removed {} faces, {} orphaned half-edges",
+            "collapse_edge_topology: END removed {} faces ({} degenerate), {} orphaned half-edges",
             removed_faces.len(),
+            degenerate_faces.len(),
             orphaned_half_edges.len()
         );
         Some(removed_faces)
+    }
+
+    /// Remove dead faces, half-edges, and vertices from arrays and remap all IDs.
+    ///
+    /// After edge collapse, elements are orphaned but not removed from arrays.
+    /// This method compacts the arrays by removing dead elements and updating
+    /// all cross-references, equivalent to SculptGL's `applyDeletion()`.
+    ///
+    /// Uses **reachability-based liveness**: walks from faces → half-edges → vertices.
+    /// This guarantees consistency: no live half-edge can reference a dead vertex.
+    ///
+    /// Also detects and excludes degenerate faces (faces with duplicate vertices,
+    /// which arise from non-manifold geometry after collapse).
+    ///
+    /// # Returns
+    /// A `CompactionMap` mapping old IDs to new IDs for all three element types.
+    pub fn compact(&mut self) -> CompactionMap {
+        use std::collections::HashSet;
+
+        // Phase 1a: Identify live faces
+        // A face is live if its half_edge points to a half-edge that belongs to it
+        let mut live_face_ids: HashSet<FaceId> = HashSet::new();
+        for (i, f) in self.faces.iter().enumerate() {
+            let face_id = FaceId(i as u32);
+            let is_live = self
+                .half_edges
+                .get(f.half_edge.0 as usize)
+                .map_or(false, |he| he.face == Some(face_id));
+            if is_live {
+                live_face_ids.insert(face_id);
+            }
+        }
+
+        // Phase 1b: Walk live faces to collect live half-edges and detect degenerate faces.
+        // A degenerate face has duplicate vertices (e.g., from non-manifold collapse).
+        let mut live_he_ids: HashSet<HalfEdgeId> = HashSet::new();
+        let mut degenerate_face_ids: HashSet<FaceId> = HashSet::new();
+
+        for &face_id in &live_face_ids {
+            let face = &self.faces[face_id.0 as usize];
+            let start = face.half_edge;
+            let mut current = start;
+            let mut face_vertices: Vec<VertexId> = Vec::with_capacity(3);
+            let mut face_hes: Vec<HalfEdgeId> = Vec::with_capacity(3);
+            let mut is_degenerate = false;
+
+            loop {
+                let he = &self.half_edges[current.0 as usize];
+                // Check for duplicate vertex (degenerate face)
+                if face_vertices.contains(&he.origin) {
+                    is_degenerate = true;
+                    break;
+                }
+                face_vertices.push(he.origin);
+                face_hes.push(current);
+                current = he.next;
+                if current == start || face_hes.len() > 6 {
+                    break;
+                }
+            }
+
+            if is_degenerate {
+                degenerate_face_ids.insert(face_id);
+            } else {
+                for he_id in face_hes {
+                    live_he_ids.insert(he_id);
+                }
+            }
+        }
+
+        // Remove degenerate faces from live set
+        for fid in &degenerate_face_ids {
+            live_face_ids.remove(fid);
+        }
+
+        if !degenerate_face_ids.is_empty() {
+            trace!(
+                "compact: found {} degenerate faces to remove",
+                degenerate_face_ids.len()
+            );
+        }
+
+        // Phase 1c: From live half-edges, collect live vertices
+        let mut live_vertex_ids: HashSet<VertexId> = HashSet::new();
+        for &he_id in &live_he_ids {
+            let he = &self.half_edges[he_id.0 as usize];
+            live_vertex_ids.insert(he.origin);
+        }
+
+        // Phase 2: Build remapping tables
+        let mut vertex_map: HashMap<VertexId, VertexId> = HashMap::new();
+        let mut half_edge_map: HashMap<HalfEdgeId, HalfEdgeId> = HashMap::new();
+        let mut face_map: HashMap<FaceId, FaceId> = HashMap::new();
+
+        let mut new_vertex_idx = 0u32;
+        for i in 0..self.vertices.len() {
+            let vid = VertexId(i as u32);
+            if live_vertex_ids.contains(&vid) {
+                vertex_map.insert(vid, VertexId(new_vertex_idx));
+                new_vertex_idx += 1;
+            }
+        }
+
+        let mut new_he_idx = 0u32;
+        for i in 0..self.half_edges.len() {
+            let he_id = HalfEdgeId(i as u32);
+            if live_he_ids.contains(&he_id) {
+                half_edge_map.insert(he_id, HalfEdgeId(new_he_idx));
+                new_he_idx += 1;
+            }
+        }
+
+        let mut new_face_idx = 0u32;
+        for i in 0..self.faces.len() {
+            let fid = FaceId(i as u32);
+            if live_face_ids.contains(&fid) {
+                face_map.insert(fid, FaceId(new_face_idx));
+                new_face_idx += 1;
+            }
+        }
+
+        let removed_verts = self.vertices.len() - vertex_map.len();
+        let removed_hes = self.half_edges.len() - half_edge_map.len();
+        let removed_faces = self.faces.len() - face_map.len();
+
+        // Early exit if nothing to compact
+        if removed_verts == 0 && removed_hes == 0 && removed_faces == 0 {
+            return CompactionMap {
+                vertex_map,
+                half_edge_map,
+                face_map,
+            };
+        }
+
+        trace!(
+            "compact: removing {} vertices, {} half-edges, {} faces ({} degenerate)",
+            removed_verts,
+            removed_hes,
+            removed_faces,
+            degenerate_face_ids.len()
+        );
+
+        // Phase 3: Build new arrays with remapped IDs (defensive .get() to avoid panics)
+        let mut new_vertices: Vec<Vertex> = Vec::with_capacity(vertex_map.len());
+        for (i, v) in self.vertices.iter().enumerate() {
+            let vid = VertexId(i as u32);
+            if let Some(&new_id) = vertex_map.get(&vid) {
+                new_vertices.push(Vertex {
+                    id: new_id,
+                    position: v.position,
+                    normal: v.normal,
+                    uv: v.uv,
+                    outgoing_half_edge: v
+                        .outgoing_half_edge
+                        .and_then(|he| half_edge_map.get(&he).copied()),
+                    source_index: v.source_index,
+                });
+            }
+        }
+
+        let mut new_half_edges: Vec<HalfEdge> = Vec::with_capacity(half_edge_map.len());
+        for (i, he) in self.half_edges.iter().enumerate() {
+            let he_id = HalfEdgeId(i as u32);
+            if let Some(&new_id) = half_edge_map.get(&he_id) {
+                // Defensive: skip if origin vertex isn't live (shouldn't happen with
+                // reachability, but prevents panic on any remaining edge case)
+                let Some(&new_origin) = vertex_map.get(&he.origin) else {
+                    trace!(
+                        "compact: WARN half-edge {:?} references dead vertex {:?}, skipping",
+                        he_id, he.origin
+                    );
+                    continue;
+                };
+                let Some(&new_next) = half_edge_map.get(&he.next) else {
+                    trace!(
+                        "compact: WARN half-edge {:?} references dead next {:?}, skipping",
+                        he_id, he.next
+                    );
+                    continue;
+                };
+                let Some(&new_prev) = half_edge_map.get(&he.prev) else {
+                    trace!(
+                        "compact: WARN half-edge {:?} references dead prev {:?}, skipping",
+                        he_id, he.prev
+                    );
+                    continue;
+                };
+
+                new_half_edges.push(HalfEdge {
+                    id: new_id,
+                    origin: new_origin,
+                    twin: he.twin.and_then(|t| half_edge_map.get(&t).copied()),
+                    next: new_next,
+                    prev: new_prev,
+                    face: he.face.and_then(|f| face_map.get(&f).copied()),
+                });
+            }
+        }
+
+        let mut new_faces: Vec<Face> = Vec::with_capacity(face_map.len());
+        for (i, f) in self.faces.iter().enumerate() {
+            let fid = FaceId(i as u32);
+            if let Some(&new_id) = face_map.get(&fid) {
+                let Some(&new_he) = half_edge_map.get(&f.half_edge) else {
+                    trace!(
+                        "compact: WARN face {:?} references dead half-edge {:?}, skipping",
+                        fid, f.half_edge
+                    );
+                    continue;
+                };
+                new_faces.push(Face {
+                    id: new_id,
+                    half_edge: new_he,
+                    normal: f.normal,
+                });
+            }
+        }
+
+        // Phase 3: Rebuild edge_map with remapped IDs
+        let mut new_edge_map: HashMap<(VertexId, VertexId), HalfEdgeId> = HashMap::new();
+        for (&(from, to), &he_id) in &self.edge_map {
+            if let (Some(&new_from), Some(&new_to), Some(&new_he)) = (
+                vertex_map.get(&from),
+                vertex_map.get(&to),
+                half_edge_map.get(&he_id),
+            ) {
+                new_edge_map.insert((new_from, new_to), new_he);
+            }
+        }
+
+        // Phase 4: Replace arrays
+        self.vertices = new_vertices;
+        self.half_edges = new_half_edges;
+        self.faces = new_faces;
+        self.edge_map = new_edge_map;
+
+        // Phase 5: Fix outgoing_half_edge for all vertices.
+        // With reachability-based liveness, a vertex may be live (referenced by live
+        // half-edges) but have outgoing_half_edge = None or pointing to a now-dead
+        // half-edge. Scan all half-edges to assign valid outgoing edges.
+        for he in self.half_edges.iter() {
+            let vid = he.origin;
+            let v = &mut self.vertices[vid.0 as usize];
+            if v.outgoing_half_edge.is_none() {
+                v.outgoing_half_edge = Some(he.id);
+            }
+        }
+
+        trace!(
+            "compact: result {} vertices, {} half-edges, {} faces",
+            self.vertices.len(),
+            self.half_edges.len(),
+            self.faces.len()
+        );
+
+        CompactionMap {
+            vertex_map,
+            half_edge_map,
+            face_map,
+        }
+    }
+
+    /// Rebuild all twin pointers from the authoritative `edge_map`.
+    ///
+    /// After batch operations (multiple sequential splits), twin pointers may be
+    /// inconsistent because each split rewires next/prev/twin/face on surrounding
+    /// half-edges, and a later split may reference a half-edge whose pointers were
+    /// already changed by an earlier split.
+    ///
+    /// The `edge_map` is always correctly maintained by `split_edge_topology()`
+    /// (each split updates it with the new directed edges). This method rebuilds
+    /// twin pointers from scratch using the edge_map as the source of truth.
+    ///
+    /// For each directed edge (v0→v1) with half-edge H, if the reverse edge
+    /// (v1→v0) also exists with half-edge T, then H.twin = T and T.twin = H.
+    pub fn rebuild_twins_from_edge_map(&mut self) {
+        // Clear all twin pointers on live half-edges
+        for he in self.half_edges.iter_mut() {
+            if he.face.is_some() {
+                he.twin = None;
+            }
+        }
+
+        // Rebuild from edge_map: for each (v0,v1)->he, look up (v1,v0)
+        let pairs: Vec<_> = self.edge_map.iter().map(|(&k, &v)| (k, v)).collect();
+        for ((v0, v1), he_id) in &pairs {
+            if let Some(&twin_id) = self.edge_map.get(&(*v1, *v0)) {
+                self.half_edges[he_id.0 as usize].twin = Some(twin_id);
+            }
+        }
     }
 }
 
@@ -801,7 +1165,7 @@ mod tests {
         let result = mesh.split_edge_topology(HalfEdgeId(0));
         assert!(result.is_some());
 
-        let (new_vertex, new_faces) = result.unwrap();
+        let (_new_vertex, new_faces) = result.unwrap();
 
         // Should have created 1 new vertex (midpoint)
         assert_eq!(mesh.vertex_count(), 5);
@@ -902,5 +1266,75 @@ mod tests {
 
         // Connectivity should still be valid
         assert!(mesh.validate_connectivity().is_ok());
+    }
+
+    #[test]
+    fn test_compact_no_dead_elements() {
+        let mut mesh = create_bowtie_mesh();
+        let original_verts = mesh.vertex_count();
+        let original_faces = mesh.face_count();
+        let original_hes = mesh.half_edges().len();
+
+        let compaction = mesh.compact();
+
+        // No dead elements, so nothing should change
+        assert_eq!(mesh.vertex_count(), original_verts);
+        assert_eq!(mesh.face_count(), original_faces);
+        assert_eq!(mesh.half_edges().len(), original_hes);
+
+        // All IDs should map to themselves
+        assert_eq!(compaction.vertex_map.len(), original_verts);
+        assert_eq!(compaction.face_map.len(), original_faces);
+        assert_eq!(compaction.half_edge_map.len(), original_hes);
+    }
+
+    #[test]
+    fn test_compact_after_collapse() {
+        let mut mesh = create_bowtie_mesh();
+        assert_eq!(mesh.face_count(), 2);
+        assert_eq!(mesh.vertex_count(), 4);
+
+        // First split to create a mesh with 4 faces, then collapse
+        mesh.split_edge_topology(HalfEdgeId(0));
+        assert_eq!(mesh.face_count(), 4);
+        assert_eq!(mesh.vertex_count(), 5);
+
+        // Before compact: collapse will leave dead elements
+        let pre_compact_faces = mesh.face_count();
+        let pre_compact_verts = mesh.vertex_count();
+
+        // Collapse an edge - this orphans faces but doesn't remove them
+        let result = mesh.collapse_edge_topology(HalfEdgeId(0));
+        assert!(result.is_some());
+
+        // Face count is unchanged (dead faces remain in array)
+        assert_eq!(mesh.face_count(), pre_compact_faces);
+
+        // Compact should remove dead elements
+        let compaction = mesh.compact();
+
+        // After compact, dead elements should be gone
+        assert!(mesh.face_count() < pre_compact_faces);
+        assert!(mesh.vertex_count() < pre_compact_verts);
+
+        // All remaining faces should be valid
+        for i in 0..mesh.face_count() {
+            assert!(
+                mesh.is_face_valid(FaceId(i as u32)),
+                "Face {} should be valid after compact",
+                i
+            );
+            let verts = mesh.get_face_vertices(FaceId(i as u32));
+            assert_eq!(
+                verts.len(),
+                3,
+                "Face {} should have 3 vertices after compact, got {}",
+                i,
+                verts.len()
+            );
+        }
+
+        // Vertex map should only contain live vertices
+        assert_eq!(compaction.vertex_map.len(), mesh.vertex_count());
     }
 }

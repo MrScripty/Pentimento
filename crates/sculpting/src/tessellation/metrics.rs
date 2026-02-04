@@ -12,22 +12,32 @@ use painting::half_edge::{FaceId, HalfEdgeMesh, VertexId};
 use tracing::debug;
 
 /// Screen-space configuration for edge evaluation.
+///
+/// Vertex positions in the HalfEdgeMesh are in **local/object space**, so the
+/// `model_matrix` (local-to-world transform) must be provided to correctly
+/// compute screen-space edge lengths via the model-view-projection matrix.
 #[derive(Debug, Clone)]
 pub struct ScreenSpaceConfig {
-    /// View-projection matrix (combined view and projection)
+    /// View-projection matrix (clip-from-world: projection × view)
     pub view_projection: Mat4,
+    /// Model matrix (local-to-world: the mesh entity's GlobalTransform)
+    pub model_matrix: Mat4,
     /// Viewport width in pixels
     pub viewport_width: f32,
     /// Viewport height in pixels
     pub viewport_height: f32,
+    /// Precomputed model-view-projection matrix (clip-from-local)
+    mvp: Mat4,
 }
 
 impl Default for ScreenSpaceConfig {
     fn default() -> Self {
         Self {
             view_projection: Mat4::IDENTITY,
+            model_matrix: Mat4::IDENTITY,
             viewport_width: 1920.0,
             viewport_height: 1080.0,
+            mvp: Mat4::IDENTITY,
         }
     }
 }
@@ -37,14 +47,40 @@ impl ScreenSpaceConfig {
     pub fn new(view_projection: Mat4, width: f32, height: f32) -> Self {
         Self {
             view_projection,
+            model_matrix: Mat4::IDENTITY,
             viewport_width: width,
             viewport_height: height,
+            mvp: view_projection,
         }
     }
 
-    /// Project a world-space point to normalized device coordinates.
-    pub fn project_to_ndc(&self, world_pos: Vec3) -> Option<Vec3> {
-        let clip = self.view_projection * Vec4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
+    /// Create a screen-space config with a model matrix for local-to-world transform.
+    ///
+    /// This is the correct constructor when vertex positions are in local/object space
+    /// (which they are in HalfEdgeMesh). The model matrix transforms them to world space
+    /// before the view-projection maps to clip space.
+    pub fn with_model_matrix(
+        view_projection: Mat4,
+        model_matrix: Mat4,
+        width: f32,
+        height: f32,
+    ) -> Self {
+        let mvp = view_projection * model_matrix;
+        Self {
+            view_projection,
+            model_matrix,
+            viewport_width: width,
+            viewport_height: height,
+            mvp,
+        }
+    }
+
+    /// Project a local-space point to normalized device coordinates.
+    ///
+    /// Uses the precomputed model-view-projection matrix to correctly transform
+    /// from local/object space through world space to clip space.
+    pub fn project_to_ndc(&self, local_pos: Vec3) -> Option<Vec3> {
+        let clip = self.mvp * Vec4::new(local_pos.x, local_pos.y, local_pos.z, 1.0);
 
         // Check if behind camera
         if clip.w <= 0.0 {
@@ -56,9 +92,9 @@ impl ScreenSpaceConfig {
         Some(ndc)
     }
 
-    /// Project a world-space point to screen coordinates.
-    pub fn project_to_screen(&self, world_pos: Vec3) -> Option<(f32, f32)> {
-        let ndc = self.project_to_ndc(world_pos)?;
+    /// Project a local-space point to screen coordinates.
+    pub fn project_to_screen(&self, local_pos: Vec3) -> Option<(f32, f32)> {
+        let ndc = self.project_to_ndc(local_pos)?;
 
         // Convert NDC (-1 to 1) to screen coordinates
         let screen_x = (ndc.x + 1.0) * 0.5 * self.viewport_width;

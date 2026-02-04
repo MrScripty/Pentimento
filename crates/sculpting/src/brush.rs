@@ -78,7 +78,7 @@ impl Default for BrushPreset {
         Self {
             name: "Default".to_string(),
             deformation_type: DeformationType::Push,
-            radius: 0.5,
+            radius: 0.25,
             strength: 0.5,
             falloff: FalloffCurve::Smooth,
             pressure_affects_radius: false,
@@ -486,7 +486,7 @@ mod tests {
     fn test_brush_preset_defaults() {
         let preset = BrushPreset::default();
         assert_eq!(preset.deformation_type, DeformationType::Push);
-        assert!((preset.radius - 0.5).abs() < 0.001);
+        assert!((preset.radius - 0.25).abs() < 0.001);
         assert!((preset.strength - 0.5).abs() < 0.001);
     }
 
@@ -528,7 +528,7 @@ mod tests {
             timestamp_ms: 100,
         };
         let dabs = engine.update_stroke(input2);
-        // With spacing 0.25 and radius 0.5, spacing_distance = 0.125
+        // With spacing 0.25 and radius 0.25, spacing_distance = 0.0625
         // Distance moved = 1.0, so we should get multiple dabs
         assert!(!dabs.is_empty());
 

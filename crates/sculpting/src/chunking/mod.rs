@@ -175,6 +175,10 @@ pub struct ChunkedMesh {
     pub chunks: HashMap<ChunkId, MeshChunk>,
     /// Next available chunk ID.
     next_chunk_id: u32,
+    /// Next available "original" vertex ID for tessellation-created vertices.
+    /// This ensures globally unique IDs when registering new vertices from edge splits.
+    /// Initialized to max_original_vertex_id + 1 during partitioning.
+    pub next_original_vertex_id: u32,
     /// Overall bounding box of the entire mesh.
     pub bounds: Aabb,
     /// Configuration for chunk sizing.
@@ -197,6 +201,7 @@ impl ChunkedMesh {
         Self {
             chunks: HashMap::new(),
             next_chunk_id: 0,
+            next_original_vertex_id: 0, // Will be set during partitioning
             bounds: Aabb::empty(),
             config,
             spatial_grid: HashMap::new(),
@@ -236,6 +241,16 @@ impl ChunkedMesh {
         id
     }
 
+    /// Allocate a globally unique "original" vertex ID for tessellation-created vertices.
+    ///
+    /// This ensures that vertices created by edge splits in different chunks
+    /// don't collide when chunks are later merged.
+    pub fn allocate_original_vertex_id(&mut self) -> VertexId {
+        let id = VertexId(self.next_original_vertex_id);
+        self.next_original_vertex_id += 1;
+        id
+    }
+
     /// Add a chunk to the mesh.
     pub fn add_chunk(&mut self, mut chunk: MeshChunk) -> ChunkId {
         let id = self.allocate_chunk_id();
@@ -264,16 +279,31 @@ impl ChunkedMesh {
 
     /// Find all chunks that intersect a sphere (for brush queries).
     pub fn chunks_intersecting_sphere(&self, center: Vec3, radius: f32) -> Vec<ChunkId> {
+        // Early exit if no chunks or invalid bounds
+        if self.chunks.is_empty() || !self.bounds_valid() {
+            return Vec::new();
+        }
+
         let mut result = HashSet::new();
 
         // Get grid cells that the sphere overlaps
         let min_cell = self.world_to_grid(center - Vec3::splat(radius));
         let max_cell = self.world_to_grid(center + Vec3::splat(radius));
 
-        for x in min_cell.x..=max_cell.x {
-            for y in min_cell.y..=max_cell.y {
-                for z in min_cell.z..=max_cell.z {
-                    let cell = UVec3::new(x, y, z);
+        // Safety check: limit loop iterations to prevent OOM from pathological cases
+        const MAX_CELLS_PER_AXIS: u32 = 100;
+        let x_range = (max_cell.x.saturating_sub(min_cell.x)).min(MAX_CELLS_PER_AXIS);
+        let y_range = (max_cell.y.saturating_sub(min_cell.y)).min(MAX_CELLS_PER_AXIS);
+        let z_range = (max_cell.z.saturating_sub(min_cell.z)).min(MAX_CELLS_PER_AXIS);
+
+        for dx in 0..=x_range {
+            for dy in 0..=y_range {
+                for dz in 0..=z_range {
+                    let cell = UVec3::new(
+                        min_cell.x.saturating_add(dx),
+                        min_cell.y.saturating_add(dy),
+                        min_cell.z.saturating_add(dz),
+                    );
                     if let Some(chunks) = self.spatial_grid.get(&cell) {
                         for &chunk_id in chunks {
                             if let Some(chunk) = self.chunks.get(&chunk_id) {
@@ -323,26 +353,64 @@ impl ChunkedMesh {
             .collect()
     }
 
+    /// Check if bounds are valid (not empty or inverted).
+    fn bounds_valid(&self) -> bool {
+        self.bounds.min.x <= self.bounds.max.x
+            && self.bounds.min.y <= self.bounds.max.y
+            && self.bounds.min.z <= self.bounds.max.z
+            && self.bounds.min.x.is_finite()
+            && self.bounds.max.x.is_finite()
+            && self.bounds.min.y.is_finite()
+            && self.bounds.max.y.is_finite()
+            && self.bounds.min.z.is_finite()
+            && self.bounds.max.z.is_finite()
+            && self.grid_cell_size > 0.0
+            && self.grid_cell_size.is_finite()
+    }
+
     /// Convert world position to grid cell coordinates.
     fn world_to_grid(&self, pos: Vec3) -> UVec3 {
+        // Guard against invalid bounds - return zero to prevent pathological loops
+        if !self.bounds_valid() {
+            return UVec3::ZERO;
+        }
+
         let offset = pos - self.bounds.min;
         let cell = offset / self.grid_cell_size;
+
+        // Clamp to reasonable maximum (prevents billion-iteration loops)
+        const MAX_GRID_CELLS: u32 = 1000;
         UVec3::new(
-            cell.x.max(0.0) as u32,
-            cell.y.max(0.0) as u32,
-            cell.z.max(0.0) as u32,
+            (cell.x.max(0.0).min(MAX_GRID_CELLS as f32)) as u32,
+            (cell.y.max(0.0).min(MAX_GRID_CELLS as f32)) as u32,
+            (cell.z.max(0.0).min(MAX_GRID_CELLS as f32)) as u32,
         )
     }
 
     /// Add a chunk to the spatial grid.
     fn add_to_spatial_grid(&mut self, id: ChunkId, bounds: &Aabb) {
+        // Skip if bounds are invalid
+        if !self.bounds_valid() {
+            return;
+        }
+
         let min_cell = self.world_to_grid(bounds.min);
         let max_cell = self.world_to_grid(bounds.max);
 
-        for x in min_cell.x..=max_cell.x {
-            for y in min_cell.y..=max_cell.y {
-                for z in min_cell.z..=max_cell.z {
-                    let cell = UVec3::new(x, y, z);
+        // Safety limit on iterations
+        const MAX_CELLS_PER_AXIS: u32 = 100;
+        let x_range = (max_cell.x.saturating_sub(min_cell.x)).min(MAX_CELLS_PER_AXIS);
+        let y_range = (max_cell.y.saturating_sub(min_cell.y)).min(MAX_CELLS_PER_AXIS);
+        let z_range = (max_cell.z.saturating_sub(min_cell.z)).min(MAX_CELLS_PER_AXIS);
+
+        for dx in 0..=x_range {
+            for dy in 0..=y_range {
+                for dz in 0..=z_range {
+                    let cell = UVec3::new(
+                        min_cell.x.saturating_add(dx),
+                        min_cell.y.saturating_add(dy),
+                        min_cell.z.saturating_add(dz),
+                    );
                     self.spatial_grid.entry(cell).or_default().push(id);
                 }
             }
@@ -351,13 +419,28 @@ impl ChunkedMesh {
 
     /// Remove a chunk from the spatial grid.
     fn remove_from_spatial_grid(&mut self, id: ChunkId, bounds: &Aabb) {
+        // Skip if bounds are invalid
+        if !self.bounds_valid() {
+            return;
+        }
+
         let min_cell = self.world_to_grid(bounds.min);
         let max_cell = self.world_to_grid(bounds.max);
 
-        for x in min_cell.x..=max_cell.x {
-            for y in min_cell.y..=max_cell.y {
-                for z in min_cell.z..=max_cell.z {
-                    let cell = UVec3::new(x, y, z);
+        // Safety limit on iterations
+        const MAX_CELLS_PER_AXIS: u32 = 100;
+        let x_range = (max_cell.x.saturating_sub(min_cell.x)).min(MAX_CELLS_PER_AXIS);
+        let y_range = (max_cell.y.saturating_sub(min_cell.y)).min(MAX_CELLS_PER_AXIS);
+        let z_range = (max_cell.z.saturating_sub(min_cell.z)).min(MAX_CELLS_PER_AXIS);
+
+        for dx in 0..=x_range {
+            for dy in 0..=y_range {
+                for dz in 0..=z_range {
+                    let cell = UVec3::new(
+                        min_cell.x.saturating_add(dx),
+                        min_cell.y.saturating_add(dy),
+                        min_cell.z.saturating_add(dz),
+                    );
                     if let Some(chunks) = self.spatial_grid.get_mut(&cell) {
                         chunks.retain(|&c| c != id);
                     }

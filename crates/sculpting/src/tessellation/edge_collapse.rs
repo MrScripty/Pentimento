@@ -355,16 +355,75 @@ pub enum CollapseOrFlipResult {
 
 /// Calculate the optimal position for the vertex after collapse.
 ///
-/// Uses midpoint by default, but could be extended to use
-/// quadric error metrics (QEM) for better quality.
+/// Uses tangent-plane projected neighbor mean, adapted from SculptGL's
+/// Decimation.js (lines 326-344). This preserves surface curvature better
+/// than a simple midpoint by blending toward the average of 1-ring neighbors
+/// and projecting the offset onto the tangent plane.
+///
+/// Algorithm:
+/// 1. Start from midpoint of v0 and v1
+/// 2. Compute average normal of endpoints
+/// 3. Compute mean position of combined 1-ring neighbors (excluding v0, v1)
+/// 4. Blend midpoint toward neighbor mean (30% blend factor)
+/// 5. Project offset onto tangent plane defined by average normal
 pub fn calculate_collapse_position(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Option<Vec3> {
     let he = mesh.half_edge(edge_id)?;
     let v0 = mesh.vertex(he.origin)?;
+    let v0_id = he.origin;
 
     let next_he = mesh.half_edge(he.next)?;
     let v1 = mesh.vertex(next_he.origin)?;
+    let v1_id = next_he.origin;
 
-    Some((v0.position + v1.position) * 0.5)
+    let midpoint = (v0.position + v1.position) * 0.5;
+
+    // Compute average normal of endpoints
+    let avg_normal = (v0.normal + v1.normal).normalize_or_zero();
+
+    // If we can't get a valid normal, fall back to midpoint
+    if avg_normal.length_squared() < 1e-6 {
+        return Some(midpoint);
+    }
+
+    // Gather combined 1-ring neighbors (excluding v0 and v1)
+    let v0_neighbors = mesh.get_adjacent_vertices(v0_id);
+    let v1_neighbors = mesh.get_adjacent_vertices(v1_id);
+
+    let mut neighbor_sum = Vec3::ZERO;
+    let mut neighbor_count = 0u32;
+    let mut seen = std::collections::HashSet::new();
+
+    for &neighbor_id in v0_neighbors.iter().chain(v1_neighbors.iter()) {
+        if neighbor_id == v0_id || neighbor_id == v1_id {
+            continue;
+        }
+        if !seen.insert(neighbor_id) {
+            continue;
+        }
+        if let Some(neighbor) = mesh.vertex(neighbor_id) {
+            neighbor_sum += neighbor.position;
+            neighbor_count += 1;
+        }
+    }
+
+    // If no valid neighbors, fall back to midpoint
+    if neighbor_count == 0 {
+        return Some(midpoint);
+    }
+
+    let neighbor_mean = neighbor_sum / neighbor_count as f32;
+
+    // Blend midpoint toward neighbor mean (30% blend factor)
+    const BLEND_FACTOR: f32 = 0.3;
+    let blended = midpoint + (neighbor_mean - midpoint) * BLEND_FACTOR;
+
+    // Project offset onto tangent plane: remove the normal component
+    // so the collapsed vertex stays on the surface instead of drifting
+    let offset = blended - midpoint;
+    let normal_component = offset.dot(avg_normal) * avg_normal;
+    let tangent_offset = offset - normal_component;
+
+    Some(midpoint + tangent_offset)
 }
 
 /// Check if collapsing an edge would cause face flipping.

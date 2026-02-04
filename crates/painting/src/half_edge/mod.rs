@@ -11,6 +11,7 @@ mod validation;
 
 use std::collections::HashMap;
 
+pub use modification::CompactionMap;
 pub use types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
 pub use validation::ManifoldError;
 

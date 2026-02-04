@@ -52,15 +52,25 @@ pub fn partition_mesh(mesh: &HalfEdgeMesh, config: &PartitionConfig) -> ChunkedM
         target_faces: config.target_faces,
     });
 
-    // If mesh is small enough, create a single chunk
-    if mesh.face_count() <= config.max_faces {
-        let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
-        chunked_mesh.add_chunk(chunk);
-    } else {
-        // Recursively partition
-        let all_faces: Vec<FaceId> = (0..mesh.face_count() as u32).map(FaceId).collect();
-        recursive_partition(mesh, &all_faces, config, &mut chunked_mesh);
-    }
+    // Initialize next_original_vertex_id to be one past the max original vertex ID.
+    // This ensures tessellation-created vertices get globally unique IDs that
+    // won't collide with original mesh vertices or each other across chunks.
+    chunked_mesh.next_original_vertex_id = mesh.vertex_count() as u32;
+
+    // TEMPORARY: Always create a single chunk to debug tessellation without chunking
+    // TODO: Remove this and restore partitioning once tessellation bugs are fixed
+    let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
+    chunked_mesh.add_chunk(chunk);
+
+    // DISABLED: Partitioning into multiple chunks
+    // if mesh.face_count() <= config.max_faces {
+    //     let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
+    //     chunked_mesh.add_chunk(chunk);
+    // } else {
+    //     // Recursively partition
+    //     let all_faces: Vec<FaceId> = (0..mesh.face_count() as u32).map(FaceId).collect();
+    //     recursive_partition(mesh, &all_faces, config, &mut chunked_mesh);
+    // }
 
     // Build boundary relationships
     boundary::build_boundary_relationships(&mut chunked_mesh);
@@ -219,7 +229,7 @@ fn build_chunk_mesh(
     let mut faces: Vec<Face> = Vec::new();
     let mut edge_map: HashMap<(VertexId, VertexId), HalfEdgeId> = HashMap::new();
 
-    for (face_idx, &original_face_id) in face_ids.iter().enumerate() {
+    for &original_face_id in face_ids.iter() {
         let source_face = match source.face(original_face_id) {
             Some(f) => f,
             None => continue,
@@ -240,7 +250,8 @@ fn build_chunk_mesh(
             continue; // Some vertices not in this chunk
         }
 
-        let new_face_id = FaceId(face_idx as u32);
+        // Use faces.len() to ensure the face ID matches its array index
+        let new_face_id = FaceId(faces.len() as u32);
 
         // Create half-edges for this face
         let base_he_idx = half_edges.len() as u32;
@@ -271,6 +282,14 @@ fn build_chunk_mesh(
             if let Some(&twin_id) = edge_map.get(&(dest, origin)) {
                 half_edges[he_id.0 as usize].twin = Some(twin_id);
                 half_edges[twin_id.0 as usize].twin = Some(he_id);
+            }
+            // Check for duplicate edge before inserting
+            if let Some(&existing_he) = edge_map.get(&(origin, dest)) {
+                tracing::warn!(
+                    "build_chunk_mesh: DUPLICATE EDGE detected! edge ({:?} -> {:?}) already has HE {:?}, \
+                     now creating HE {:?}. Source faces may share the same edge.",
+                    origin, dest, existing_he, he_id
+                );
             }
             edge_map.insert((origin, dest), he_id);
         }

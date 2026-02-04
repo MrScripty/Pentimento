@@ -8,7 +8,8 @@ use super::{boundary, ChunkId, ChunkedMesh};
 use crate::ChunkConfig;
 use glam::Vec3;
 use painting::half_edge::{Face, FaceId, HalfEdge, HalfEdgeId, HalfEdgeMesh, Vertex, VertexId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use tracing::warn;
 
 /// Result of merging chunks back into a unified mesh.
 #[derive(Debug)]
@@ -73,10 +74,20 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
     let mut faces: Vec<Face> = Vec::new();
     let mut edge_map: HashMap<(VertexId, VertexId), HalfEdgeId> = HashMap::new();
 
+    // Track processed faces by their sorted vertex tuple to prevent duplicates.
+    // After chunk split/merge, the same face can appear in multiple chunks.
+    let mut processed_faces: HashSet<Vec<u32>> = HashSet::new();
+
     for chunk in chunked_mesh.chunks.values() {
         for face in chunk.mesh.faces() {
             // Get vertices in this face (in chunk-local IDs)
             let local_verts = chunk.mesh.get_face_vertices(face.id);
+
+            // Skip collapsed/invalid faces (these have < 3 vertices after collapse operations)
+            if local_verts.len() < 3 {
+                // This is expected for faces that were removed by edge collapse
+                continue;
+            }
 
             // Map to unified IDs
             let unified_verts: Vec<VertexId> = local_verts
@@ -90,8 +101,43 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                 .collect();
 
             if unified_verts.len() != local_verts.len() {
-                continue; // Skip malformed faces
+                // Log detailed info about which vertices failed to map
+                let mut missing_info = Vec::new();
+                for &local_id in &local_verts {
+                    if let Some(&original_id) = chunk.local_to_original.get(&local_id) {
+                        if !original_to_unified.contains_key(&original_id) {
+                            missing_info.push(format!(
+                                "local={:?}->original={:?} (no unified mapping)",
+                                local_id, original_id
+                            ));
+                        }
+                    } else {
+                        missing_info.push(format!(
+                            "local={:?} (no local_to_original mapping)",
+                            local_id
+                        ));
+                    }
+                }
+                warn!(
+                    "merge_chunks: skipping face {:?} - {} vertices mapped, {} expected. \
+                     Missing: [{}]. This is likely a tessellation bug.",
+                    face.id,
+                    unified_verts.len(),
+                    local_verts.len(),
+                    missing_info.join(", ")
+                );
+                continue;
             }
+
+            // Create sorted vertex signature to detect duplicate faces
+            let mut face_signature: Vec<u32> = unified_verts.iter().map(|v| v.0).collect();
+            face_signature.sort();
+
+            if processed_faces.contains(&face_signature) {
+                // This face already exists from another chunk - skip it
+                continue;
+            }
+            processed_faces.insert(face_signature);
 
             let new_face_id = FaceId(faces.len() as u32);
             let base_he_idx = half_edges.len() as u32;
@@ -122,6 +168,15 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                 if let Some(&twin_id) = edge_map.get(&(dest, origin)) {
                     half_edges[he_id.0 as usize].twin = Some(twin_id);
                     half_edges[twin_id.0 as usize].twin = Some(he_id);
+                }
+                // Check for duplicate edge before inserting — skip to prevent non-manifold geometry
+                if let Some(&existing_he) = edge_map.get(&(origin, dest)) {
+                    warn!(
+                        "merge_chunks: DUPLICATE EDGE detected! edge ({:?} -> {:?}) already has HE {:?}, \
+                         skipping HE {:?}. This indicates non-manifold geometry from tessellation.",
+                        origin, dest, existing_he, he_id
+                    );
+                    continue;
                 }
                 edge_map.insert((origin, dest), he_id);
             }
@@ -206,9 +261,19 @@ pub fn merge_two_chunks(
     let mut faces: Vec<Face> = Vec::new();
     let mut edge_map: HashMap<(VertexId, VertexId), HalfEdgeId> = HashMap::new();
 
+    // Track processed faces by their sorted vertex tuple to prevent duplicates.
+    // Boundary faces may appear in both chunks.
+    let mut processed_faces: HashSet<Vec<u32>> = HashSet::new();
+
     for chunk in [&a, &b] {
         for face in chunk.mesh.faces() {
             let local_verts = chunk.mesh.get_face_vertices(face.id);
+
+            // Skip collapsed/invalid faces (these have < 3 vertices after collapse operations)
+            if local_verts.len() < 3 {
+                // This is expected for faces that were removed by edge collapse
+                continue;
+            }
 
             let new_verts: Vec<VertexId> = local_verts
                 .iter()
@@ -221,8 +286,23 @@ pub fn merge_two_chunks(
                 .collect();
 
             if new_verts.len() != local_verts.len() {
+                warn!(
+                    "merge_two_chunks: skipping malformed face {:?} - expected {} vertices, got {}. \
+                     This indicates corrupted mesh topology from tessellation.",
+                    face.id, local_verts.len(), new_verts.len()
+                );
                 continue;
             }
+
+            // Create sorted vertex signature to detect duplicate faces
+            let mut face_signature: Vec<u32> = new_verts.iter().map(|v| v.0).collect();
+            face_signature.sort();
+
+            if processed_faces.contains(&face_signature) {
+                // This face already exists from the other chunk - skip it
+                continue;
+            }
+            processed_faces.insert(face_signature);
 
             let new_face_id = FaceId(faces.len() as u32);
             let base_he_idx = half_edges.len() as u32;
@@ -251,6 +331,10 @@ pub fn merge_two_chunks(
                 if let Some(&twin_id) = edge_map.get(&(dest, origin)) {
                     half_edges[he_id.0 as usize].twin = Some(twin_id);
                     half_edges[twin_id.0 as usize].twin = Some(he_id);
+                }
+                // Skip duplicate edges to prevent non-manifold geometry
+                if edge_map.contains_key(&(origin, dest)) {
+                    continue;
                 }
                 edge_map.insert((origin, dest), he_id);
             }
@@ -313,6 +397,19 @@ pub fn rebalance_chunks(chunked_mesh: &mut ChunkedMesh) {
 
         for chunk_id in oversized {
             super::partition::split_chunk(chunked_mesh, chunk_id);
+
+            // Validate chunks after split in debug builds
+            #[cfg(debug_assertions)]
+            for (&cid, chunk) in &chunked_mesh.chunks {
+                if let Err(e) = chunk.mesh.validate_connectivity() {
+                    tracing::error!(
+                        "MESH CORRUPTION after split_chunk: chunk {:?}: {}",
+                        cid,
+                        e
+                    );
+                    panic!("Chunk mesh corrupted after split: {}", e);
+                }
+            }
         }
     }
 
@@ -320,7 +417,22 @@ pub fn rebalance_chunks(chunked_mesh: &mut ChunkedMesh) {
     loop {
         let merge_pair = find_mergeable_pair(chunked_mesh, &config);
         if let Some((a, b)) = merge_pair {
-            merge_two_chunks(chunked_mesh, a, b);
+            let merged_id = merge_two_chunks(chunked_mesh, a, b);
+
+            // Validate merged chunk in debug builds
+            #[cfg(debug_assertions)]
+            if let Some(merged_id) = merged_id {
+                if let Some(chunk) = chunked_mesh.chunks.get(&merged_id) {
+                    if let Err(e) = chunk.mesh.validate_connectivity() {
+                        tracing::error!(
+                            "MESH CORRUPTION after merge_two_chunks: chunk {:?}: {}",
+                            merged_id,
+                            e
+                        );
+                        panic!("Chunk mesh corrupted after merge: {}", e);
+                    }
+                }
+            }
         } else {
             break;
         }

@@ -74,6 +74,9 @@ impl HalfEdgeMesh {
 
     /// Get all faces adjacent to a vertex
     pub fn get_vertex_faces(&self, vertex_id: VertexId) -> Vec<FaceId> {
+        // Maximum faces per vertex - prevents excessive iteration on complex topology
+        const MAX_VERTEX_FACES: usize = 100;
+
         let mut faces = Vec::new();
         let vertex = match self.vertex(vertex_id) {
             Some(v) => v,
@@ -88,8 +91,19 @@ impl HalfEdgeMesh {
         // Walk around the vertex using twin/prev
         let mut current = start_he;
         let mut visited = HashSet::new();
+        let mut iterations = 0;
 
         loop {
+            iterations += 1;
+            if iterations > MAX_VERTEX_FACES {
+                tracing::warn!(
+                    "Vertex {:?} face query exceeded {} iterations",
+                    vertex_id,
+                    MAX_VERTEX_FACES
+                );
+                break;
+            }
+
             if visited.contains(&current) {
                 break;
             }
@@ -128,6 +142,9 @@ impl HalfEdgeMesh {
 
     /// Get all vertices adjacent to a vertex (connected by an edge)
     pub fn get_adjacent_vertices(&self, vertex_id: VertexId) -> Vec<VertexId> {
+        // Maximum edges per vertex - prevents excessive iteration on complex topology
+        const MAX_VERTEX_EDGES: usize = 100;
+
         let mut neighbors = Vec::new();
         let vertex = match self.vertex(vertex_id) {
             Some(v) => v,
@@ -141,8 +158,19 @@ impl HalfEdgeMesh {
 
         let mut current = start_he;
         let mut visited = HashSet::new();
+        let mut iterations = 0;
 
         loop {
+            iterations += 1;
+            if iterations > MAX_VERTEX_EDGES {
+                tracing::warn!(
+                    "Vertex {:?} adjacency query exceeded {} iterations",
+                    vertex_id,
+                    MAX_VERTEX_EDGES
+                );
+                break;
+            }
+
             if visited.contains(&current) {
                 break;
             }
@@ -181,6 +209,9 @@ impl HalfEdgeMesh {
 
     /// Get the vertices of a face in order
     pub fn get_face_vertices(&self, face_id: FaceId) -> Vec<VertexId> {
+        // Maximum edges per face - prevents infinite loops on corrupted mesh
+        const MAX_FACE_EDGES: usize = 100;
+
         let mut vertices = Vec::new();
         let face = match self.face(face_id) {
             Some(f) => f,
@@ -188,9 +219,55 @@ impl HalfEdgeMesh {
         };
 
         let start_he = face.half_edge;
+
+        // CONSISTENCY CHECK: Verify face's half_edge actually belongs to this face
+        if let Some(he) = self.half_edge(start_he) {
+            if he.face != Some(face_id) {
+                // Check if this is expected (face was collapsed) vs unexpected (topology bug)
+                if he.face.is_none() {
+                    // Face was "removed" by edge collapse - half-edges are orphaned (face = None)
+                    // This is expected; the face should be skipped during mesh iteration
+                    // Log at trace level since this is normal during tessellation
+                    tracing::trace!(
+                        "Face {:?} was removed by collapse (half_edge {:?} is orphaned)",
+                        face_id,
+                        start_he
+                    );
+                } else {
+                    // Half-edge belongs to a different face - this is a topology bug
+                    tracing::warn!(
+                        "Face {:?} has stale half_edge {:?} (belongs to face {:?}). \
+                         This indicates a topology bug in split_edge_topology().",
+                        face_id,
+                        start_he,
+                        he.face
+                    );
+                }
+                return vertices; // Return empty rather than garbage
+            }
+        } else {
+            tracing::warn!(
+                "Face {:?} has invalid half_edge {:?}",
+                face_id,
+                start_he
+            );
+            return vertices;
+        }
+
         let mut current = start_he;
+        let mut iterations = 0;
 
         loop {
+            iterations += 1;
+            if iterations > MAX_FACE_EDGES {
+                tracing::warn!(
+                    "Face {:?} traversal exceeded {} iterations, possible mesh corruption",
+                    face_id,
+                    MAX_FACE_EDGES
+                );
+                break;
+            }
+
             if let Some(he) = self.half_edge(current) {
                 vertices.push(he.origin);
                 current = he.next;
@@ -208,6 +285,9 @@ impl HalfEdgeMesh {
 
     /// Get the half-edges forming the boundary of a face
     pub fn get_face_half_edges(&self, face_id: FaceId) -> Vec<HalfEdgeId> {
+        // Maximum edges per face - prevents infinite loops on corrupted mesh
+        const MAX_FACE_EDGES: usize = 100;
+
         let mut edges = Vec::new();
         let face = match self.face(face_id) {
             Some(f) => f,
@@ -215,9 +295,46 @@ impl HalfEdgeMesh {
         };
 
         let start_he = face.half_edge;
+
+        // CONSISTENCY CHECK: Verify face's half_edge actually belongs to this face
+        if let Some(he) = self.half_edge(start_he) {
+            if he.face != Some(face_id) {
+                // Check if this is expected (face was collapsed) vs unexpected (topology bug)
+                if he.face.is_none() {
+                    // Face was removed by collapse - expected during tessellation
+                    tracing::trace!(
+                        "get_face_half_edges: Face {:?} was removed by collapse",
+                        face_id
+                    );
+                } else {
+                    // Half-edge belongs to different face - topology bug
+                    tracing::warn!(
+                        "get_face_half_edges: Face {:?} has stale half_edge {:?} (belongs to face {:?})",
+                        face_id,
+                        start_he,
+                        he.face
+                    );
+                }
+                return edges;
+            }
+        } else {
+            return edges;
+        }
+
         let mut current = start_he;
+        let mut iterations = 0;
 
         loop {
+            iterations += 1;
+            if iterations > MAX_FACE_EDGES {
+                tracing::warn!(
+                    "Face {:?} half-edge traversal exceeded {} iterations, possible mesh corruption",
+                    face_id,
+                    MAX_FACE_EDGES
+                );
+                break;
+            }
+
             edges.push(current);
             if let Some(he) = self.half_edge(current) {
                 current = he.next;
@@ -264,6 +381,20 @@ impl HalfEdgeMesh {
         self.half_edge(he_id)
             .map(|he| he.twin.is_none())
             .unwrap_or(true)
+    }
+
+    /// Check if a face is still valid (not orphaned by edge collapse).
+    ///
+    /// A face is considered invalid if its `half_edge` pointer references a
+    /// half-edge that no longer belongs to this face (typically because the
+    /// face was removed by edge collapse but the Face struct remains in the array).
+    pub fn is_face_valid(&self, face_id: FaceId) -> bool {
+        if let Some(face) = self.face(face_id) {
+            if let Some(he) = self.half_edge(face.half_edge) {
+                return he.face == Some(face_id);
+            }
+        }
+        false
     }
 
     /// Check if a vertex is on the boundary

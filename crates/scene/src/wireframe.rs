@@ -19,9 +19,9 @@ pub struct WireframeSettings {
 impl Default for WireframeSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true, // Enabled by default for debugging sculpt topology
             // Faint white wireframe
-            color: Color::srgba(0.8, 0.8, 0.8, 0.3),
+            color: Color::srgba(0.8, 0.8, 0.8, 0.5),
         }
     }
 }
