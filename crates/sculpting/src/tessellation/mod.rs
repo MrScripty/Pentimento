@@ -307,7 +307,7 @@ fn split_pass_budget(
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
 
     // Evaluate edges by curvature and collect split candidates with their scores
-    let mut split_candidates: Vec<(VertexId, VertexId, f32)> = Vec::new(); // (v0, v1, dihedral_angle)
+    let mut split_candidates: Vec<(VertexId, VertexId, f32, f32)> = Vec::new(); // (v0, v1, dihedral_angle, edge_length)
     for &edge_id in &edges_in_range {
         let eval = evaluate_edge_curvature(&chunk.mesh, edge_id, config);
         if eval.decision == TessellationDecision::Split {
@@ -316,25 +316,27 @@ fn split_pass_budget(
             let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
             let v1 = next_he.origin;
 
+            let v0_pos = chunk.mesh.vertex(v0).map(|v| v.position);
+            let v1_pos = chunk.mesh.vertex(v1).map(|v| v.position);
+            let (Some(p0), Some(p1)) = (v0_pos, v1_pos) else { continue };
+            let edge_len = p0.distance(p1);
+
             // Check minimum edge length floor
-            if config.min_edge_length > 0.0 {
-                let v0_pos = chunk.mesh.vertex(v0).map(|v| v.position);
-                let v1_pos = chunk.mesh.vertex(v1).map(|v| v.position);
-                if let (Some(p0), Some(p1)) = (v0_pos, v1_pos) {
-                    if p0.distance(p1) < config.min_edge_length {
-                        continue;
-                    }
-                }
+            if edge_len < config.min_edge_length {
+                continue;
             }
 
-            split_candidates.push((v0, v1, eval.dihedral_angle));
+            split_candidates.push((v0, v1, eval.dihedral_angle, edge_len));
         }
     }
 
-    // Sort by curvature DESCENDING (highest curvature = highest priority to split)
-    // Tiebreak by vertex pair for determinism
+    // Sort by curvature × edge_length DESCENDING (highest surface deviation first).
+    // On uniform-curvature surfaces this degenerates to longest-edge-first,
+    // producing uniform vertex distribution instead of clustering at original vertices.
     split_candidates.sort_by(|a, b| {
-        b.2.partial_cmp(&a.2)
+        let a_score = a.2 * a.3;
+        let b_score = b.2 * b.3;
+        b_score.partial_cmp(&a_score)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
                 let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
@@ -347,7 +349,7 @@ fn split_pass_budget(
     let mut midpoint_map: HashMap<(VertexId, VertexId), VertexId> = HashMap::new();
     let mut actual_splits = 0usize;
 
-    for (v0, v1, _curvature) in split_candidates {
+    for (v0, v1, _curvature, _len) in split_candidates {
         // Budget check
         if !budget.can_split() {
             break;
@@ -429,8 +431,8 @@ fn collapse_pass_budget(
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
     let over_budget = budget.is_over_budget();
 
-    // Collect collapse candidates with curvature scores
-    let mut collapse_candidates: Vec<(VertexId, VertexId, f32)> = Vec::new();
+    // Collect collapse candidates with curvature scores and edge lengths
+    let mut collapse_candidates: Vec<(VertexId, VertexId, f32, f32)> = Vec::new();
     for &edge_id in &edges_in_range {
         let eval = evaluate_edge_curvature(&chunk.mesh, edge_id, config);
 
@@ -447,16 +449,23 @@ fn collapse_pass_budget(
                 let v0 = he.origin;
                 let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
                 let v1 = next_he.origin;
-                collapse_candidates.push((v0, v1, eval.dihedral_angle));
+                let edge_len = match (chunk.mesh.vertex(v0), chunk.mesh.vertex(v1)) {
+                    (Some(a), Some(b)) => a.position.distance(b.position),
+                    _ => continue,
+                };
+                collapse_candidates.push((v0, v1, eval.dihedral_angle, edge_len));
             }
             CollapseCheck::Rejected(_) => {}
         }
     }
 
-    // Sort by curvature ASCENDING (lowest curvature = collapse first)
-    // Tiebreak by vertex pair for determinism
+    // Sort by curvature × edge_length ASCENDING (lowest surface deviation = collapse first).
+    // Short flat edges collapse before long curved ones, removing over-refinement
+    // while preserving detail in curved areas.
     collapse_candidates.sort_by(|a, b| {
-        a.2.partial_cmp(&b.2)
+        let a_score = a.2 * a.3;
+        let b_score = b.2 * b.3;
+        a_score.partial_cmp(&b_score)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
                 let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
@@ -470,7 +479,7 @@ fn collapse_pass_budget(
     // Track vertices affected by previous collapses this pass (see collapse_pass for details).
     let mut dirty_vertices: HashSet<VertexId> = HashSet::new();
 
-    for (v0, v1, _curvature) in collapse_candidates {
+    for (v0, v1, _curvature, _len) in collapse_candidates {
         if chunk.mesh.face_count() <= config.min_faces {
             break;
         }
@@ -602,7 +611,7 @@ fn split_pass(
     // Collect edges as vertex pairs (stable across topology changes)
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
 
-    let mut edges_to_split: Vec<(VertexId, VertexId)> = Vec::new();
+    let mut edges_to_split: Vec<(VertexId, VertexId, f32)> = Vec::new();
     for &edge_id in &edges_in_range {
         let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
         if eval.decision == TessellationDecision::Split {
@@ -611,22 +620,32 @@ fn split_pass(
             let v0 = he.origin;
             let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
             let v1 = next_he.origin;
-            edges_to_split.push((v0, v1));
+            let edge_len = match (chunk.mesh.vertex(v0), chunk.mesh.vertex(v1)) {
+                (Some(a), Some(b)) => a.position.distance(b.position),
+                _ => continue,
+            };
+            edges_to_split.push((v0, v1, edge_len));
         }
     }
 
-    // Sort vertex pairs for determinism
-    edges_to_split.sort_by_key(|(v0, v1)| {
-        let a = v0.0.min(v1.0);
-        let b = v0.0.max(v1.0);
-        (a, b)
+    // Sort by edge length DESCENDING (longest first for uniform distribution).
+    // When the per-pass cap is hit, this ensures the most under-refined edges
+    // get split first instead of biasing toward lower vertex IDs.
+    edges_to_split.sort_by(|a, b| {
+        b.2.partial_cmp(&a.2)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
+                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                a_key.cmp(&b_key)
+            })
     });
 
     // Midpoint deduplication: prevents splitting the same edge twice
     let mut midpoint_map: HashMap<(VertexId, VertexId), VertexId> = HashMap::new();
     let mut actual_splits = 0usize;
 
-    for (v0, v1) in edges_to_split {
+    for (v0, v1, _len) in edges_to_split {
         // Safety: max faces check
         if chunk.mesh.face_count() >= config.max_faces_per_chunk {
             break;
@@ -705,8 +724,8 @@ fn collapse_pass(
 ) -> usize {
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
 
-    // Collect collapse candidates as vertex pairs
-    let mut edges_to_collapse: Vec<(VertexId, VertexId)> = Vec::new();
+    // Collect collapse candidates as vertex pairs with edge lengths
+    let mut edges_to_collapse: Vec<(VertexId, VertexId, f32)> = Vec::new();
     for &edge_id in &edges_in_range {
         let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
         if eval.decision == TessellationDecision::Collapse {
@@ -717,18 +736,26 @@ fn collapse_pass(
                     let v0 = he.origin;
                     let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
                     let v1 = next_he.origin;
-                    edges_to_collapse.push((v0, v1));
+                    let edge_len = match (chunk.mesh.vertex(v0), chunk.mesh.vertex(v1)) {
+                        (Some(a), Some(b)) => a.position.distance(b.position),
+                        _ => continue,
+                    };
+                    edges_to_collapse.push((v0, v1, edge_len));
                 }
                 CollapseCheck::Rejected(_) => {}
             }
         }
     }
 
-    // Sort for determinism
-    edges_to_collapse.sort_by_key(|(v0, v1)| {
-        let a = v0.0.min(v1.0);
-        let b = v0.0.max(v1.0);
-        (a, b)
+    // Sort by edge length ASCENDING (shortest first to remove over-refinement first)
+    edges_to_collapse.sort_by(|a, b| {
+        a.2.partial_cmp(&b.2)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
+                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                a_key.cmp(&b_key)
+            })
     });
 
     let mut actual_collapses = 0usize;
@@ -739,7 +766,7 @@ fn collapse_pass(
     // Skip any collapse involving a vertex whose ring may be broken.
     let mut dirty_vertices: HashSet<VertexId> = HashSet::new();
 
-    for (v0, v1) in edges_to_collapse {
+    for (v0, v1, _len) in edges_to_collapse {
         if chunk.mesh.face_count() <= config.min_faces {
             break;
         }
