@@ -23,6 +23,7 @@
 //! - **Pipeline**: Orchestrates stroke → deform → tessellate → GPU sync
 
 pub mod brush;
+pub mod budget;
 pub mod chunking;
 pub mod deformation;
 pub mod gpu;
@@ -50,14 +51,16 @@ pub use gpu::{create_chunk_meshes, remove_chunk_meshes, sync_chunk_to_gpu, sync_
 pub use spatial::{OctreeConfig, VertexOctree};
 pub use tessellation::{
     calculate_collapse_position, calculate_edge_screen_length, calculate_split_position,
-    calculate_world_edge_length, can_collapse_edge, can_split_edge, collapse_edge, evaluate_edge,
-    interpolate_vertex_attributes, split_edge, tessellate_at_brush, would_cause_flip,
-    CollapseResult, EdgeEvaluation, ScreenSpaceConfig, SplitResult, TessellationDecision,
-    TessellationStats,
+    calculate_world_edge_length, can_collapse_edge, can_split_edge, collapse_edge,
+    dihedral_angle, evaluate_edge, evaluate_edge_curvature, interpolate_vertex_attributes,
+    split_edge, tessellate_at_brush, tessellate_at_brush_budget, would_cause_flip,
+    CollapseResult, CurvatureEvaluation,
+    EdgeEvaluation, ScreenSpaceConfig, SplitResult, TessellationDecision, TessellationStats,
 };
+pub use budget::VertexBudget;
 pub use types::{
     ChunkConfig, DeformationType, SculptDab, SculptStrokeHeader, SculptStrokePacket,
-    TessellationAction, TessellationConfig,
+    TessellationAction, TessellationConfig, TessellationMode,
 };
 pub use pipeline::{
     DabProcessResult, PipelineConfig, SculptingPipeline, StrokeEndResult,

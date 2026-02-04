@@ -41,6 +41,7 @@ mod mesh_painting_system;
 mod normal_indicator;
 #[cfg(feature = "selection")]
 mod outline;
+pub mod pixel_coverage;
 mod render_camera;
 #[cfg(feature = "sculpting")]
 mod sculpt_mode;
@@ -87,6 +88,7 @@ pub use mesh_painting_system::{
 pub use normal_indicator::{NormalIndicatorPlugin, NormalIndicatorState};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
+pub use pixel_coverage::{PixelCoveragePlugin, PixelCoverageState, estimate_pixel_coverage_cpu};
 pub use render_camera::{ActiveRenderCamera, RenderCamera, RenderCameraPlugin};
 #[cfg(feature = "sculpting")]
 pub use sculpt_mode::{SculptEvent, SculptModePlugin, SculptState};
@@ -132,6 +134,7 @@ impl Plugin for ScenePlugin {
         app.add_plugins(ProjectionModePlugin);
         app.add_plugins(ProjectionPaintingPlugin);
         app.add_plugins(RenderCameraPlugin);
+        app.add_plugins(PixelCoveragePlugin);
 
         app.add_systems(Startup, setup_scene);
 

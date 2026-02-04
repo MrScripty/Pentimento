@@ -8,11 +8,12 @@
 //! similar to how canvas planes work.
 
 use bevy::prelude::*;
+use bevy::math::Mat4;
 
 /// Component marking a camera as the render camera for density calculations.
 ///
 /// This camera defines the maximum mesh detail allowed during sculpting.
-/// The constraint is: maximum 2 vertices per pixel as seen from this camera.
+/// The vertex budget is derived from pixel coverage: `pixels * vertices_per_pixel`.
 #[derive(Component, Clone)]
 pub struct RenderCamera {
     /// Render resolution (default 1920×1080)
@@ -23,6 +24,8 @@ pub struct RenderCamera {
     pub near: f32,
     /// Far clipping plane
     pub far: f32,
+    /// Vertices allowed per pixel of coverage (default: 1.0)
+    pub vertices_per_pixel: f32,
 }
 
 impl Default for RenderCamera {
@@ -32,6 +35,7 @@ impl Default for RenderCamera {
             fov: std::f32::consts::FRAC_PI_3, // 60 degrees
             near: 0.1,
             far: 1000.0,
+            vertices_per_pixel: 1.0,
         }
     }
 }
@@ -50,19 +54,17 @@ impl RenderCamera {
         self.resolution.x as f32 / self.resolution.y as f32
     }
 
-    /// Calculate the maximum allowed vertices for a mesh based on this camera's view.
+    /// Calculate the maximum allowed vertices for a mesh based on pixel coverage.
     ///
-    /// Uses the constraint: max 2 vertices per pixel visible from this camera.
+    /// Uses the configured `vertices_per_pixel` multiplier.
     ///
     /// # Arguments
-    /// * `visible_surface_area` - Surface area of mesh visible to camera (world units²)
-    /// * `mesh_screen_area` - Approximate screen area covered by mesh (pixels²)
+    /// * `pixel_coverage` - Number of pixels the mesh covers on screen from this camera
     ///
     /// # Returns
     /// Maximum number of vertices allowed
-    pub fn max_vertices_for_mesh(&self, mesh_screen_area: f32) -> usize {
-        // Max 2 vertices per pixel
-        let max_vertices = (mesh_screen_area * 2.0) as usize;
+    pub fn max_vertices_for_mesh(&self, pixel_coverage: f32) -> usize {
+        let max_vertices = (pixel_coverage * self.vertices_per_pixel) as usize;
         // Floor to prevent degenerate meshes
         max_vertices.max(100)
     }
@@ -70,6 +72,17 @@ impl RenderCamera {
     /// Total pixels in the render resolution
     pub fn total_pixels(&self) -> u32 {
         self.resolution.x * self.resolution.y
+    }
+
+    /// Build the projection matrix for this render camera.
+    pub fn projection_matrix(&self) -> Mat4 {
+        Mat4::perspective_rh(self.fov, self.aspect_ratio(), self.near, self.far)
+    }
+
+    /// Build the view-projection matrix given the camera's world transform.
+    pub fn view_projection(&self, camera_transform: &GlobalTransform) -> Mat4 {
+        let view = camera_transform.affine().inverse();
+        self.projection_matrix() * Mat4::from(view)
     }
 }
 

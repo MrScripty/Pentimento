@@ -16,13 +16,15 @@ use painting::half_edge::HalfEdgeMesh;
 use pentimento_ipc::{BevyToUi, EditMode};
 use sculpting::{
     partition_mesh, BrushInput, BrushPreset, ChunkConfig, ChunkedMesh, DeformationType,
-    PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig,
+    PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig, TessellationMode,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::camera::MainCamera;
 use crate::edit_mode::EditModeState;
 use crate::paint_mode::StrokeIdGenerator;
+use crate::pixel_coverage::{estimate_pixel_coverage_cpu, PixelCoverageState};
+use crate::render_camera::{ActiveRenderCamera, RenderCamera};
 use crate::OutboundUiMessages;
 #[cfg(feature = "selection")]
 use crate::selection::Selected;
@@ -86,6 +88,13 @@ pub struct SculptingData {
     pub inverse_transform: Option<Affine3A>,
     /// Transform for local-to-world conversion (for normals)
     pub transform_rotation: Option<Quat>,
+    /// Model matrix (local-to-world) for screen-space tessellation.
+    /// Vertex positions in HalfEdgeMesh are in local space; this matrix
+    /// is needed to correctly compute screen-space edge lengths.
+    pub model_matrix: Option<Mat4>,
+    /// Cached vertex mapping from merge (original_id → unified_id).
+    /// Used for position-only GPU updates without full re-merge.
+    pub cached_vertex_mapping: Option<std::collections::HashMap<painting::half_edge::VertexId, painting::half_edge::VertexId>>,
 }
 
 /// Message for sculpt mode events
@@ -140,6 +149,8 @@ impl Plugin for SculptModePlugin {
             .add_systems(
                 Update,
                 (
+                    update_sculpt_screen_config,
+                    update_sculpt_budget,
                     handle_sculpt_mode_hotkey,
                     handle_sculpt_input,
                     handle_sculpt_events,
@@ -148,6 +159,143 @@ impl Plugin for SculptModePlugin {
                 )
                     .chain(),
             );
+    }
+}
+
+/// Update the pipeline's screen-space configuration from the camera.
+///
+/// This is essential for tessellation to work correctly - without valid
+/// camera data, edge length calculations will be wrong.
+fn update_sculpt_screen_config(
+    sculpt_state: Res<SculptState>,
+    mut sculpting_data: ResMut<SculptingData>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    if !sculpt_state.active {
+        return;
+    }
+
+    let Ok((camera, camera_transform)) = camera_query.single() else {
+        warn!("update_sculpt_screen_config: no camera found");
+        return;
+    };
+
+    let Ok(window) = windows.single() else {
+        warn!("update_sculpt_screen_config: no window found");
+        return;
+    };
+
+    // Extract model matrix before mutable borrow of pipeline
+    let model_matrix = sculpting_data.model_matrix.unwrap_or(Mat4::IDENTITY);
+
+    if let Some(pipeline) = &mut sculpting_data.pipeline {
+        // Build view-projection matrix
+        let view_matrix = camera_transform.affine().inverse();
+        let projection = camera.clip_from_view();
+        let view_projection = projection * view_matrix;
+
+        // Log the first update to verify values are reasonable
+        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            info!(
+                "update_sculpt_screen_config: viewport={}x{}, camera_pos={:?}",
+                window.width(),
+                window.height(),
+                camera_transform.translation()
+            );
+        }
+
+        // Use the model matrix (local-to-world) so tessellation correctly
+        // evaluates screen-space edge lengths from local-space vertex positions.
+        let screen_config = ScreenSpaceConfig::with_model_matrix(
+            view_projection,
+            model_matrix,
+            window.width(),
+            window.height(),
+        );
+
+        pipeline.update_screen_config(screen_config);
+    }
+}
+
+/// Update the pipeline's vertex budget from the render camera's pixel coverage.
+///
+/// When in `BudgetCurvature` tessellation mode, this system:
+/// 1. Reads the render camera's transform and projection
+/// 2. Projects all mesh triangles through the render camera
+/// 3. Counts pixel coverage (with backface culling + frustum clipping)
+/// 4. Updates the pipeline's vertex budget
+fn update_sculpt_budget(
+    sculpt_state: Res<SculptState>,
+    mut sculpting_data: ResMut<SculptingData>,
+    mut coverage_state: ResMut<PixelCoverageState>,
+    render_camera_query: Query<(&RenderCamera, &GlobalTransform)>,
+    active_render_camera: Res<ActiveRenderCamera>,
+) {
+    if !sculpt_state.active {
+        return;
+    }
+
+    // Only run for BudgetCurvature mode
+    if sculpt_state.tessellation_config.mode != TessellationMode::BudgetCurvature {
+        return;
+    }
+
+    // Need an active render camera
+    let Some(render_cam_entity) = active_render_camera.entity else {
+        return;
+    };
+
+    let Ok((render_camera, render_cam_transform)) = render_camera_query.get(render_cam_entity)
+    else {
+        return;
+    };
+
+    let model_matrix = sculpting_data.model_matrix.unwrap_or(Mat4::IDENTITY);
+    let view_projection = render_camera.view_projection(render_cam_transform);
+
+    // Compute pixel coverage across all chunks
+    let mut total_coverage: u32 = 0;
+
+    if let Some(chunked_mesh) = &sculpting_data.chunked_mesh {
+        for chunk in chunked_mesh.chunks.values() {
+            // Extract positions and build index list from chunk mesh
+            let positions: Vec<Vec3> = chunk.mesh.vertices().iter().map(|v| v.position).collect();
+            let mut indices: Vec<u32> = Vec::new();
+            for face in chunk.mesh.faces() {
+                let verts = chunk.mesh.get_face_vertices(face.id);
+                if verts.len() >= 3 {
+                    for i in 1..(verts.len() - 1) {
+                        indices.push(verts[0].0);
+                        indices.push(verts[i].0);
+                        indices.push(verts[i + 1].0);
+                    }
+                }
+            }
+
+            total_coverage += estimate_pixel_coverage_cpu(
+                &positions,
+                &indices,
+                &model_matrix,
+                &view_projection,
+                render_camera.resolution,
+            );
+        }
+
+        // Clamp to max possible pixels
+        let max_pixels = render_camera.total_pixels();
+        total_coverage = total_coverage.min(max_pixels);
+    }
+
+    // Update coverage state resource
+    coverage_state.pixel_count = total_coverage;
+    coverage_state.max_vertices = render_camera.max_vertices_for_mesh(total_coverage as f32);
+    coverage_state.stale = false;
+
+    // Update pipeline budget
+    if let Some(pipeline) = &mut sculpting_data.pipeline {
+        pipeline.update_budget_from_coverage(total_coverage);
     }
 }
 
@@ -465,6 +613,8 @@ fn handle_sculpt_events(
     mut outbound: ResMut<OutboundUiMessages>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
+    material_query: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     brush_indicators: Query<Entity, With<SculptBrushIndicator>>,
     mut commands: Commands,
     time: Res<Time>,
@@ -481,12 +631,22 @@ fn handle_sculpt_events(
 
                 info!("Entered sculpt mode for entity {:?}", entity);
 
+                // Enable double-sided rendering for the sculpted mesh
+                if let Ok(material_handle) = material_query.get(*entity) {
+                    if let Some(material) = materials.get_mut(&material_handle.0) {
+                        material.double_sided = true;
+                        material.cull_mode = None;
+                        info!("Enabled double-sided rendering for sculpt target");
+                    }
+                }
+
                 // Initialize chunked mesh from entity
                 if let Ok((mesh_handle, global_transform)) = mesh_query.get(*entity) {
                     // Store transforms for coordinate conversion
                     let affine = global_transform.affine();
                     sculpting_data.inverse_transform = Some(affine.inverse());
                     sculpting_data.transform_rotation = Some(global_transform.rotation());
+                    sculpting_data.model_matrix = Some(global_transform.to_matrix());
 
                     if let Some(bevy_mesh) = meshes.get(&mesh_handle.0) {
                         match HalfEdgeMesh::from_bevy_mesh(bevy_mesh) {
@@ -506,6 +666,7 @@ fn handle_sculpt_events(
                                 preset.radius = sculpt_state.brush_radius;
                                 preset.strength = sculpt_state.brush_strength;
 
+                                // Enable tessellation for dynamic topology
                                 let pipeline_config = PipelineConfig {
                                     tessellation_enabled: true,
                                     tessellation_config: sculpt_state.tessellation_config.clone(),
@@ -554,6 +715,8 @@ fn handle_sculpt_events(
                 sculpting_data.original_mesh_handle = None;
                 sculpting_data.inverse_transform = None;
                 sculpting_data.transform_rotation = None;
+                sculpting_data.model_matrix = None;
+                sculpting_data.cached_vertex_mapping = None;
 
                 // Remove chunk entities
                 for entity in sculpting_data.chunk_entities.drain(..) {
@@ -762,7 +925,11 @@ fn handle_sculpt_events(
     }
 }
 
-/// Sync dirty chunks to GPU
+/// Sync dirty chunks to GPU.
+///
+/// Two paths:
+/// - **Topology changed**: full merge + rebuild Bevy mesh (expensive, O(V+F))
+/// - **Position only**: patch vertex positions/normals in-place (cheap, O(dirty vertices))
 fn sync_sculpt_chunks_to_gpu(
     sculpt_state: Res<SculptState>,
     mut sculpting_data: ResMut<SculptingData>,
@@ -782,25 +949,87 @@ fn sync_sculpt_chunks_to_gpu(
         return;
     };
 
-    let Some(chunked_mesh) = &mut sculpting_data.chunked_mesh else {
+    // Destructure to allow split borrows
+    let SculptingData {
+        ref mut chunked_mesh,
+        ref mut cached_vertex_mapping,
+        ..
+    } = *sculpting_data;
+
+    let Some(chunked_mesh) = chunked_mesh else {
         return;
     };
 
-    // For now, sync dirty chunks to the original mesh
-    // In a full implementation, we'd have separate mesh entities per chunk
     let dirty_chunks = chunked_mesh.dirty_chunks();
     if dirty_chunks.is_empty() {
         return;
     }
 
-    // For simplicity, rebuild the entire mesh from all chunks when any chunk is dirty
-    // A more optimized approach would update individual chunk meshes
-    let merged = sculpting::merge_chunks(chunked_mesh);
+    // Check if any chunk has topology changes (splits/collapses/rebalancing)
+    let has_topology_change = dirty_chunks.iter().any(|&id| {
+        chunked_mesh
+            .get_chunk(id)
+            .map_or(false, |c| c.topology_changed)
+    });
 
-    if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
-        // Convert half-edge mesh to Bevy mesh format
-        if let Some(new_mesh) = half_edge_to_bevy_mesh(&merged.mesh) {
-            *bevy_mesh = new_mesh;
+    if has_topology_change || cached_vertex_mapping.is_none() {
+        // Full rebuild path: merge all chunks and rebuild Bevy mesh
+        let merged = sculpting::merge_chunks(chunked_mesh);
+
+        if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
+            if let Some(new_mesh) = half_edge_to_bevy_mesh(&merged.mesh) {
+                *bevy_mesh = new_mesh;
+            }
+        }
+
+        // Cache the vertex mapping for future position-only updates
+        *cached_vertex_mapping = Some(merged.vertex_mapping);
+    } else if let Some(mapping) = cached_vertex_mapping {
+        // Position-only path: patch vertex buffers in-place
+        if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
+            // Patch positions
+            if let Some(VertexAttributeValues::Float32x3(positions)) =
+                bevy_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+            {
+                let num_positions = positions.len();
+                for &chunk_id in &dirty_chunks {
+                    let Some(chunk) = chunked_mesh.get_chunk(chunk_id) else {
+                        continue;
+                    };
+                    for vertex in chunk.mesh.vertices() {
+                        if let Some(&original_id) = chunk.local_to_original.get(&vertex.id) {
+                            if let Some(&unified_id) = mapping.get(&original_id) {
+                                let idx = unified_id.0 as usize;
+                                if idx < num_positions {
+                                    positions[idx] = vertex.position.to_array();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Patch normals
+            if let Some(VertexAttributeValues::Float32x3(normals)) =
+                bevy_mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+            {
+                let num_normals = normals.len();
+                for &chunk_id in &dirty_chunks {
+                    let Some(chunk) = chunked_mesh.get_chunk(chunk_id) else {
+                        continue;
+                    };
+                    for vertex in chunk.mesh.vertices() {
+                        if let Some(&original_id) = chunk.local_to_original.get(&vertex.id) {
+                            if let Some(&unified_id) = mapping.get(&original_id) {
+                                let idx = unified_id.0 as usize;
+                                if idx < num_normals {
+                                    normals[idx] = vertex.normal.to_array();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -818,23 +1047,70 @@ fn half_edge_to_bevy_mesh(he_mesh: &HalfEdgeMesh) -> Option<Mesh> {
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
+    // Validate: check that vertex IDs match array indices
+    #[cfg(debug_assertions)]
+    for (idx, vertex) in he_mesh.vertices().iter().enumerate() {
+        if vertex.id.0 as usize != idx {
+            warn!(
+                "half_edge_to_bevy_mesh: vertex at index {} has id {:?} (expected {}). \
+                 This will cause incorrect face indices!",
+                idx, vertex.id, idx
+            );
+        }
+    }
+
     // Build vertex arrays
     for vertex in he_mesh.vertices() {
         positions.push(vertex.position.to_array());
         normals.push(vertex.normal.to_array());
     }
 
+    let num_positions = positions.len() as u32;
+
     // Build index array from faces
+    let mut skipped_faces = 0;
     for face in he_mesh.faces() {
         let verts = he_mesh.get_face_vertices(face.id);
         if verts.len() >= 3 {
-            // Triangulate the face (assuming convex)
-            for i in 1..(verts.len() - 1) {
-                indices.push(verts[0].0);
-                indices.push(verts[i].0);
-                indices.push(verts[i + 1].0);
+            // Validate: check that all vertex IDs are valid indices
+            let mut valid = true;
+            for v in &verts {
+                if v.0 >= num_positions {
+                    warn!(
+                        "half_edge_to_bevy_mesh: face {:?} references vertex {:?} \
+                         but only {} positions exist. Face will be skipped.",
+                        face.id, v, num_positions
+                    );
+                    valid = false;
+                    break;
+                }
             }
+
+            if valid {
+                // Triangulate the face (assuming convex)
+                for i in 1..(verts.len() - 1) {
+                    indices.push(verts[0].0);
+                    indices.push(verts[i].0);
+                    indices.push(verts[i + 1].0);
+                }
+            } else {
+                skipped_faces += 1;
+            }
+        } else {
+            skipped_faces += 1;
+            trace!(
+                "half_edge_to_bevy_mesh: face {:?} has {} vertices, skipping",
+                face.id,
+                verts.len()
+            );
         }
+    }
+
+    if skipped_faces > 0 {
+        warn!(
+            "half_edge_to_bevy_mesh: skipped {} faces due to invalid vertices or insufficient vertex count",
+            skipped_faces
+        );
     }
 
     let mut mesh = Mesh::new(

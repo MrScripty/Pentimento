@@ -127,6 +127,18 @@ pub struct SculptStrokePacket {
     pub dabs: Vec<SculptDab>,
 }
 
+/// Which tessellation algorithm to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TessellationMode {
+    /// Legacy: per-edge screen-space length evaluation.
+    /// Splits edges that appear too long on screen, collapses edges that are too short.
+    #[default]
+    ScreenSpace,
+    /// Budget + curvature: global vertex budget from render camera pixel coverage,
+    /// with curvature-prioritized split/collapse within that budget.
+    BudgetCurvature,
+}
+
 /// Configuration for tessellation behavior.
 ///
 /// Values are configurable and should not be treated as magic numbers.
@@ -142,18 +154,40 @@ pub struct SculptStrokePacket {
 /// See `crates/sculpting/src/tessellation/edge_collapse.rs` for details.
 #[derive(Debug, Clone)]
 pub struct TessellationConfig {
+    /// Which tessellation algorithm to use (default: ScreenSpace)
+    pub mode: TessellationMode,
+
+    // --- ScreenSpace mode fields ---
     /// Target edge length in screen pixels (default: 6.0)
     pub target_pixels: f32,
     /// Split edges larger than target × split_ratio (default: 1.5)
     pub split_ratio: f32,
     /// Collapse edges smaller than target × collapse_ratio (default: 0.4)
     pub collapse_ratio: f32,
+
+    // --- BudgetCurvature mode fields ---
+    /// Dihedral angle above which an edge is a split candidate (radians, default: 0.1 ~6°).
+    /// Higher curvature edges are split first within the vertex budget.
+    pub curvature_split_threshold: f32,
+    /// Dihedral angle below which an edge is a collapse candidate (radians, default: 0.03 ~2°).
+    /// Lower curvature edges are collapsed first.
+    pub curvature_collapse_threshold: f32,
+    /// Minimum world-space edge length — never split edges shorter than this (default: 0.001).
+    /// Prevents degenerate triangles from repeated splits at high-curvature points.
+    pub min_edge_length: f32,
+    /// Vertex-per-pixel multiplier for budget calculation (default: 1.0).
+    /// The budget is `pixel_coverage * vertices_per_pixel`.
+    pub vertices_per_pixel: f32,
+
+    // --- Shared fields ---
     /// Minimum face count to preserve - never collapse below this (default: 4)
     pub min_faces: usize,
-    /// Maximum faces per chunk before refusing to split more edges (default: 50000)
+    /// Maximum faces per chunk - hard safety limit on total mesh size (default: 50000)
     pub max_faces_per_chunk: usize,
-    /// Maximum edge splits per dab to prevent runaway growth (default: 50)
-    pub max_splits_per_dab: usize,
+    /// Maximum tessellation iterations per dab (default: 3).
+    /// Each iteration runs a full split+collapse pass. Iterating allows edges
+    /// created by splits to be evaluated and further refined.
+    pub max_tessellation_iterations: usize,
     /// Whether edge collapse is enabled.
     ///
     /// Now enabled by default after implementing comprehensive safety checks:
@@ -166,14 +200,20 @@ pub struct TessellationConfig {
 impl Default for TessellationConfig {
     fn default() -> Self {
         Self {
+            mode: TessellationMode::default(),
+            // ScreenSpace
             target_pixels: 6.0,
             split_ratio: 1.5,
             collapse_ratio: 0.4,
-            min_faces: 4, // Tetrahedron minimum - never destroy mesh completely
-            max_faces_per_chunk: 50000, // Prevent OOM from exponential growth
-            max_splits_per_dab: 50, // Limit splits per brush dab
-            // ENABLED: Edge collapse now has comprehensive safety checks
-            // See edge_collapse.rs for ring boundary and edge flip fallback logic
+            // BudgetCurvature
+            curvature_split_threshold: 0.1,    // ~6 degrees
+            curvature_collapse_threshold: 0.03, // ~2 degrees
+            min_edge_length: 0.001,
+            vertices_per_pixel: 1.0,
+            // Shared
+            min_faces: 4,
+            max_faces_per_chunk: 50000,
+            max_tessellation_iterations: 3,
             collapse_enabled: true,
         }
     }

@@ -20,6 +20,7 @@
 
 mod edge_collapse;
 mod edge_split;
+pub mod curvature;
 mod metrics;
 
 pub use edge_collapse::{
@@ -36,13 +37,16 @@ pub use metrics::{
     calculate_world_edge_length, evaluate_edge, is_degenerate_triangle, is_valid_valence,
     EdgeEvaluation, MeshQuality, ScreenSpaceConfig,
 };
+pub use curvature::{dihedral_angle, evaluate_edge_curvature, CurvatureEvaluation};
 
+use crate::budget::VertexBudget;
 use crate::chunking::MeshChunk;
 use crate::types::TessellationConfig;
 use glam::Vec3;
-use painting::half_edge::{HalfEdgeId, VertexId};
-use std::collections::HashSet;
-use tracing::{info, trace};
+use painting::half_edge::{HalfEdgeId, HalfEdgeMesh, VertexId};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use tracing::{debug, info, trace};
 
 /// Tessellation decision for a single edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,14 +61,24 @@ pub enum TessellationDecision {
 
 /// Apply tessellation within a brush radius.
 ///
-/// This evaluates all edges near the brush and applies split/collapse
-/// as needed to maintain target edge density.
+/// Iterates split and collapse passes until convergence (no more changes)
+/// or `max_tessellation_iterations` is reached. This matches SculptGL's
+/// convergence loop pattern (Subdivision.js:458-461).
 ///
-/// The `next_original_vertex_id` counter is used to assign globally unique
-/// "original" IDs to tessellation-created vertices. This prevents ID collisions
-/// when chunks are later merged.
+/// ## Key design decisions
 ///
-/// Returns the number of edges modified.
+/// - **Vertex-pair lookup**: Edges are stored as `(VertexId, VertexId)` pairs
+///   rather than `HalfEdgeId`s, because sequential splits rewire half-edge
+///   pointers. Vertex pairs are stable across topology changes.
+/// - **Midpoint deduplication**: A `HashMap` keyed by `(min(v0,v1), max(v0,v1))`
+///   prevents creating duplicate midpoints when both directions of the same
+///   edge appear in the split list.
+/// - **Twin rebuild**: After all splits, `rebuild_twins_from_edge_map()` ensures
+///   100% twin consistency by deriving twins from the authoritative edge_map.
+/// - **Curvature-aware positioning**: Uses normal-based offset (SculptGL pattern)
+///   to preserve surface curvature during subdivision.
+/// - **Tangent-plane smoothing**: After splits, new vertices and their 1-ring
+///   neighbors are smoothed on the tangent plane to eliminate noise.
 pub fn tessellate_at_brush(
     chunk: &mut MeshChunk,
     brush_center: Vec3,
@@ -77,212 +91,68 @@ pub fn tessellate_at_brush(
     let mut stats = TessellationStats::default();
     let influence_radius = brush_radius * 1.5;
 
-    // Check if chunk is already at max face limit - skip all tessellation
-    let current_face_count = chunk.mesh.face_count();
-    if current_face_count >= config.max_faces_per_chunk {
+    // Check if chunk is already at max face limit
+    if chunk.mesh.face_count() >= config.max_faces_per_chunk {
         info!(
-            "tessellate: at max faces ({} >= {}), skipping splits",
-            current_face_count, config.max_faces_per_chunk
+            "tessellate: at max faces ({} >= {}), skipping",
+            chunk.mesh.face_count(),
+            config.max_faces_per_chunk
         );
         return stats;
     }
 
-    // Collect edges to evaluate (those with at least one vertex in range)
-    trace!("tessellate_at_brush: collecting edges in range");
-    let edges_to_evaluate = collect_edges_in_range(chunk, brush_center, influence_radius);
-    trace!(
-        "tessellate_at_brush: found {} edges to evaluate",
-        edges_to_evaluate.len()
-    );
+    // Convergence loop: iterate split+collapse until no changes or max iterations
+    for iteration in 0..config.max_tessellation_iterations {
+        let mut collapses_this_iter = 0usize;
 
-    // Split pass first (splitting creates new edges that might need collapsing)
-    trace!("tessellate_at_brush: evaluating for splits");
-    let mut edges_to_split: Vec<HalfEdgeId> = Vec::new();
+        // ===== SPLIT PASS =====
+        let splits_this_iter = split_pass(
+            chunk,
+            brush_center,
+            influence_radius,
+            config,
+            screen_config,
+            next_original_vertex_id,
+        );
 
-    for &edge_id in &edges_to_evaluate {
-        let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
-        if eval.decision == TessellationDecision::Split {
-            edges_to_split.push(edge_id);
+        stats.edges_split += splits_this_iter;
+        if splits_this_iter > 0 {
+            chunk.topology_changed = true;
         }
-    }
-    trace!(
-        "tessellate_at_brush: {} edges marked for split",
-        edges_to_split.len()
-    );
 
-    // Sort for determinism
-    edges_to_split.sort_by_key(|e| e.0);
-
-    // Limit the number of splits per dab to prevent exponential growth
-    let mut actual_splits = 0;
-    for edge_id in edges_to_split.into_iter() {
-        // Check max splits per dab limit
-        if actual_splits >= config.max_splits_per_dab {
-            info!(
-                "tessellate: reached max splits per dab ({}), stopping",
-                config.max_splits_per_dab
+        // ===== COLLAPSE PASS =====
+        if config.collapse_enabled && chunk.mesh.face_count() > config.min_faces {
+            collapses_this_iter = collapse_pass(
+                chunk,
+                brush_center,
+                influence_radius,
+                config,
+                screen_config,
             );
+
+            stats.edges_collapsed += collapses_this_iter;
+            if collapses_this_iter > 0 {
+                chunk.topology_changed = true;
+            }
+        }
+
+        debug!(
+            "tessellate iteration {}: split={}, collapsed={}, faces={}",
+            iteration, splits_this_iter, collapses_this_iter, chunk.mesh.face_count()
+        );
+
+        // Converged - no more changes needed
+        if splits_this_iter == 0 && collapses_this_iter == 0 {
             break;
         }
 
-        // Check max faces per chunk limit before each split
+        // Safety check: don't exceed max face count
         if chunk.mesh.face_count() >= config.max_faces_per_chunk {
             info!(
-                "tessellate: reached max faces ({}), stopping splits",
-                config.max_faces_per_chunk
+                "tessellate: reached max faces ({}) during iteration, stopping",
+                chunk.mesh.face_count()
             );
             break;
-        }
-
-        // CRITICAL: Skip boundary edges - splitting them would desync chunks!
-        // When edge AB is shared between chunk A and chunk B, splitting it in
-        // chunk A creates a midpoint vertex that chunk B doesn't know about.
-        // This causes mesh tearing when chunks are merged/rendered.
-        let he = match chunk.mesh.half_edge(edge_id) {
-            Some(he) => he,
-            None => continue,
-        };
-        let v0_id = he.origin;
-        let v1_id = match chunk.mesh.half_edge(he.next) {
-            Some(next_he) => next_he.origin,
-            None => continue,
-        };
-
-        let v0_is_boundary = chunk.boundary_vertices.contains_key(&v0_id);
-        let v1_is_boundary = chunk.boundary_vertices.contains_key(&v1_id);
-        if v0_is_boundary || v1_is_boundary {
-            trace!(
-                "tessellate: skipping boundary edge {:?} (v0_boundary={}, v1_boundary={})",
-                edge_id, v0_is_boundary, v1_is_boundary
-            );
-            continue;
-        }
-
-        trace!("tessellate_at_brush: splitting edge {:?}", edge_id);
-        if let Some(split_result) = split_edge(&mut chunk.mesh, edge_id) {
-            trace!(
-                "tessellate_at_brush: split successful, new vertex {:?}",
-                split_result.new_vertex
-            );
-            stats.edges_split += 1;
-            actual_splits += 1;
-            chunk.topology_changed = true;
-
-            // CRITICAL: Register new vertex in chunk mappings with a GLOBALLY UNIQUE ID.
-            // Each tessellation-created vertex gets a unique "original" ID from the counter.
-            // This prevents ID collisions when chunks are merged - without this, vertices
-            // in different chunks with the same local ID would incorrectly merge into one.
-            let unique_original_id = VertexId(*next_original_vertex_id);
-            *next_original_vertex_id += 1;
-
-            chunk
-                .local_to_original
-                .insert(split_result.new_vertex, unique_original_id);
-            chunk
-                .original_to_local
-                .insert(unique_original_id, split_result.new_vertex);
-        }
-    }
-
-    // Collapse pass (after splits, some edges may be too short)
-    // Skip collapse if disabled in config (collapse algorithm creates non-manifold geometry)
-    if !config.collapse_enabled {
-        trace!("tessellate_at_brush: collapse disabled in config");
-        trace!("tessellate_at_brush: END stats={:?}", stats);
-        return stats;
-    }
-
-    // Check if we're already at minimum face count
-    let current_face_count = chunk.mesh.face_count();
-    if current_face_count <= config.min_faces {
-        trace!(
-            "tessellate_at_brush: skipping collapse pass - at minimum face count ({} <= {})",
-            current_face_count,
-            config.min_faces
-        );
-        trace!("tessellate_at_brush: END stats={:?}", stats);
-        return stats;
-    }
-
-    trace!("tessellate_at_brush: re-collecting edges after splits");
-    let edges_to_evaluate = collect_edges_in_range(chunk, brush_center, influence_radius);
-    trace!(
-        "tessellate_at_brush: found {} edges for collapse evaluation",
-        edges_to_evaluate.len()
-    );
-    let mut edges_to_collapse: Vec<HalfEdgeId> = Vec::new();
-
-    for &edge_id in &edges_to_evaluate {
-        let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
-        if eval.decision == TessellationDecision::Collapse {
-            // Use the new comprehensive safety check
-            let check = can_collapse_edge_safe(&chunk.mesh, edge_id);
-            match check {
-                CollapseCheck::Safe(_) | CollapseCheck::UseEdgeFlip => {
-                    edges_to_collapse.push(edge_id);
-                }
-                CollapseCheck::Rejected(_) => {
-                    // Edge cannot be collapsed or flipped
-                }
-            }
-        }
-    }
-    trace!(
-        "tessellate_at_brush: {} edges marked for collapse",
-        edges_to_collapse.len()
-    );
-
-    // Sort for determinism
-    edges_to_collapse.sort_by_key(|e| e.0);
-
-    for edge_id in edges_to_collapse {
-        // Check minimum face count before EACH collapse
-        if chunk.mesh.face_count() <= config.min_faces {
-            trace!(
-                "tessellate_at_brush: stopping collapse - reached minimum face count ({})",
-                config.min_faces
-            );
-            break;
-        }
-
-        // CRITICAL: Skip boundary edges - collapsing them would desync chunks!
-        // Same reasoning as for splits: boundary edges are shared between chunks.
-        let he = match chunk.mesh.half_edge(edge_id) {
-            Some(he) => he,
-            None => continue,
-        };
-        let v0_id = he.origin;
-        let v1_id = match chunk.mesh.half_edge(he.next) {
-            Some(next_he) => next_he.origin,
-            None => continue,
-        };
-
-        if chunk.boundary_vertices.contains_key(&v0_id)
-            || chunk.boundary_vertices.contains_key(&v1_id)
-        {
-            trace!(
-                "tessellate: skipping boundary edge collapse {:?}",
-                edge_id
-            );
-            continue;
-        }
-
-        // Use collapse_or_flip_edge which handles edge flip fallback
-        trace!("tessellate_at_brush: attempting collapse/flip on edge {:?}", edge_id);
-        match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
-            Some(CollapseOrFlipResult::Collapsed(_)) => {
-                trace!("tessellate_at_brush: collapse successful");
-                stats.edges_collapsed += 1;
-                chunk.topology_changed = true;
-            }
-            Some(CollapseOrFlipResult::Flipped) => {
-                trace!("tessellate_at_brush: edge flip applied instead of collapse");
-                // Edge flip doesn't reduce face count, but it improves mesh quality
-                chunk.topology_changed = true;
-            }
-            None => {
-                trace!("tessellate_at_brush: edge {:?} rejected for collapse/flip", edge_id);
-            }
         }
     }
 
@@ -293,7 +163,6 @@ pub fn tessellate_at_brush(
     if stats.edges_split > 0 || stats.edges_collapsed > 0 {
         if let Err(e) = validate_chunk_after_tessellation(chunk) {
             tracing::error!("CHUNK VALIDATION FAILED after tessellation: {}", e);
-            // Log additional diagnostic info
             tracing::error!(
                 "Chunk state: {} vertices, {} faces, {} half-edges",
                 chunk.mesh.vertex_count(),
@@ -308,6 +177,606 @@ pub fn tessellate_at_brush(
     }
 
     stats
+}
+
+/// Apply budget+curvature tessellation within a brush radius.
+///
+/// Like `tessellate_at_brush` but uses curvature-prioritized split/collapse
+/// subject to a global vertex budget instead of per-edge screen-space evaluation.
+///
+/// Edges are split in order of highest curvature first and collapsed in order
+/// of lowest curvature first. Splitting stops when the budget is exhausted or
+/// no edges exceed the curvature threshold.
+pub fn tessellate_at_brush_budget(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    brush_radius: f32,
+    config: &TessellationConfig,
+    budget: &mut VertexBudget,
+    next_original_vertex_id: &mut u32,
+) -> TessellationStats {
+    trace!("tessellate_at_brush_budget: START");
+    let mut stats = TessellationStats::default();
+    let influence_radius = brush_radius * 1.5;
+
+    // Check if chunk is already at max face limit
+    if chunk.mesh.face_count() >= config.max_faces_per_chunk {
+        info!(
+            "tessellate_budget: at max faces ({} >= {}), skipping",
+            chunk.mesh.face_count(),
+            config.max_faces_per_chunk
+        );
+        return stats;
+    }
+
+    // Convergence loop: iterate split+collapse until no changes or max iterations
+    for iteration in 0..config.max_tessellation_iterations {
+        let mut collapses_this_iter = 0usize;
+
+        // ===== SPLIT PASS (curvature-prioritized, budget-limited) =====
+        let splits_this_iter = split_pass_budget(
+            chunk,
+            brush_center,
+            influence_radius,
+            config,
+            budget,
+            next_original_vertex_id,
+        );
+
+        stats.edges_split += splits_this_iter;
+        if splits_this_iter > 0 {
+            chunk.topology_changed = true;
+        }
+
+        // ===== COLLAPSE PASS (lowest-curvature first, also triggered when over budget) =====
+        if config.collapse_enabled && chunk.mesh.face_count() > config.min_faces {
+            collapses_this_iter = collapse_pass_budget(
+                chunk,
+                brush_center,
+                influence_radius,
+                config,
+                budget,
+            );
+
+            stats.edges_collapsed += collapses_this_iter;
+            if collapses_this_iter > 0 {
+                chunk.topology_changed = true;
+            }
+        }
+
+        debug!(
+            "tessellate_budget iteration {}: split={}, collapsed={}, faces={}, budget_remaining={}",
+            iteration, splits_this_iter, collapses_this_iter, chunk.mesh.face_count(), budget.remaining
+        );
+
+        // Converged - no more changes needed
+        if splits_this_iter == 0 && collapses_this_iter == 0 {
+            break;
+        }
+
+        // Safety check: don't exceed max face count
+        if chunk.mesh.face_count() >= config.max_faces_per_chunk {
+            info!(
+                "tessellate_budget: reached max faces ({}) during iteration, stopping",
+                chunk.mesh.face_count()
+            );
+            break;
+        }
+    }
+
+    trace!("tessellate_at_brush_budget: END stats={:?}", stats);
+
+    // Validate chunk after tessellation in debug builds
+    #[cfg(debug_assertions)]
+    if stats.edges_split > 0 || stats.edges_collapsed > 0 {
+        if let Err(e) = validate_chunk_after_tessellation(chunk) {
+            tracing::error!("CHUNK VALIDATION FAILED after budget tessellation: {}", e);
+            tracing::error!(
+                "Chunk state: {} vertices, {} faces, {} half-edges",
+                chunk.mesh.vertex_count(),
+                chunk.mesh.face_count(),
+                chunk.mesh.half_edges().len()
+            );
+        }
+    }
+
+    stats
+}
+
+/// Run one budget-aware split pass: evaluate edges by curvature, split highest-curvature
+/// edges first, respecting the vertex budget.
+///
+/// Returns the number of edges split.
+fn split_pass_budget(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    influence_radius: f32,
+    config: &TessellationConfig,
+    budget: &mut VertexBudget,
+    next_original_vertex_id: &mut u32,
+) -> usize {
+    if !budget.can_split() {
+        return 0;
+    }
+
+    let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
+
+    // Evaluate edges by curvature and collect split candidates with their scores
+    let mut split_candidates: Vec<(VertexId, VertexId, f32)> = Vec::new(); // (v0, v1, dihedral_angle)
+    for &edge_id in &edges_in_range {
+        let eval = evaluate_edge_curvature(&chunk.mesh, edge_id, config);
+        if eval.decision == TessellationDecision::Split {
+            let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+            let v0 = he.origin;
+            let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+            let v1 = next_he.origin;
+
+            // Check minimum edge length floor
+            if config.min_edge_length > 0.0 {
+                let v0_pos = chunk.mesh.vertex(v0).map(|v| v.position);
+                let v1_pos = chunk.mesh.vertex(v1).map(|v| v.position);
+                if let (Some(p0), Some(p1)) = (v0_pos, v1_pos) {
+                    if p0.distance(p1) < config.min_edge_length {
+                        continue;
+                    }
+                }
+            }
+
+            split_candidates.push((v0, v1, eval.dihedral_angle));
+        }
+    }
+
+    // Sort by curvature DESCENDING (highest curvature = highest priority to split)
+    // Tiebreak by vertex pair for determinism
+    split_candidates.sort_by(|a, b| {
+        b.2.partial_cmp(&a.2)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
+                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                a_key.cmp(&b_key)
+            })
+    });
+
+    // Midpoint deduplication: prevents splitting the same edge twice
+    let mut midpoint_map: HashMap<(VertexId, VertexId), VertexId> = HashMap::new();
+    let mut actual_splits = 0usize;
+
+    for (v0, v1, _curvature) in split_candidates {
+        // Budget check
+        if !budget.can_split() {
+            break;
+        }
+
+        // Safety: max faces check
+        if chunk.mesh.face_count() >= config.max_faces_per_chunk {
+            break;
+        }
+
+        // Deduplicate: skip if this edge was already split
+        let key = if v0.0 < v1.0 { (v0, v1) } else { (v1, v0) };
+        if midpoint_map.contains_key(&key) {
+            continue;
+        }
+
+        // Skip boundary edges
+        if chunk.boundary_vertices.contains_key(&v0)
+            || chunk.boundary_vertices.contains_key(&v1)
+        {
+            continue;
+        }
+
+        // Look up CURRENT half-edge ID (may have changed from earlier splits)
+        let Some(edge_id) = chunk.mesh.find_half_edge(v0, v1) else {
+            continue;
+        };
+
+        // Use curvature-aware split to preserve surface shape
+        if let Some(split_result) = split_edge_curvature_aware(&mut chunk.mesh, edge_id) {
+            midpoint_map.insert(key, split_result.new_vertex);
+            actual_splits += 1;
+            budget.record_split();
+
+            // Register new vertex with globally unique original ID
+            let unique_original_id = VertexId(*next_original_vertex_id);
+            *next_original_vertex_id += 1;
+            chunk
+                .local_to_original
+                .insert(split_result.new_vertex, unique_original_id);
+            chunk
+                .original_to_local
+                .insert(unique_original_id, split_result.new_vertex);
+        }
+    }
+
+    if actual_splits > 0 {
+        chunk.mesh.rebuild_twins_from_edge_map();
+        let new_verts: Vec<VertexId> = midpoint_map.values().copied().collect();
+        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5);
+    }
+
+    actual_splits
+}
+
+/// Run one budget-aware collapse pass: collapse lowest-curvature edges first.
+///
+/// Also triggers forced collapse when over budget, even for edges above the
+/// curvature threshold, to bring vertex count back within the budget.
+///
+/// Returns the number of edges collapsed.
+fn collapse_pass_budget(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    influence_radius: f32,
+    config: &TessellationConfig,
+    budget: &mut VertexBudget,
+) -> usize {
+    let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
+    let over_budget = budget.is_over_budget();
+
+    // Collect collapse candidates with curvature scores
+    let mut collapse_candidates: Vec<(VertexId, VertexId, f32)> = Vec::new();
+    for &edge_id in &edges_in_range {
+        let eval = evaluate_edge_curvature(&chunk.mesh, edge_id, config);
+
+        // Candidate if: below curvature threshold OR we're over budget
+        let is_candidate = eval.decision == TessellationDecision::Collapse || over_budget;
+        if !is_candidate {
+            continue;
+        }
+
+        let check = can_collapse_edge_safe(&chunk.mesh, edge_id);
+        match check {
+            CollapseCheck::Safe(_) | CollapseCheck::UseEdgeFlip => {
+                let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+                let v0 = he.origin;
+                let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+                let v1 = next_he.origin;
+                collapse_candidates.push((v0, v1, eval.dihedral_angle));
+            }
+            CollapseCheck::Rejected(_) => {}
+        }
+    }
+
+    // Sort by curvature ASCENDING (lowest curvature = collapse first)
+    // Tiebreak by vertex pair for determinism
+    collapse_candidates.sort_by(|a, b| {
+        a.2.partial_cmp(&b.2)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
+                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                a_key.cmp(&b_key)
+            })
+    });
+
+    let mut actual_collapses = 0usize;
+
+    for (v0, v1, _curvature) in collapse_candidates {
+        if chunk.mesh.face_count() <= config.min_faces {
+            break;
+        }
+
+        // If we were collapsing just because we're over budget, stop once we're back within budget
+        if over_budget && !budget.is_over_budget() {
+            break;
+        }
+
+        // Skip boundary edges
+        if chunk.boundary_vertices.contains_key(&v0)
+            || chunk.boundary_vertices.contains_key(&v1)
+        {
+            continue;
+        }
+
+        // Look up CURRENT half-edge ID
+        let Some(edge_id) = chunk.mesh.find_half_edge(v0, v1) else {
+            continue;
+        };
+
+        match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
+            Some(CollapseOrFlipResult::Collapsed(_)) => {
+                actual_collapses += 1;
+                budget.record_collapse();
+            }
+            Some(CollapseOrFlipResult::Flipped) => {
+                // Edge flip improves quality but doesn't count as a collapse
+            }
+            None => {}
+        }
+    }
+
+    // Compact after collapses to remove dead elements
+    if actual_collapses > 0 {
+        let compaction = chunk.mesh.compact();
+
+        // Update local_to_original and original_to_local with remapped vertex IDs
+        let old_l2o = std::mem::take(&mut chunk.local_to_original);
+        for (old_local, original) in old_l2o {
+            if let Some(&new_local) = compaction.vertex_map.get(&old_local) {
+                chunk.local_to_original.insert(new_local, original);
+                chunk.original_to_local.insert(original, new_local);
+            }
+        }
+
+        // Rebuild original_to_local from local_to_original
+        chunk.original_to_local.clear();
+        for (&local, &original) in &chunk.local_to_original {
+            chunk.original_to_local.insert(original, local);
+        }
+
+        // Update boundary_vertices with remapped vertex IDs
+        let old_boundary = std::mem::take(&mut chunk.boundary_vertices);
+        for (old_local, refs) in old_boundary {
+            if let Some(&new_local) = compaction.vertex_map.get(&old_local) {
+                chunk.boundary_vertices.insert(new_local, refs);
+            }
+        }
+    }
+
+    actual_collapses
+}
+
+/// Run one split pass: evaluate edges, split those that are too long, rebuild twins, smooth.
+///
+/// Returns the number of edges split.
+fn split_pass(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    influence_radius: f32,
+    config: &TessellationConfig,
+    screen_config: &ScreenSpaceConfig,
+    next_original_vertex_id: &mut u32,
+) -> usize {
+    // Collect edges as vertex pairs (stable across topology changes)
+    let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
+
+    let mut edges_to_split: Vec<(VertexId, VertexId)> = Vec::new();
+    for &edge_id in &edges_in_range {
+        let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
+        if eval.decision == TessellationDecision::Split {
+            // Convert to vertex pair
+            let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+            let v0 = he.origin;
+            let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+            let v1 = next_he.origin;
+            edges_to_split.push((v0, v1));
+        }
+    }
+
+    // Sort vertex pairs for determinism
+    edges_to_split.sort_by_key(|(v0, v1)| {
+        let a = v0.0.min(v1.0);
+        let b = v0.0.max(v1.0);
+        (a, b)
+    });
+
+    // Midpoint deduplication: prevents splitting the same edge twice
+    let mut midpoint_map: HashMap<(VertexId, VertexId), VertexId> = HashMap::new();
+    let mut actual_splits = 0usize;
+
+    for (v0, v1) in edges_to_split {
+        // Safety: max faces check
+        if chunk.mesh.face_count() >= config.max_faces_per_chunk {
+            break;
+        }
+
+        // Deduplicate: skip if this edge was already split
+        let key = if v0.0 < v1.0 { (v0, v1) } else { (v1, v0) };
+        if midpoint_map.contains_key(&key) {
+            continue;
+        }
+
+        // Skip boundary edges
+        if chunk.boundary_vertices.contains_key(&v0)
+            || chunk.boundary_vertices.contains_key(&v1)
+        {
+            continue;
+        }
+
+        // Look up CURRENT half-edge ID (may have changed from earlier splits)
+        let Some(edge_id) = chunk.mesh.find_half_edge(v0, v1) else {
+            continue; // Edge no longer exists (modified by prior split)
+        };
+
+        // Use curvature-aware split to preserve surface shape
+        if let Some(split_result) = split_edge_curvature_aware(&mut chunk.mesh, edge_id) {
+            midpoint_map.insert(key, split_result.new_vertex);
+            actual_splits += 1;
+
+            // Register new vertex with globally unique original ID
+            let unique_original_id = VertexId(*next_original_vertex_id);
+            *next_original_vertex_id += 1;
+            chunk
+                .local_to_original
+                .insert(split_result.new_vertex, unique_original_id);
+            chunk
+                .original_to_local
+                .insert(unique_original_id, split_result.new_vertex);
+        }
+    }
+
+    if actual_splits > 0 {
+        // Rebuild twin pointers from the authoritative edge_map.
+        // Sequential splits can corrupt twin pointers because each split rewires
+        // next/prev/twin on surrounding half-edges that later splits reference.
+        // The edge_map is always correct (maintained by each split), so we use it
+        // to derive consistent twins.
+        chunk.mesh.rebuild_twins_from_edge_map();
+
+        // Tangent-plane smooth new vertices to prevent spiky/noisy mesh
+        let new_verts: Vec<VertexId> = midpoint_map.values().copied().collect();
+        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5);
+    }
+
+    actual_splits
+}
+
+/// Run one collapse pass: evaluate edges, collapse those that are too short.
+///
+/// Returns the number of edges collapsed.
+fn collapse_pass(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    influence_radius: f32,
+    config: &TessellationConfig,
+    screen_config: &ScreenSpaceConfig,
+) -> usize {
+    let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
+
+    // Collect collapse candidates as vertex pairs
+    let mut edges_to_collapse: Vec<(VertexId, VertexId)> = Vec::new();
+    for &edge_id in &edges_in_range {
+        let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
+        if eval.decision == TessellationDecision::Collapse {
+            let check = can_collapse_edge_safe(&chunk.mesh, edge_id);
+            match check {
+                CollapseCheck::Safe(_) | CollapseCheck::UseEdgeFlip => {
+                    let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+                    let v0 = he.origin;
+                    let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+                    let v1 = next_he.origin;
+                    edges_to_collapse.push((v0, v1));
+                }
+                CollapseCheck::Rejected(_) => {}
+            }
+        }
+    }
+
+    // Sort for determinism
+    edges_to_collapse.sort_by_key(|(v0, v1)| {
+        let a = v0.0.min(v1.0);
+        let b = v0.0.max(v1.0);
+        (a, b)
+    });
+
+    let mut actual_collapses = 0usize;
+
+    for (v0, v1) in edges_to_collapse {
+        if chunk.mesh.face_count() <= config.min_faces {
+            break;
+        }
+
+        // Skip boundary edges
+        if chunk.boundary_vertices.contains_key(&v0)
+            || chunk.boundary_vertices.contains_key(&v1)
+        {
+            continue;
+        }
+
+        // Look up CURRENT half-edge ID
+        let Some(edge_id) = chunk.mesh.find_half_edge(v0, v1) else {
+            continue;
+        };
+
+        match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
+            Some(CollapseOrFlipResult::Collapsed(_)) => {
+                actual_collapses += 1;
+            }
+            Some(CollapseOrFlipResult::Flipped) => {
+                // Edge flip improves quality but doesn't count as a collapse
+            }
+            None => {}
+        }
+    }
+
+    // Compact after collapses to remove dead elements
+    if actual_collapses > 0 {
+        let compaction = chunk.mesh.compact();
+
+        // Update local_to_original and original_to_local with remapped vertex IDs
+        let old_l2o = std::mem::take(&mut chunk.local_to_original);
+        for (old_local, original) in old_l2o {
+            if let Some(&new_local) = compaction.vertex_map.get(&old_local) {
+                chunk.local_to_original.insert(new_local, original);
+                chunk.original_to_local.insert(original, new_local);
+            }
+        }
+
+        // Rebuild original_to_local from local_to_original
+        chunk.original_to_local.clear();
+        for (&local, &original) in &chunk.local_to_original {
+            chunk.original_to_local.insert(original, local);
+        }
+
+        // Update boundary_vertices with remapped vertex IDs
+        let old_boundary = std::mem::take(&mut chunk.boundary_vertices);
+        for (old_local, refs) in old_boundary {
+            if let Some(&new_local) = compaction.vertex_map.get(&old_local) {
+                chunk.boundary_vertices.insert(new_local, refs);
+            }
+        }
+    }
+
+    actual_collapses
+}
+
+/// Apply tangent-plane smoothing to newly created split vertices and their 1-ring neighbors.
+///
+/// For each vertex, computes the Laplacian (average of neighbor positions), projects
+/// the displacement onto the tangent plane (defined by the vertex normal), and applies
+/// it with the given strength. This prevents spiky/noisy mesh after subdivision while
+/// preserving surface curvature.
+///
+/// Adapted from SculptGL Subdivision.js tangent smooth pass (lines 419-424).
+fn tangent_smooth_new_vertices(mesh: &mut HalfEdgeMesh, new_vertices: &[VertexId], strength: f32) {
+    if new_vertices.is_empty() {
+        return;
+    }
+
+    // Expand to include 1-ring neighbors of new vertices
+    let mut vertices_to_smooth: HashSet<VertexId> = HashSet::new();
+    for &vid in new_vertices {
+        vertices_to_smooth.insert(vid);
+        for neighbor in mesh.get_adjacent_vertices(vid) {
+            vertices_to_smooth.insert(neighbor);
+        }
+    }
+
+    // Read pass: calculate target positions
+    let mut new_positions: Vec<(VertexId, Vec3)> = Vec::new();
+
+    for &vid in &vertices_to_smooth {
+        let Some(vertex) = mesh.vertex(vid) else { continue };
+        let pos = vertex.position;
+        let normal = vertex.normal.normalize_or_zero();
+
+        // Skip if normal is zero (can't define tangent plane)
+        if normal.length_squared() < 0.001 {
+            continue;
+        }
+
+        let neighbors = mesh.get_adjacent_vertices(vid);
+        if neighbors.is_empty() {
+            continue;
+        }
+
+        // Laplacian: average of neighbor positions
+        let mut avg = Vec3::ZERO;
+        let mut count = 0;
+        for nid in &neighbors {
+            if let Some(n) = mesh.vertex(*nid) {
+                avg += n.position;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            continue;
+        }
+        avg /= count as f32;
+
+        // Project displacement onto tangent plane
+        let displacement = avg - pos;
+        let tangent_displacement = displacement - normal * displacement.dot(normal);
+
+        let smoothed = pos + tangent_displacement * strength;
+        new_positions.push((vid, smoothed));
+    }
+
+    // Write pass: apply positions
+    for (vid, new_pos) in new_positions {
+        mesh.set_vertex_position(vid, new_pos);
+    }
 }
 
 /// Statistics from a tessellation pass.
@@ -409,6 +878,13 @@ pub fn validate_chunk_after_tessellation(chunk: &MeshChunk) -> Result<(), String
     // Check 1: All faces are traversable with correct vertex count
     for i in 0..chunk.mesh.face_count() {
         let face_id = painting::half_edge::FaceId(i as u32);
+
+        // Skip faces orphaned by edge collapse (should not exist after compact(),
+        // but kept as a safety net)
+        if !chunk.mesh.is_face_valid(face_id) {
+            continue;
+        }
+
         let verts = chunk.mesh.get_face_vertices(face_id);
 
         if verts.len() < 3 {

@@ -10,16 +10,19 @@
 //! The pipeline ensures deterministic operation for undo/redo via dab replay.
 
 use crate::brush::{BrushInput, BrushPreset, DabResult, SculptBrushEngine};
+use crate::budget::VertexBudget;
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
 use crate::deformation::{apply_deformation, DabInfo};
 use crate::gpu::{update_normals_after_deformation, DirtyVertices};
 use crate::spatial::{Aabb as SpatialAabb, VertexOctree};
-use crate::tessellation::{tessellate_at_brush, ScreenSpaceConfig, TessellationStats};
-use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig};
+use crate::tessellation::{
+    tessellate_at_brush, tessellate_at_brush_budget, ScreenSpaceConfig, TessellationStats,
+};
+use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig, TessellationMode};
 use glam::Vec3;
 use painting::half_edge::VertexId;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, trace};
 
 /// Result of processing a single dab through the pipeline.
 #[derive(Debug, Default)]
@@ -104,8 +107,10 @@ pub struct SculptingPipeline {
     pub brush_engine: SculptBrushEngine,
     /// Pipeline configuration.
     pub config: PipelineConfig,
-    /// Current screen-space configuration (updated per frame).
+    /// Current screen-space configuration (updated per frame, used in ScreenSpace mode).
     screen_config: ScreenSpaceConfig,
+    /// Global vertex budget (used in BudgetCurvature mode).
+    pub budget: VertexBudget,
     /// State for the active stroke.
     active_stroke_state: Option<ActiveStrokeState>,
     /// Per-chunk octrees for spatial queries (lazily built).
@@ -119,6 +124,7 @@ impl SculptingPipeline {
             brush_engine: SculptBrushEngine::new(brush_preset),
             config: PipelineConfig::default(),
             screen_config: ScreenSpaceConfig::default(),
+            budget: VertexBudget::default(),
             active_stroke_state: None,
             chunk_octrees: HashMap::new(),
         }
@@ -130,14 +136,23 @@ impl SculptingPipeline {
             brush_engine: SculptBrushEngine::new(brush_preset),
             config,
             screen_config: ScreenSpaceConfig::default(),
+            budget: VertexBudget::default(),
             active_stroke_state: None,
             chunk_octrees: HashMap::new(),
         }
     }
 
     /// Update the screen-space configuration (call when camera changes).
+    /// Used in `ScreenSpace` tessellation mode.
     pub fn update_screen_config(&mut self, screen_config: ScreenSpaceConfig) {
         self.screen_config = screen_config;
+    }
+
+    /// Update the vertex budget from pixel coverage data.
+    /// Used in `BudgetCurvature` tessellation mode.
+    pub fn update_budget_from_coverage(&mut self, pixel_coverage: u32) {
+        let vpp = self.config.tessellation_config.vertices_per_pixel;
+        self.budget.update_max(pixel_coverage, vpp);
     }
 
     /// Set the brush preset.
@@ -258,14 +273,12 @@ impl SculptingPipeline {
         first_dab_position: Option<Vec3>,
         chunked_mesh: &mut ChunkedMesh,
     ) -> DabProcessResult {
-        // INFO-level logging for debugging exponential face growth - always visible
-        info!(
+        debug!(
             "SCULPT DAB: faces={}, vertices={}, chunks={}",
             chunked_mesh.total_face_count(),
             chunked_mesh.total_vertex_count(),
             chunked_mesh.chunk_count()
         );
-        debug!("apply_dab_internal: START brush_center={:?}", dab.position);
         trace!("apply_dab_internal: START brush_center={:?}", dab.position);
         let mut result = DabProcessResult::default();
 
@@ -293,6 +306,11 @@ impl SculptingPipeline {
         // We'll write it back after the loop. This counter is used to assign globally
         // unique IDs to tessellation-created vertices, preventing ID collisions during chunk merges.
         let mut next_original_vertex_id = chunked_mesh.next_original_vertex_id;
+
+        // Pre-compute total vertex count for budget mode (avoids borrow conflict inside chunk loop)
+        if self.config.tessellation_config.mode == TessellationMode::BudgetCurvature {
+            self.budget.update_current(chunked_mesh.total_vertex_count());
+        }
 
         for chunk_id in affected_chunk_ids {
             trace!("apply_dab_internal: processing chunk {:?}", chunk_id);
@@ -368,14 +386,26 @@ impl SculptingPipeline {
             // Apply tessellation if enabled
             if self.config.tessellation_enabled {
                 trace!("apply_dab_internal: starting tessellation");
-                let tess_stats = tessellate_at_brush(
-                    chunk,
-                    brush_center,
-                    brush_radius,
-                    &self.config.tessellation_config,
-                    &self.screen_config,
-                    &mut next_original_vertex_id,
-                );
+                let tess_stats = match self.config.tessellation_config.mode {
+                    TessellationMode::BudgetCurvature => {
+                        tessellate_at_brush_budget(
+                            chunk,
+                            brush_center,
+                            brush_radius,
+                            &self.config.tessellation_config,
+                            &mut self.budget,
+                            &mut next_original_vertex_id,
+                        )
+                    }
+                    TessellationMode::ScreenSpace => tessellate_at_brush(
+                        chunk,
+                        brush_center,
+                        brush_radius,
+                        &self.config.tessellation_config,
+                        &self.screen_config,
+                        &mut next_original_vertex_id,
+                    ),
+                };
                 trace!(
                     "apply_dab_internal: tessellation done - split={}, collapsed={}",
                     tess_stats.edges_split,
@@ -389,8 +419,7 @@ impl SculptingPipeline {
                     panic!("Mesh corrupted by tessellation: {}", e);
                 }
 
-                // INFO-level logging for tessellation results
-                info!(
+                debug!(
                     "SCULPT TESS: split={}, collapsed={}, chunk_faces={}",
                     tess_stats.edges_split,
                     tess_stats.edges_collapsed,
