@@ -387,9 +387,31 @@ fn split_pass_budget(
             continue;
         };
 
-        // Use curvature-aware split to preserve surface shape
-        if let Some(split_result) = split_edge_curvature_aware(&mut chunk.mesh, edge_id) {
-            midpoint_map.insert(key, split_result.new_vertex);
+        // Check if this is a pass-through edge (both endpoints outside brush radius).
+        // For pass-through edges, use simple midpoint positioning because the vertex
+        // normals at endpoints like cube corners are diagonal averages that cause
+        // incorrect curvature-aware offsets.
+        let brush_radius = influence_radius / 1.5; // Convert back to brush radius
+        let brush_radius_sq = brush_radius * brush_radius;
+        let v0_pos = chunk.mesh.vertex(v0).map(|v| v.position);
+        let v1_pos = chunk.mesh.vertex(v1).map(|v| v.position);
+        let is_pass_through = match (v0_pos, v1_pos) {
+            (Some(p0), Some(p1)) => {
+                p0.distance_squared(brush_center) > brush_radius_sq
+                    && p1.distance_squared(brush_center) > brush_radius_sq
+            }
+            _ => false,
+        };
+
+        // Use simple midpoint for pass-through edges, curvature-aware for others
+        let split_result = if is_pass_through {
+            split_edge(&mut chunk.mesh, edge_id)
+        } else {
+            split_edge_curvature_aware(&mut chunk.mesh, edge_id)
+        };
+
+        if let Some(result) = split_result {
+            midpoint_map.insert(key, result.new_vertex);
             actual_splits += 1;
             budget.record_split();
 
@@ -398,17 +420,17 @@ fn split_pass_budget(
             *next_original_vertex_id += 1;
             chunk
                 .local_to_original
-                .insert(split_result.new_vertex, unique_original_id);
+                .insert(result.new_vertex, unique_original_id);
             chunk
                 .original_to_local
-                .insert(unique_original_id, split_result.new_vertex);
+                .insert(unique_original_id, result.new_vertex);
         }
     }
 
     if actual_splits > 0 {
         chunk.mesh.rebuild_twins_from_edge_map();
         let new_verts: Vec<VertexId> = midpoint_map.values().copied().collect();
-        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5);
+        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5, brush_center, influence_radius);
     }
 
     actual_splits
@@ -478,6 +500,7 @@ fn collapse_pass_budget(
     let mut actual_flips = 0usize;
     // Track vertices affected by previous collapses this pass (see collapse_pass for details).
     let mut dirty_vertices: HashSet<VertexId> = HashSet::new();
+    let influence_sq = influence_radius * influence_radius;
 
     for (v0, v1, _curvature, _len) in collapse_candidates {
         if chunk.mesh.face_count() <= config.min_faces {
@@ -493,6 +516,15 @@ fn collapse_pass_budget(
         if chunk.boundary_vertices.contains_key(&v0)
             || chunk.boundary_vertices.contains_key(&v1)
         {
+            continue;
+        }
+
+        // Don't collapse edges where either vertex is outside the brush area.
+        let v0_in = chunk.mesh.vertex(v0)
+            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
+        let v1_in = chunk.mesh.vertex(v1)
+            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
+        if !v0_in || !v1_in {
             continue;
         }
 
@@ -678,9 +710,31 @@ fn split_pass(
             continue; // Edge no longer exists (modified by prior split)
         };
 
-        // Use curvature-aware split to preserve surface shape
-        if let Some(split_result) = split_edge_curvature_aware(&mut chunk.mesh, edge_id) {
-            midpoint_map.insert(key, split_result.new_vertex);
+        // Check if this is a pass-through edge (both endpoints outside brush radius).
+        // For pass-through edges, use simple midpoint positioning because the vertex
+        // normals at endpoints like cube corners are diagonal averages that cause
+        // incorrect curvature-aware offsets.
+        let brush_radius = influence_radius / 1.5; // Convert back to brush radius
+        let brush_radius_sq = brush_radius * brush_radius;
+        let v0_pos = chunk.mesh.vertex(v0).map(|v| v.position);
+        let v1_pos = chunk.mesh.vertex(v1).map(|v| v.position);
+        let is_pass_through = match (v0_pos, v1_pos) {
+            (Some(p0), Some(p1)) => {
+                p0.distance_squared(brush_center) > brush_radius_sq
+                    && p1.distance_squared(brush_center) > brush_radius_sq
+            }
+            _ => false,
+        };
+
+        // Use simple midpoint for pass-through edges, curvature-aware for others
+        let split_result = if is_pass_through {
+            split_edge(&mut chunk.mesh, edge_id)
+        } else {
+            split_edge_curvature_aware(&mut chunk.mesh, edge_id)
+        };
+
+        if let Some(result) = split_result {
+            midpoint_map.insert(key, result.new_vertex);
             actual_splits += 1;
 
             // Register new vertex with globally unique original ID
@@ -688,10 +742,10 @@ fn split_pass(
             *next_original_vertex_id += 1;
             chunk
                 .local_to_original
-                .insert(split_result.new_vertex, unique_original_id);
+                .insert(result.new_vertex, unique_original_id);
             chunk
                 .original_to_local
-                .insert(unique_original_id, split_result.new_vertex);
+                .insert(unique_original_id, result.new_vertex);
         }
     }
 
@@ -705,7 +759,7 @@ fn split_pass(
 
         // Tangent-plane smooth new vertices to prevent spiky/noisy mesh
         let new_verts: Vec<VertexId> = midpoint_map.values().copied().collect();
-        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5);
+        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5, brush_center, influence_radius);
     }
 
     actual_splits
@@ -766,6 +820,8 @@ fn collapse_pass(
     // Skip any collapse involving a vertex whose ring may be broken.
     let mut dirty_vertices: HashSet<VertexId> = HashSet::new();
 
+    let influence_sq = influence_radius * influence_radius;
+
     for (v0, v1, _len) in edges_to_collapse {
         if chunk.mesh.face_count() <= config.min_faces {
             break;
@@ -775,6 +831,17 @@ fn collapse_pass(
         if chunk.boundary_vertices.contains_key(&v0)
             || chunk.boundary_vertices.contains_key(&v1)
         {
+            continue;
+        }
+
+        // Don't collapse edges where either vertex is outside the brush area.
+        // Collapsing repositions the surviving vertex, which would move
+        // geometry outside the brush influence.
+        let v0_in = chunk.mesh.vertex(v0)
+            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
+        let v1_in = chunk.mesh.vertex(v1)
+            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
+        if !v0_in || !v1_in {
             continue;
         }
 
@@ -891,11 +958,23 @@ fn collapse_pass(
 /// it with the given strength. This prevents spiky/noisy mesh after subdivision while
 /// preserving surface curvature.
 ///
+/// Uses distance-based falloff so vertices near the brush center get full smoothing
+/// while vertices at the edge of the influence radius get minimal smoothing. This
+/// prevents discontinuities at the brush boundary.
+///
 /// Adapted from SculptGL Subdivision.js tangent smooth pass (lines 419-424).
-fn tangent_smooth_new_vertices(mesh: &mut HalfEdgeMesh, new_vertices: &[VertexId], strength: f32) {
+fn tangent_smooth_new_vertices(
+    mesh: &mut HalfEdgeMesh,
+    new_vertices: &[VertexId],
+    strength: f32,
+    brush_center: Vec3,
+    influence_radius: f32,
+) {
     if new_vertices.is_empty() {
         return;
     }
+
+    let influence_sq = influence_radius * influence_radius;
 
     // Expand to include 1-ring neighbors of new vertices
     let mut vertices_to_smooth: HashSet<VertexId> = HashSet::new();
@@ -912,6 +991,12 @@ fn tangent_smooth_new_vertices(mesh: &mut HalfEdgeMesh, new_vertices: &[VertexId
     for &vid in &vertices_to_smooth {
         let Some(vertex) = mesh.vertex(vid) else { continue };
         let pos = vertex.position;
+
+        // Only smooth vertices within the brush influence area
+        let dist_sq = pos.distance_squared(brush_center);
+        if dist_sq > influence_sq {
+            continue;
+        }
         let normal = vertex.normal.normalize_or_zero();
 
         // Skip if normal is zero (can't define tangent plane)
@@ -942,7 +1027,14 @@ fn tangent_smooth_new_vertices(mesh: &mut HalfEdgeMesh, new_vertices: &[VertexId
         let displacement = avg - pos;
         let tangent_displacement = displacement - normal * displacement.dot(normal);
 
-        let smoothed = pos + tangent_displacement * strength;
+        // Apply distance-based falloff: full strength at center, zero at edge.
+        // This prevents discontinuities at the brush boundary where vertices
+        // would otherwise get full smoothing but no deformation.
+        let normalized_dist = dist_sq.sqrt() / influence_radius;
+        let falloff = 1.0 - normalized_dist; // Linear falloff: 1.0 at center, 0.0 at edge
+        let effective_strength = strength * falloff.max(0.0);
+
+        let smoothed = pos + tangent_displacement * effective_strength;
         new_positions.push((vid, smoothed));
     }
 
@@ -961,11 +1053,14 @@ pub struct TessellationStats {
     pub edges_collapsed: usize,
 }
 
-/// Collect all edge IDs that have at least one vertex within the given radius.
+/// Collect all edge IDs that intersect the brush sphere.
 ///
-/// Uses a face-based approach: for each vertex in range, find all faces
-/// containing that vertex and collect their edges. This is more robust
-/// than twin→next traversal for meshes with boundary edges or complex topology.
+/// An edge intersects the brush if:
+/// 1. At least one endpoint is within the radius, OR
+/// 2. The edge passes through the brush (closest point on segment is in range)
+///
+/// The second case catches long edges like cube face diagonals that span
+/// across the brush area without having either endpoint inside it.
 fn collect_edges_in_range(
     chunk: &MeshChunk,
     center: Vec3,
@@ -973,10 +1068,13 @@ fn collect_edges_in_range(
 ) -> HashSet<HalfEdgeId> {
     let radius_sq = radius * radius;
     let mut edges = HashSet::new();
+    let mut in_range_vertices: HashSet<VertexId> = HashSet::new();
 
+    // Pass 1: collect edges with at least one endpoint in range
     for vertex in chunk.mesh.vertices() {
         let dist_sq = vertex.position.distance_squared(center);
         if dist_sq <= radius_sq {
+            in_range_vertices.insert(vertex.id);
             // Get all faces adjacent to this vertex
             let faces = chunk.mesh.get_vertex_faces(vertex.id);
 
@@ -993,7 +1091,48 @@ fn collect_edges_in_range(
         }
     }
 
+    // Pass 2: collect edges that pass through the brush sphere
+    // (both endpoints outside range, but closest point on segment is in range)
+    for he in chunk.mesh.half_edges() {
+        if edges.contains(&he.id) {
+            continue; // already collected
+        }
+        let origin = he.origin;
+        if in_range_vertices.contains(&origin) {
+            continue; // origin in range, already handled
+        }
+        let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+        let dest = next_he.origin;
+        if in_range_vertices.contains(&dest) {
+            continue; // dest in range, edge from dest→origin already collected via twin
+        }
+        // Both endpoints outside range — check closest point on segment
+        let Some(p0) = chunk.mesh.vertex(origin).map(|v| v.position) else { continue };
+        let Some(p1) = chunk.mesh.vertex(dest).map(|v| v.position) else { continue };
+        if segment_intersects_sphere(p0, p1, center, radius_sq) {
+            edges.insert(he.id);
+        }
+    }
+
     edges
+}
+
+/// Check if a line segment's closest point to a sphere center is within radius.
+///
+/// Used to detect long edges that pass through the brush area even though
+/// neither endpoint is within the brush radius.
+fn segment_intersects_sphere(p0: Vec3, p1: Vec3, center: Vec3, radius_sq: f32) -> bool {
+    let edge_vec = p1 - p0;
+    let to_center = center - p0;
+    let edge_len_sq = edge_vec.length_squared();
+    if edge_len_sq < 1e-10 {
+        // Degenerate edge, just check distance to p0
+        return to_center.length_squared() <= radius_sq;
+    }
+    // Project center onto edge line, clamp to segment [0, 1]
+    let t = (to_center.dot(edge_vec) / edge_len_sq).clamp(0.0, 1.0);
+    let closest = p0 + edge_vec * t;
+    closest.distance_squared(center) <= radius_sq
 }
 
 /// Evaluate a single edge for tessellation decision.

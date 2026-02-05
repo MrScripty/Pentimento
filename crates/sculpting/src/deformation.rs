@@ -97,8 +97,10 @@ pub fn apply_push(
         let normalized_dist = distance / dab.radius;
         let strength = falloff.evaluate(normalized_dist) * dab.strength;
 
-        // Use vertex normal for direction
-        let direction = vertex.normal.normalize_or_zero();
+        // Use dab normal (surface normal at brush hit point) for direction.
+        // All vertices move in the same direction rather than per-vertex outward,
+        // which prevents cube corners from flying off along diagonal averaged normals.
+        let direction = dab.normal.normalize_or_zero();
         let displacement = direction * strength * 0.1; // Scale factor for reasonable movement
 
         original_positions.insert(vertex_id, vertex.position);
@@ -265,6 +267,16 @@ pub fn apply_autosmooth(
 
         let distance = vertex.position.distance(dab.position);
         if distance > dab.radius {
+            continue;
+        }
+
+        // Skip vertices at sharp features where the vertex normal disagrees
+        // significantly with the brush surface normal. At cube edges/corners,
+        // the averaged vertex normal is diagonal and the tangent-plane projection
+        // would move vertices in wrong directions.
+        let normal = vertex.normal.normalize_or_zero();
+        let dab_dir = dab.normal.normalize_or_zero();
+        if normal.dot(dab_dir) < 0.3 {
             continue;
         }
 

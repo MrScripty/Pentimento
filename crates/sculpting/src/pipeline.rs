@@ -267,15 +267,16 @@ impl SculptingPipeline {
 
     /// Apply a single dab to the chunked mesh (internal implementation).
     ///
-    /// Uses a two-pass approach to ensure boundary consistency:
-    /// 1. **Pass 1**: Deform vertices + update normals in all affected chunks
-    /// 2. **Boundary sync**: Synchronize boundary vertex positions across chunks
-    /// 3. **Pass 2**: Tessellate all affected chunks (with up-to-date boundary data)
-    /// 4. **Final sync**: Synchronize any new positions from tessellation smoothing
+    /// Uses a tessellation-first approach to ensure geometry exists before deformation:
+    /// 1. **Pass 1**: Tessellate all affected chunks (creates vertices for brush to deform)
+    /// 2. **Boundary sync**: Synchronize positions across chunks
+    /// 3. **Pass 2**: Deform vertices + update normals in all affected chunks
+    /// 4. **Final sync**: Synchronize final positions
     ///
-    /// This ordering ensures tessellation operates on consistent vertex positions
-    /// across chunk boundaries, preventing asymmetric tessellation decisions that
-    /// cause mesh tearing.
+    /// This ordering ensures that when long edges pass through the brush area,
+    /// they are split BEFORE deformation so the new vertices receive the brush effect.
+    /// Previously, tessellation ran after deformation, causing new vertices to be
+    /// placed on the un-deformed surface (creating dents/discontinuities).
     fn apply_dab_internal(
         &mut self,
         dab: &DabResult,
@@ -322,95 +323,14 @@ impl SculptingPipeline {
             self.budget.update_current(chunked_mesh.total_vertex_count());
         }
 
-        // ===== PASS 1: DEFORM all affected chunks =====
-        // Deform vertices and update normals before any tessellation happens.
-        // This ensures boundary sync (between passes) propagates the final
-        // deformed positions to all chunks.
-        for &chunk_id in &affected_chunk_ids {
-            trace!("apply_dab_internal: deforming chunk {:?}", chunk_id);
-            let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            // Build octree if needed
-            self.ensure_octree(chunk_id, chunk);
-
-            // Query vertices in brush radius
-            let octree = self.chunk_octrees.get(&chunk_id).unwrap();
-            let affected_vertices: Vec<VertexId> = octree
-                .query_sphere(brush_center, brush_radius)
-                .into_iter()
-                .collect();
-
-            if affected_vertices.is_empty() {
-                continue;
-            }
-
-            // Create dab info for deformation
-            let dab_info = DabInfo {
-                position: brush_center,
-                radius: brush_radius,
-                strength: dab.strength,
-                normal: dab.normal,
-            };
-
-            // Apply deformation
-            let falloff = self.brush_engine.preset.falloff;
-            let deformation_type = self.brush_engine.preset.deformation_type;
-
-            let _displacements = apply_deformation(
-                &mut chunk.mesh,
-                &affected_vertices,
-                &dab_info,
-                deformation_type,
-                falloff,
-                Some(stroke_direction),
-                Some(stroke_delta),
-            );
-
-            // Auto-smooth to dampen high-frequency dab ripples
-            let autosmooth = self.brush_engine.preset.autosmooth;
-            if autosmooth > 0.0 && !affected_vertices.is_empty() {
-                apply_autosmooth(
-                    &mut chunk.mesh,
-                    &affected_vertices,
-                    &dab_info,
-                    falloff,
-                    autosmooth,
-                );
-            }
-
-            result.vertices_modified += affected_vertices.len();
-            result.chunks_affected.push(chunk_id);
-
-            // Mark chunk dirty and track affected vertices
-            chunk.mark_dirty();
-
-            // Update normals for affected region
-            let dirty = DirtyVertices {
-                modified: affected_vertices.into_iter().collect(),
-            };
-            update_normals_after_deformation(chunk, &dirty);
-
-            // Invalidate octree (positions changed)
-            self.chunk_octrees.remove(&chunk_id);
-        }
-
-        // ===== BOUNDARY SYNC between deformation and tessellation =====
-        // Synchronize boundary vertex positions so tessellation in each chunk
-        // sees consistent positions/normals at chunk boundaries. Without this,
-        // tessellation evaluates curvature using stale boundary data from
-        // neighboring chunks, causing inconsistent split/collapse decisions.
-        if !result.chunks_affected.is_empty() {
-            trace!("apply_dab_internal: mid-pass boundary sync");
-            self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
-        }
-
-        // ===== PASS 2: TESSELLATE all affected chunks =====
-        // Now tessellation operates on consistent boundary data across all chunks.
+        // ===== PASS 1: TESSELLATE all affected chunks FIRST =====
+        // Tessellation runs before deformation so that when long edges pass through
+        // the brush area (e.g., cube face diagonals), they are split and the new
+        // vertices exist before the brush tries to deform them. Without this,
+        // new vertices from pass-through edge splits would be placed on the
+        // un-deformed surface, creating dents and discontinuities.
         if self.config.tessellation_enabled {
-            for &chunk_id in &result.chunks_affected.clone() {
+            for &chunk_id in &affected_chunk_ids {
                 let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
                     Some(c) => c,
                     None => continue,
@@ -504,15 +424,105 @@ impl SculptingPipeline {
                 let existing = result.tessellation.get_or_insert(TessellationStats::default());
                 existing.edges_split += tess_stats.edges_split;
                 existing.edges_collapsed += tess_stats.edges_collapsed;
+
+                // Track this chunk as affected (tessellation happened)
+                if tess_stats.edges_split > 0 || tess_stats.edges_collapsed > 0 {
+                    result.chunks_affected.push(chunk_id);
+                    // Invalidate octree since topology changed
+                    self.chunk_octrees.remove(&chunk_id);
+                }
             }
+        }
+
+        // ===== BOUNDARY SYNC between tessellation and deformation =====
+        // Synchronize boundary vertex positions after tessellation so all chunks
+        // see consistent positions before deformation.
+        if !result.chunks_affected.is_empty() {
+            trace!("apply_dab_internal: post-tessellation boundary sync");
+            self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
+        }
+
+        // ===== PASS 2: DEFORM all affected chunks =====
+        // Now deformation operates on the refined mesh, including any new vertices
+        // created by splitting pass-through edges.
+        for &chunk_id in &affected_chunk_ids {
+            trace!("apply_dab_internal: deforming chunk {:?}", chunk_id);
+            let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Rebuild octree since tessellation may have added vertices
+            self.chunk_octrees.remove(&chunk_id);
+            self.ensure_octree(chunk_id, chunk);
+
+            // Query vertices in brush radius (now includes new vertices from tessellation)
+            let octree = self.chunk_octrees.get(&chunk_id).unwrap();
+            let affected_vertices: Vec<VertexId> = octree
+                .query_sphere(brush_center, brush_radius)
+                .into_iter()
+                .collect();
+
+            if affected_vertices.is_empty() {
+                continue;
+            }
+
+            // Create dab info for deformation
+            let dab_info = DabInfo {
+                position: brush_center,
+                radius: brush_radius,
+                strength: dab.strength,
+                normal: dab.normal,
+            };
+
+            // Apply deformation
+            let falloff = self.brush_engine.preset.falloff;
+            let deformation_type = self.brush_engine.preset.deformation_type;
+
+            let _displacements = apply_deformation(
+                &mut chunk.mesh,
+                &affected_vertices,
+                &dab_info,
+                deformation_type,
+                falloff,
+                Some(stroke_direction),
+                Some(stroke_delta),
+            );
+
+            // Auto-smooth to dampen high-frequency dab ripples
+            let autosmooth = self.brush_engine.preset.autosmooth;
+            if autosmooth > 0.0 && !affected_vertices.is_empty() {
+                apply_autosmooth(
+                    &mut chunk.mesh,
+                    &affected_vertices,
+                    &dab_info,
+                    falloff,
+                    autosmooth,
+                );
+            }
+
+            result.vertices_modified += affected_vertices.len();
+            if !result.chunks_affected.contains(&chunk_id) {
+                result.chunks_affected.push(chunk_id);
+            }
+
+            // Mark chunk dirty and track affected vertices
+            chunk.mark_dirty();
+
+            // Update normals for affected region
+            let dirty = DirtyVertices {
+                modified: affected_vertices.into_iter().collect(),
+            };
+            update_normals_after_deformation(chunk, &dirty);
+
+            // Invalidate octree (positions changed)
+            self.chunk_octrees.remove(&chunk_id);
         }
 
         // Write back the updated vertex ID counter to the chunked mesh
         chunked_mesh.next_original_vertex_id = next_original_vertex_id;
 
-        // Final boundary sync: propagate any position changes from tessellation
-        // smoothing (tangent-plane smooth applies small position adjustments to
-        // new split vertices and their neighbors).
+        // Final boundary sync: propagate deformation positions across chunks
         trace!("apply_dab_internal: final boundary sync");
         self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
 

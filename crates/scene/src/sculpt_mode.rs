@@ -29,6 +29,18 @@ use crate::OutboundUiMessages;
 #[cfg(feature = "selection")]
 use crate::selection::Selected;
 
+/// Mode for interactive brush adjustment (Blender-style F key)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrushAdjustMode {
+    /// Not adjusting
+    #[default]
+    None,
+    /// Adjusting brush radius (F key)
+    Radius,
+    /// Adjusting brush strength (Shift+F key)
+    Strength,
+}
+
 /// Resource tracking sculpt mode state
 #[derive(Resource)]
 pub struct SculptState {
@@ -52,6 +64,12 @@ pub struct SculptState {
     pub last_world_pos: Option<Vec3>,
     /// Last frame time for timing
     pub last_time: f64,
+    /// Current brush adjustment mode (F key interaction)
+    pub adjust_mode: BrushAdjustMode,
+    /// Starting cursor position when adjustment began
+    pub adjust_start_cursor: Option<Vec2>,
+    /// Starting value when adjustment began
+    pub adjust_start_value: f32,
 }
 
 impl Default for SculptState {
@@ -67,6 +85,9 @@ impl Default for SculptState {
             current_stroke_id: None,
             last_world_pos: None,
             last_time: 0.0,
+            adjust_mode: BrushAdjustMode::None,
+            adjust_start_cursor: None,
+            adjust_start_value: 0.0,
         }
     }
 }
@@ -152,6 +173,7 @@ impl Plugin for SculptModePlugin {
                     update_sculpt_screen_config,
                     update_sculpt_budget,
                     handle_sculpt_mode_hotkey,
+                    handle_brush_adjustment,
                     handle_sculpt_input,
                     handle_sculpt_events,
                     sync_sculpt_chunks_to_gpu,
@@ -369,6 +391,136 @@ fn handle_sculpt_mode_hotkey(
 #[cfg(not(feature = "selection"))]
 fn handle_sculpt_mode_hotkey() {}
 
+/// Handle Blender-style brush adjustment (F for radius, Shift+F for strength)
+///
+/// - Press F: Begin radius adjustment, drag mouse horizontally to resize
+/// - Press Shift+F: Begin strength adjustment, drag mouse horizontally to change
+/// - Click or press Enter: Confirm adjustment
+/// - Press Escape: Cancel adjustment and restore original value
+fn handle_brush_adjustment(
+    key_input: Res<ButtonInput<KeyCode>>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut sculpt_state: ResMut<SculptState>,
+    mut sculpting_data: ResMut<SculptingData>,
+) {
+    // Only active in sculpt mode
+    if !sculpt_state.active {
+        return;
+    }
+
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    let cursor_pos = window.cursor_position();
+    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
+
+    // Check for starting adjustment mode
+    if key_input.just_pressed(KeyCode::KeyF) && sculpt_state.adjust_mode == BrushAdjustMode::None {
+        if shift {
+            // Shift+F: Strength adjustment
+            sculpt_state.adjust_mode = BrushAdjustMode::Strength;
+            sculpt_state.adjust_start_cursor = cursor_pos;
+            sculpt_state.adjust_start_value = sculpt_state.brush_strength;
+            info!("Brush strength adjustment: drag horizontally (current: {:.2})", sculpt_state.brush_strength);
+        } else {
+            // F: Radius adjustment
+            sculpt_state.adjust_mode = BrushAdjustMode::Radius;
+            sculpt_state.adjust_start_cursor = cursor_pos;
+            sculpt_state.adjust_start_value = sculpt_state.brush_radius;
+            info!("Brush radius adjustment: drag horizontally (current: {:.2})", sculpt_state.brush_radius);
+        }
+        return;
+    }
+
+    // Handle active adjustment
+    if sculpt_state.adjust_mode != BrushAdjustMode::None {
+        // Cancel with Escape
+        if key_input.just_pressed(KeyCode::Escape) {
+            match sculpt_state.adjust_mode {
+                BrushAdjustMode::Radius => {
+                    sculpt_state.brush_radius = sculpt_state.adjust_start_value;
+                    // Update pipeline
+                    if let Some(pipeline) = &mut sculpting_data.pipeline {
+                        let mut preset = pipeline.brush_preset().clone();
+                        preset.radius = sculpt_state.brush_radius;
+                        pipeline.set_brush_preset(preset);
+                    }
+                    info!("Radius adjustment cancelled, restored to {:.2}", sculpt_state.brush_radius);
+                }
+                BrushAdjustMode::Strength => {
+                    sculpt_state.brush_strength = sculpt_state.adjust_start_value;
+                    // Update pipeline
+                    if let Some(pipeline) = &mut sculpting_data.pipeline {
+                        let mut preset = pipeline.brush_preset().clone();
+                        preset.strength = sculpt_state.brush_strength;
+                        pipeline.set_brush_preset(preset);
+                    }
+                    info!("Strength adjustment cancelled, restored to {:.2}", sculpt_state.brush_strength);
+                }
+                BrushAdjustMode::None => {}
+            }
+            sculpt_state.adjust_mode = BrushAdjustMode::None;
+            sculpt_state.adjust_start_cursor = None;
+            return;
+        }
+
+        // Confirm with Enter or Left Click
+        if key_input.just_pressed(KeyCode::Enter) || mouse_button.just_pressed(MouseButton::Left) {
+            match sculpt_state.adjust_mode {
+                BrushAdjustMode::Radius => {
+                    info!("Brush radius set to {:.2}", sculpt_state.brush_radius);
+                }
+                BrushAdjustMode::Strength => {
+                    info!("Brush strength set to {:.2}", sculpt_state.brush_strength);
+                }
+                BrushAdjustMode::None => {}
+            }
+            sculpt_state.adjust_mode = BrushAdjustMode::None;
+            sculpt_state.adjust_start_cursor = None;
+            return;
+        }
+
+        // Update value based on mouse movement
+        if let (Some(start_pos), Some(current_pos)) = (sculpt_state.adjust_start_cursor, cursor_pos) {
+            let delta_x = current_pos.x - start_pos.x;
+            // Scale: 200 pixels = double/halve for radius, 200 pixels = ±0.5 for strength
+            let sensitivity = 200.0;
+
+            match sculpt_state.adjust_mode {
+                BrushAdjustMode::Radius => {
+                    // Exponential scaling for radius (more intuitive)
+                    let factor = (delta_x / sensitivity).exp2();
+                    let new_radius = (sculpt_state.adjust_start_value * factor).max(0.01).min(10.0);
+                    sculpt_state.brush_radius = new_radius;
+
+                    // Update pipeline
+                    if let Some(pipeline) = &mut sculpting_data.pipeline {
+                        let mut preset = pipeline.brush_preset().clone();
+                        preset.radius = new_radius;
+                        pipeline.set_brush_preset(preset);
+                    }
+                }
+                BrushAdjustMode::Strength => {
+                    // Linear scaling for strength
+                    let delta = delta_x / sensitivity;
+                    let new_strength = (sculpt_state.adjust_start_value + delta).clamp(0.0, 1.0);
+                    sculpt_state.brush_strength = new_strength;
+
+                    // Update pipeline
+                    if let Some(pipeline) = &mut sculpting_data.pipeline {
+                        let mut preset = pipeline.brush_preset().clone();
+                        preset.strength = new_strength;
+                        pipeline.set_brush_preset(preset);
+                    }
+                }
+                BrushAdjustMode::None => {}
+            }
+        }
+    }
+}
+
 /// Handle mouse input for sculpting
 fn handle_sculpt_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
@@ -384,6 +536,13 @@ fn handle_sculpt_input(
 ) {
     // Only process if sculpt mode is active
     if !sculpt_state.active {
+        return;
+    }
+
+    // Don't process sculpting while adjusting brush parameters
+    if sculpt_state.adjust_mode != BrushAdjustMode::None {
+        // Consume cursor events to prevent them from accumulating
+        cursor_events.read().for_each(drop);
         return;
     }
 
