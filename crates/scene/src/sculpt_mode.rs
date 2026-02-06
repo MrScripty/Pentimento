@@ -8,15 +8,16 @@
 
 use bevy::ecs::message::Message;
 use bevy::input::mouse::MouseButton;
-use bevy::math::Affine3A;
-use bevy::mesh::{Indices, Meshable, PrimitiveTopology, VertexAttributeValues};
+use bevy::math::{Affine3A, Isometry3d};
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow};
 use painting::half_edge::HalfEdgeMesh;
 use pentimento_ipc::{BevyToUi, EditMode};
 use sculpting::{
     partition_mesh, BrushInput, BrushPreset, ChunkConfig, ChunkedMesh, DeformationType,
-    PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig, TessellationMode,
+    FalloffCurve, PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig,
+    TessellationMode,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,6 +55,10 @@ pub struct SculptState {
     pub brush_radius: f32,
     /// Brush strength (0.0 - 1.0)
     pub brush_strength: f32,
+    /// Brush hardness (0.0 - 1.0). Defines the inner zone of full strength.
+    pub brush_hardness: f32,
+    /// Falloff curve type for the brush
+    pub brush_falloff: FalloffCurve,
     /// Tessellation configuration
     pub tessellation_config: TessellationConfig,
     /// Chunk sizing configuration
@@ -80,6 +85,8 @@ impl Default for SculptState {
             deformation_type: DeformationType::Push,
             brush_radius: 0.5,
             brush_strength: 1.0,
+            brush_hardness: 0.5,
+            brush_falloff: FalloffCurve::Smooth,
             tessellation_config: TessellationConfig::default(),
             chunk_config: ChunkConfig::default(),
             current_stroke_id: None,
@@ -155,10 +162,6 @@ pub enum SculptEvent {
     StrokeCancel,
 }
 
-/// Component for the brush visualization sphere
-#[derive(Component)]
-pub struct SculptBrushIndicator;
-
 /// Plugin for sculpt mode functionality
 pub struct SculptModePlugin;
 
@@ -177,7 +180,7 @@ impl Plugin for SculptModePlugin {
                     handle_sculpt_input,
                     handle_sculpt_events,
                     sync_sculpt_chunks_to_gpu,
-                    update_brush_indicator,
+                    render_sculpt_brush_gizmo,
                 )
                     .chain(),
             );
@@ -318,40 +321,6 @@ fn update_sculpt_budget(
     // Update pipeline budget
     if let Some(pipeline) = &mut sculpting_data.pipeline {
         pipeline.update_budget_from_coverage(total_coverage);
-    }
-}
-
-/// Command to spawn brush indicator with proper assets
-struct SpawnBrushIndicatorCommand;
-
-impl Command for SpawnBrushIndicatorCommand {
-    fn apply(self, world: &mut World) {
-        // Create sphere mesh for brush indicator
-        let sphere = Sphere::new(0.5);
-        let mesh = sphere.mesh().build();
-        let mesh_handle = world.resource_mut::<Assets<Mesh>>().add(mesh);
-
-        // Create semi-transparent material with higher visibility
-        let material = StandardMaterial {
-            base_color: Color::srgba(0.3, 0.7, 1.0, 0.5),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None, // Show both sides
-            depth_bias: 1.0, // Push forward to avoid z-fighting
-            ..default()
-        };
-        let material_handle = world
-            .resource_mut::<Assets<StandardMaterial>>()
-            .add(material);
-
-        // Spawn the brush indicator entity
-        world.spawn((
-            Mesh3d(mesh_handle),
-            MeshMaterial3d(material_handle),
-            Transform::default(),
-            Visibility::Hidden,
-            SculptBrushIndicator,
-        ));
     }
 }
 
@@ -774,7 +743,6 @@ fn handle_sculpt_events(
     meshes: Res<Assets<Mesh>>,
     material_query: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    brush_indicators: Query<Entity, With<SculptBrushIndicator>>,
     mut commands: Commands,
     time: Res<Time>,
 ) {
@@ -824,6 +792,8 @@ fn handle_sculpt_events(
                                 let mut preset = BrushPreset::push();
                                 preset.radius = sculpt_state.brush_radius;
                                 preset.strength = sculpt_state.brush_strength;
+                                preset.hardness = sculpt_state.brush_hardness;
+                                preset.falloff = sculpt_state.brush_falloff;
 
                                 // Enable tessellation for dynamic topology
                                 let pipeline_config = PipelineConfig {
@@ -846,11 +816,6 @@ fn handle_sculpt_events(
                         }
                     }
                 }
-
-                // Spawn brush indicator with actual mesh and material
-                // The actual mesh/material creation is handled in a separate startup system
-                // Here we just mark that we need to spawn one
-                commands.queue(SpawnBrushIndicatorCommand);
 
                 // Notify UI
                 outbound.send(BevyToUi::EditModeChanged {
@@ -880,11 +845,6 @@ fn handle_sculpt_events(
                 // Remove chunk entities
                 for entity in sculpting_data.chunk_entities.drain(..) {
                     commands.entity(entity).despawn();
-                }
-
-                // Despawn brush indicator
-                for indicator in brush_indicators.iter() {
-                    commands.entity(indicator).despawn();
                 }
 
                 edit_mode.mode = EditMode::None;
@@ -1287,66 +1247,106 @@ fn half_edge_to_bevy_mesh(he_mesh: &HalfEdgeMesh) -> Option<Mesh> {
     Some(mesh)
 }
 
-/// Update brush indicator position and visibility
-fn update_brush_indicator(
+/// Render the sculpt brush gizmo: a wire circle at the brush radius aligned to the
+/// surface normal, plus a falloff profile curve showing hardness and falloff shape.
+fn render_sculpt_brush_gizmo(
     sculpt_state: Res<SculptState>,
-    mut indicator_query: Query<(&mut Transform, &mut Visibility), With<SculptBrushIndicator>>,
+    mut gizmos: Gizmos,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
 ) {
-    let Ok((mut transform, mut visibility)) = indicator_query.single_mut() else {
-        return;
-    };
-
     if !sculpt_state.active {
-        *visibility = Visibility::Hidden;
         return;
     }
 
     let Some(target_entity) = sculpt_state.target_entity else {
-        *visibility = Visibility::Hidden;
         return;
     };
 
     let Ok((camera, camera_transform)) = camera_query.single() else {
-        *visibility = Visibility::Hidden;
         return;
     };
 
     let Ok(window) = windows.single() else {
-        *visibility = Visibility::Hidden;
         return;
     };
 
     let Some(cursor_pos) = window.cursor_position() else {
-        *visibility = Visibility::Hidden;
         return;
     };
 
     let Ok((mesh_handle, mesh_transform)) = mesh_query.get(target_entity) else {
-        *visibility = Visibility::Hidden;
         return;
     };
 
     let Some(mesh) = meshes.get(&mesh_handle.0) else {
-        *visibility = Visibility::Hidden;
         return;
     };
 
-    // Raycast to find position
-    if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-        if let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform) {
-            *visibility = Visibility::Visible;
-            // Offset slightly along normal to avoid z-fighting
-            let offset = normal * (sculpt_state.brush_radius * 0.1);
-            transform.translation = world_pos + offset;
-            transform.scale = Vec3::splat(sculpt_state.brush_radius * 2.0);
-        } else {
-            *visibility = Visibility::Hidden;
-        }
+    let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
+        return;
+    };
+
+    let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
+    else {
+        return;
+    };
+
+    let radius = sculpt_state.brush_radius;
+
+    // Small offset along normal to prevent z-fighting with the mesh surface
+    let offset = normal * (radius * 0.005);
+    let center = world_pos + offset;
+
+    // Orient the circle so its plane is perpendicular to the surface normal
+    let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
+
+    // --- Outer circle (brush radius) ---
+    let circle_color = Color::srgba(0.3, 0.7, 1.0, 0.8);
+    gizmos.circle(
+        Isometry3d::new(center, rotation),
+        radius,
+        circle_color,
+    );
+
+    // --- Falloff profile curve ---
+    // Orient the profile so its "up" direction faces the camera for readability.
+    let camera_pos = camera_transform.translation();
+    let view_dir = (camera_pos - center).normalize();
+    // Project view direction onto the circle plane to get profile "up"
+    let projected = view_dir - normal * view_dir.dot(normal);
+    let profile_up = if projected.length_squared() > 0.001 {
+        projected.normalize()
     } else {
-        *visibility = Visibility::Hidden;
+        // Viewing straight along the normal — fall back to an arbitrary in-plane axis
+        rotation * Vec3::Y
+    };
+    // The profile extends horizontally along the perpendicular in-plane axis
+    let profile_across = normal.cross(profile_up).normalize();
+
+    let segments = 32u32;
+    let max_height = radius * 0.4;
+    let profile_color = Color::srgba(0.3, 0.7, 1.0, 0.4);
+    let falloff = sculpt_state.brush_falloff;
+    let hardness = sculpt_state.brush_hardness;
+
+    let mut prev_point: Option<Vec3> = None;
+
+    for i in 0..=segments {
+        let t = i as f32 / segments as f32; // 0.0 to 1.0
+        let x = (t * 2.0 - 1.0) * radius; // -radius to +radius
+        let d = x.abs() / radius; // normalized distance 0..1
+
+        let strength = falloff.evaluate_with_hardness(d, hardness);
+        let y = strength * max_height;
+
+        let point = center + profile_across * x + profile_up * y;
+
+        if let Some(prev) = prev_point {
+            gizmos.line(prev, point, profile_color);
+        }
+        prev_point = Some(point);
     }
 }

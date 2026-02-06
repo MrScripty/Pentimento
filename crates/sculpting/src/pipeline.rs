@@ -473,6 +473,7 @@ impl SculptingPipeline {
                 radius: brush_radius,
                 strength: dab.strength,
                 normal: dab.normal,
+                hardness: self.brush_engine.preset.hardness,
             };
 
             // Apply deformation

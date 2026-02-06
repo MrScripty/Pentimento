@@ -50,6 +50,25 @@ impl FalloffCurve {
             }
         }
     }
+
+    /// Calculate falloff strength with hardness.
+    ///
+    /// Hardness (0.0–1.0) defines an inner zone of full strength.
+    /// Within `radius * hardness`, strength is 1.0. Beyond that, the falloff
+    /// curve applies over the remaining distance to the edge.
+    pub fn evaluate_with_hardness(&self, normalized_distance: f32, hardness: f32) -> f32 {
+        let d = normalized_distance.clamp(0.0, 1.0);
+        let h = hardness.clamp(0.0, 1.0);
+        if d <= h {
+            return 1.0;
+        }
+        if h >= 1.0 {
+            return 1.0;
+        }
+        // Remap (h..1.0) to (0.0..1.0) for curve evaluation
+        let remapped = (d - h) / (1.0 - h);
+        self.evaluate(remapped)
+    }
 }
 
 /// Brush preset configuration.
@@ -75,9 +94,17 @@ pub struct BrushPreset {
     /// Dampens high-frequency surface ripples from dab boundaries.
     #[serde(default = "default_autosmooth")]
     pub autosmooth: f32,
+    /// Hardness (0.0 to 1.0). Defines the inner zone of full strength as a
+    /// fraction of the radius. The falloff curve only applies beyond this zone.
+    #[serde(default = "default_hardness")]
+    pub hardness: f32,
 }
 
 fn default_autosmooth() -> f32 {
+    0.5
+}
+
+fn default_hardness() -> f32 {
     0.5
 }
 
@@ -93,6 +120,7 @@ impl Default for BrushPreset {
             pressure_affects_strength: true,
             spacing: 0.25,
             autosmooth: 0.5,
+            hardness: 0.5,
         }
     }
 }
@@ -491,6 +519,31 @@ mod tests {
         let smooth_near_end = FalloffCurve::Smooth.evaluate(0.99);
         assert!(smooth_near_start > 0.99);
         assert!(smooth_near_end < 0.01);
+    }
+
+    #[test]
+    fn test_falloff_with_hardness() {
+        // With hardness=0.0, should behave identically to evaluate()
+        for curve in [FalloffCurve::Linear, FalloffCurve::Smooth, FalloffCurve::Sharp, FalloffCurve::Sphere] {
+            assert!((curve.evaluate_with_hardness(0.0, 0.0) - curve.evaluate(0.0)).abs() < 0.001);
+            assert!((curve.evaluate_with_hardness(0.5, 0.0) - curve.evaluate(0.5)).abs() < 0.001);
+            assert!((curve.evaluate_with_hardness(1.0, 0.0) - curve.evaluate(1.0)).abs() < 0.001);
+        }
+
+        // With hardness=1.0, everything should be full strength
+        for curve in [FalloffCurve::Linear, FalloffCurve::Smooth, FalloffCurve::Sharp, FalloffCurve::Sphere] {
+            assert!((curve.evaluate_with_hardness(0.0, 1.0) - 1.0).abs() < 0.001);
+            assert!((curve.evaluate_with_hardness(0.5, 1.0) - 1.0).abs() < 0.001);
+            assert!((curve.evaluate_with_hardness(1.0, 1.0) - 1.0).abs() < 0.001);
+        }
+
+        // With hardness=0.5, inner half should be full strength
+        assert!((FalloffCurve::Linear.evaluate_with_hardness(0.0, 0.5) - 1.0).abs() < 0.001);
+        assert!((FalloffCurve::Linear.evaluate_with_hardness(0.5, 0.5) - 1.0).abs() < 0.001);
+        // At d=0.75 with hardness=0.5: remapped = (0.75-0.5)/0.5 = 0.5, linear(0.5) = 0.5
+        assert!((FalloffCurve::Linear.evaluate_with_hardness(0.75, 0.5) - 0.5).abs() < 0.001);
+        // At edge: remapped = 1.0, linear(1.0) = 0.0
+        assert!((FalloffCurve::Linear.evaluate_with_hardness(1.0, 0.5) - 0.0).abs() < 0.001);
     }
 
     #[test]

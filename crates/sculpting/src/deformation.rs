@@ -73,6 +73,7 @@ pub struct DabInfo {
     pub normal: Vec3,
     pub radius: f32,
     pub strength: f32,
+    pub hardness: f32,
 }
 
 /// Apply push deformation - moves vertices along surface normal.
@@ -95,7 +96,7 @@ pub fn apply_push(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Use dab normal (surface normal at brush hit point) for direction.
         // All vertices move in the same direction rather than per-vertex outward,
@@ -131,7 +132,7 @@ pub fn apply_pull(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Direction toward brush center
         let direction = (dab.position - vertex.position).normalize_or_zero();
@@ -166,7 +167,7 @@ pub fn apply_grab(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist);
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness);
 
         // Move along stroke direction
         let displacement = stroke_delta * strength;
@@ -223,7 +224,7 @@ pub fn apply_smooth(
         avg_pos /= count as f32;
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Blend toward average
         let current_pos = vertex.position;
@@ -306,7 +307,7 @@ pub fn apply_autosmooth(
 
         // Scale by falloff and autosmooth strength
         let normalized_dist = distance / dab.radius;
-        let effective = falloff.evaluate(normalized_dist) * autosmooth_strength;
+        let effective = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * autosmooth_strength;
 
         targets.push((vid, vertex.position + tangent_offset * effective));
     }
@@ -372,7 +373,7 @@ pub fn apply_flatten(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Project onto plane
         let to_vertex = vertex.position - avg_pos;
@@ -409,7 +410,7 @@ pub fn apply_inflate(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Move along vertex's own normal
         let direction = vertex.normal.normalize_or_zero();
@@ -443,7 +444,7 @@ pub fn apply_pinch(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Direction toward brush center, but projected onto tangent plane
         let to_center = dab.position - vertex.position;
@@ -489,7 +490,7 @@ pub fn apply_crease(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate(normalized_dist) * dab.strength;
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Calculate perpendicular distance from stroke line
         let to_vertex = vertex.position - dab.position;
@@ -569,6 +570,7 @@ mod tests {
             normal: Vec3::Y,
             radius: 1.0,
             strength: 0.5,
+            hardness: 0.5,
         };
 
         assert_eq!(dab.position, Vec3::new(0.5, 0.0, 0.0));
