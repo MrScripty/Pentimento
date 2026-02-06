@@ -25,6 +25,10 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::window::RawHandleWrapper;
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
+use pentimento_ipc::UiToBevy;
+use pentimento_scene::{
+    AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, SceneAmbientOcclusion, SceneLighting,
+};
 
 use crate::config::{CompositeMode, PentimentoConfig};
 use crate::embedded_ui::UiAssets;
@@ -494,6 +498,90 @@ pub fn handle_frontend_resize(
 }
 
 // ============================================================================
+// IPC Message Handling
+// ============================================================================
+
+/// Process IPC messages from the frontend (Capture, Overlay, and CEF modes).
+///
+/// This system forwards outbound messages (Bevy→UI) and processes inbound
+/// messages (UI→Bevy) using the unified `FrontendResource` / `CompositeBackend`
+/// trait, so it works identically for all capture-based backends.
+fn handle_frontend_ipc_messages(world: &mut World) {
+    // Send outbound messages to the UI first
+    let outbound_msgs = {
+        let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() else {
+            return;
+        };
+        outbound.drain()
+    };
+
+    if !outbound_msgs.is_empty() {
+        if let Some(mut frontend) = world.get_non_send_resource_mut::<FrontendResource>() {
+            for msg in outbound_msgs {
+                if let Err(e) = frontend.backend.send_to_ui(msg) {
+                    warn!("Failed to send message to UI: {:?}", e);
+                }
+            }
+        }
+    }
+
+    // Collect inbound messages (avoid borrow conflicts)
+    let messages: Vec<UiToBevy> = {
+        let Some(mut frontend) = world.get_non_send_resource_mut::<FrontendResource>() else {
+            return;
+        };
+        let mut msgs = Vec::new();
+        while let Some(msg) = frontend.backend.try_recv_from_ui() {
+            msgs.push(msg);
+        }
+        msgs
+    };
+
+    // Process messages
+    for msg in messages {
+        match msg {
+            UiToBevy::AddObject(request) => {
+                if let Some(mut events) =
+                    world.get_resource_mut::<bevy::ecs::message::Messages<AddObjectEvent>>()
+                {
+                    events.write(AddObjectEvent(request));
+                    info!("Dispatched AddObjectEvent from UI");
+                }
+            }
+            UiToBevy::AddPaintCanvas(request) => {
+                if let Some(mut events) =
+                    world.get_resource_mut::<bevy::ecs::message::Messages<CanvasPlaneEvent>>()
+                {
+                    events.write(CanvasPlaneEvent::CreateInFrontOfCamera {
+                        width: request.width.unwrap_or(1024),
+                        height: request.height.unwrap_or(1024),
+                    });
+                    info!("Dispatched CanvasPlaneEvent::CreateInFrontOfCamera from UI");
+                }
+            }
+            UiToBevy::UiDirty => {
+                // Already handled by dirty flag in webview
+            }
+            UiToBevy::UpdateLighting(settings) => {
+                if let Some(mut lighting) = world.get_resource_mut::<SceneLighting>() {
+                    lighting.settings = settings;
+                    info!("Updated lighting settings from UI");
+                }
+            }
+            UiToBevy::UpdateAmbientOcclusion(settings) => {
+                if let Some(mut ao_resource) = world.get_resource_mut::<SceneAmbientOcclusion>() {
+                    ao_resource.update(settings);
+                    info!("Updated ambient occlusion settings from UI");
+                }
+            }
+            _ => {
+                debug!("Unhandled frontend IPC message: {:?}", msg);
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Plugin
 // ============================================================================
 
@@ -511,7 +599,8 @@ impl Plugin for RenderPlugin {
                     .init_resource::<LastWindowSize>()
                     .add_systems(Startup, setup_frontend)
                     .add_systems(Update, update_ui_texture)
-                    .add_systems(Update, handle_frontend_resize);
+                    .add_systems(Update, handle_frontend_resize)
+                    .add_systems(Update, handle_frontend_ipc_messages);
 
                 info!("Render plugin initialized with {:?} mode (unified pipeline)", mode);
             }
@@ -524,8 +613,7 @@ impl Plugin for RenderPlugin {
                     .add_systems(Startup, setup_frontend)
                     .add_systems(Update, update_ui_texture)
                     .add_systems(Update, handle_frontend_resize)
-                    // CEF needs IPC message handling
-                    .add_systems(Update, ui_cef::handle_cef_ipc_messages);
+                    .add_systems(Update, handle_frontend_ipc_messages);
 
                 info!("Render plugin initialized with CEF mode (unified pipeline)");
             }
