@@ -16,6 +16,9 @@
     // Track selected tool
     let selectedTool = $state<string>('select');
 
+    // Depth view toggle
+    let depthViewEnabled = $state(false);
+
     function handleResetCamera() {
         bridge.cameraReset();
     }
@@ -99,6 +102,17 @@
     </div>
 
     <div class="toolbar-right">
+        <button
+            class="tool-button"
+            class:selected={depthViewEnabled}
+            title="Depth View"
+            onclick={() => {
+                depthViewEnabled = !depthViewEnabled;
+                bridge.setDepthView(depthViewEnabled);
+            }}
+        >
+            <span class="icon">D</span>
+        </button>
         <button class="nav-button" onclick={handleResetCamera}>Reset Camera</button>
         <div class="stats">
             <span class="stat">{renderStats.fps.toFixed(0)} FPS</span>

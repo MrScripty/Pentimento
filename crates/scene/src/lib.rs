@@ -18,6 +18,7 @@ mod add_object;
 mod ambient_occlusion;
 mod camera;
 mod canvas_plane;
+mod depth_view;
 mod edit_mode;
 mod gizmo;
 #[cfg(feature = "selection")]
@@ -52,6 +53,7 @@ mod wireframe;
 
 pub use add_object::{AddObjectEvent, AddObjectPlugin};
 pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
+pub use depth_view::{DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings};
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use canvas_plane::{
@@ -125,6 +127,7 @@ impl Plugin for ScenePlugin {
         app.add_plugins(CameraControllerPlugin);
         app.add_plugins(LightingPlugin);
         app.add_plugins(AmbientOcclusionPlugin);
+        app.add_plugins(DepthViewPlugin);
         app.add_plugins(AddObjectPlugin);
         app.add_plugins(EditModePlugin);
         app.add_plugins(GizmoPlugin);
@@ -186,6 +189,7 @@ fn setup_scene(
         Transform::from_translation(camera_position).looking_at(orbit_camera.target, Vec3::Y),
         Tonemapping::Reinhard,
         MainCamera,
+        DepthViewCamera,
         orbit_camera,
     ));
     #[cfg(feature = "selection")]

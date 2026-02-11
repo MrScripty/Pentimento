@@ -4,8 +4,8 @@ use bevy::ecs::message::Messages;
 use bevy::prelude::*;
 use pentimento_ipc::{PaintCommand, UiToBevy};
 use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, PaintingResource, SceneAmbientOcclusion,
-    SceneLighting,
+    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, OutboundUiMessages, PaintingResource,
+    SceneAmbientOcclusion, SceneLighting,
 };
 
 use super::event_bridge::{BlitzDocumentResource, DioxusBridgeResource};
@@ -133,6 +133,12 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
                 if let Some(mut lighting) = world.get_resource_mut::<SceneLighting>() {
                     lighting.settings = settings;
                     info!("Updated lighting settings from UI");
+                }
+            }
+            UiToBevy::SetDepthView { enabled } => {
+                if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
+                    settings.enabled = enabled;
+                    info!("Depth view mode: {}", if enabled { "enabled" } else { "disabled" });
                 }
             }
             _ => {

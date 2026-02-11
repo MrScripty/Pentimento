@@ -280,6 +280,11 @@ class BevyBridge {
         });
     }
 
+    // Depth view
+    setDepthView(enabled: boolean): void {
+        this.send({ type: 'SetDepthView', data: { enabled } });
+    }
+
     // Add paint canvas
     addPaintCanvas(options?: { width?: number; height?: number }): void {
         this.send({

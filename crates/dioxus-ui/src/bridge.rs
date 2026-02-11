@@ -30,6 +30,8 @@ pub struct SharedUiState {
     pub selected_vertex_count: usize,
     pub selected_edge_count: usize,
     pub selected_face_count: usize,
+    /// Depth view mode
+    pub depth_view_enabled: bool,
 }
 
 impl Default for SharedUiState {
@@ -44,6 +46,7 @@ impl Default for SharedUiState {
             selected_vertex_count: 0,
             selected_edge_count: 0,
             selected_face_count: 0,
+            depth_view_enabled: false,
         }
     }
 }
@@ -224,6 +227,15 @@ impl DioxusBridge {
 
     pub fn update_ambient_occlusion(&self, settings: AmbientOcclusionSettings) {
         self.send(UiToBevy::UpdateAmbientOcclusion(settings));
+    }
+
+    /// Toggle depth view mode on/off
+    pub fn set_depth_view(&self, enabled: bool) {
+        {
+            let mut state = self.shared_state.lock().unwrap();
+            state.depth_view_enabled = enabled;
+        }
+        self.send(UiToBevy::SetDepthView { enabled });
     }
 
     // ========================================================================

@@ -520,6 +520,28 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
             }
 
             div { class: "toolbar-right",
+                // Depth view toggle
+                if shared_state.depth_view_enabled {
+                    button {
+                        class: "tool-button-selected",
+                        title: "Depth View (active)",
+                        onclick: {
+                            let bridge = bridge.clone();
+                            move |_| bridge.set_depth_view(false)
+                        },
+                        "D"
+                    }
+                } else {
+                    button {
+                        class: "tool-button",
+                        title: "Depth View",
+                        onclick: {
+                            let bridge = bridge.clone();
+                            move |_| bridge.set_depth_view(true)
+                        },
+                        "D"
+                    }
+                }
                 button {
                     class: "nav-button",
                     onclick: handle_reset_camera,

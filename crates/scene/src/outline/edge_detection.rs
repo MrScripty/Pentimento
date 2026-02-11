@@ -58,10 +58,12 @@ impl Plugin for EdgeDetectionPlugin {
         // This ensures proper per-view execution in Core3d subgraph (required for WASM/WebGL2)
         render_app
             .add_render_graph_node::<ViewNodeRunner<EdgeDetectionNode>>(Core3d, EdgeDetectionLabel);
+        // Run after DepthViewLabel (which itself runs after Tonemapping)
+        // so that outlines composite on top of the depth view when active.
         render_app.add_render_graph_edges(
             Core3d,
             (
-                Node3d::Tonemapping,
+                crate::DepthViewLabel,
                 EdgeDetectionLabel,
                 Node3d::EndMainPassPostProcessing,
             ),

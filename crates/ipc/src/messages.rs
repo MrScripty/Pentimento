@@ -157,4 +157,7 @@ pub enum UiToBevy {
 
     /// Mesh edit mode commands
     MeshEditCommand(MeshEditCommand),
+
+    /// Toggle depth view mode
+    SetDepthView { enabled: bool },
 }

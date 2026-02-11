@@ -27,7 +27,7 @@ use bevy::window::RawHandleWrapper;
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
 use pentimento_ipc::UiToBevy;
 use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, OutboundUiMessages, SceneAmbientOcclusion, SceneLighting,
+    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, OutboundUiMessages, SceneAmbientOcclusion, SceneLighting,
 };
 
 use crate::config::{CompositeMode, PentimentoConfig};
@@ -572,6 +572,12 @@ fn handle_frontend_ipc_messages(world: &mut World) {
                 if let Some(mut ao_resource) = world.get_resource_mut::<SceneAmbientOcclusion>() {
                     ao_resource.update(settings);
                     info!("Updated ambient occlusion settings from UI");
+                }
+            }
+            UiToBevy::SetDepthView { enabled } => {
+                if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
+                    settings.enabled = enabled;
+                    info!("Depth view mode: {}", if enabled { "enabled" } else { "disabled" });
                 }
             }
             _ => {
