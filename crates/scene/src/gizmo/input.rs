@@ -9,7 +9,7 @@ use crate::gizmo_raycast::GizmoHandle;
 #[cfg(feature = "selection")]
 use crate::selection::{Selected, SelectionState};
 
-use super::state::{handle_axis_key, GizmoState};
+use super::state::{GizmoState, handle_axis_key};
 
 /// Handle mouse clicks on gizmo handles
 #[cfg(feature = "selection")]
@@ -22,10 +22,7 @@ pub(crate) fn handle_gizmo_click(
     if mouse_button.just_pressed(MouseButton::Left) {
         if gizmo_state.hovered_handle != GizmoHandle::None && !gizmo_state.is_active {
             // Store original transforms for cancel
-            gizmo_state.original_transforms = selected_query
-                .iter()
-                .map(|(e, t)| (e, *t))
-                .collect();
+            gizmo_state.original_transforms = selected_query.iter().map(|(e, t)| (e, *t)).collect();
 
             let handle = gizmo_state.hovered_handle;
 
@@ -76,28 +73,16 @@ pub(crate) fn handle_gizmo_hotkeys(
     if !gizmo_state.is_active {
         if key_input.just_pressed(KeyCode::KeyG) {
             // Store original transforms for potential cancel
-            gizmo_state.original_transforms = queries
-                .p0()
-                .iter()
-                .map(|(e, t)| (e, *t))
-                .collect();
+            gizmo_state.original_transforms = queries.p0().iter().map(|(e, t)| (e, *t)).collect();
             gizmo_state.start_operation(GizmoMode::Translate);
             info!("Gizmo: Translate mode activated");
         } else if key_input.just_pressed(KeyCode::KeyS) && !shift_held {
             // S without shift = Scale (Shift+S might be used for other things)
-            gizmo_state.original_transforms = queries
-                .p0()
-                .iter()
-                .map(|(e, t)| (e, *t))
-                .collect();
+            gizmo_state.original_transforms = queries.p0().iter().map(|(e, t)| (e, *t)).collect();
             gizmo_state.start_operation(GizmoMode::Scale);
             info!("Gizmo: Scale mode activated");
         } else if key_input.just_pressed(KeyCode::KeyR) {
-            gizmo_state.original_transforms = queries
-                .p0()
-                .iter()
-                .map(|(e, t)| (e, *t))
-                .collect();
+            gizmo_state.original_transforms = queries.p0().iter().map(|(e, t)| (e, *t)).collect();
             gizmo_state.start_operation(GizmoMode::Rotate);
             info!("Gizmo: Rotate mode activated");
         }

@@ -15,14 +15,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use tokio::sync::mpsc;
 
-use gdk::prelude::*;
 use gdk::cairo;
+use gdk::prelude::*;
 use gdkx11::{X11Display, X11Window};
 use gio::Cancellable;
 use gtk::prelude::*;
 use webkit2gtk::{LoadEvent, WebViewExt};
 use wry::WebViewBuilderExtUnix;
-
 
 /// Overlay webview state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +123,9 @@ impl LinuxOverlayWebview {
             .map_err(|e| WebviewError::WebviewCreate(e.to_string()))?;
 
         // Find the WebKitWebView to set up load detection and sizing
-        let webkit_webview = Self::find_webkit_webview(&container)
-            .ok_or_else(|| WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into()))?;
+        let webkit_webview = Self::find_webkit_webview(&container).ok_or_else(|| {
+            WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into())
+        })?;
 
         // Set the webkit_webview size to match the container
         webkit_webview.set_size_request(size.0 as i32, size.1 as i32);
@@ -286,8 +286,12 @@ impl LinuxOverlayWebview {
 
         tracing::debug!(
             "Input regions set: toolbar (0,0,{},{}), sidebar ({},{},{},{})",
-            w, toolbar_height,
-            w - sidebar_width, sidebar_top, sidebar_width, h - sidebar_top - sidebar_margin
+            w,
+            toolbar_height,
+            w - sidebar_width,
+            sidebar_top,
+            sidebar_width,
+            h - sidebar_top - sidebar_margin
         );
     }
 
@@ -406,14 +410,17 @@ impl LinuxOverlayWebview {
         // Resize all components: window, container, webkit_webview, and wry webview bounds
         self.window.resize(width as i32, height as i32);
         self.container.set_size_request(width as i32, height as i32);
-        self.webkit_webview.set_size_request(width as i32, height as i32);
+        self.webkit_webview
+            .set_size_request(width as i32, height as i32);
 
         // Update wry webview bounds (critical for Linux with gtk::Fixed)
         // Use PhysicalSize since we receive physical pixels from Bevy
-        self.webview.set_bounds(wry::Rect {
-            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
-            size: wry::dpi::PhysicalSize::new(width, height).into(),
-        }).ok();
+        self.webview
+            .set_bounds(wry::Rect {
+                position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                size: wry::dpi::PhysicalSize::new(width, height).into(),
+            })
+            .ok();
 
         // Force WebKit to re-layout via JavaScript
         self.webkit_webview.run_javascript(
@@ -467,7 +474,8 @@ impl LinuxOverlayWebview {
                             clientX: {x}, clientY: {y}, view: window
                         }}));
                     }})()"#,
-                    x = x, y = y
+                    x = x,
+                    y = y
                 )
             }
             MouseEvent::ButtonDown { button, x, y } => {
@@ -484,7 +492,9 @@ impl LinuxOverlayWebview {
                             clientX: {x}, clientY: {y}, button: {button}, view: window
                         }}));
                     }})()"#,
-                    x = x, y = y, button = button_num
+                    x = x,
+                    y = y,
+                    button = button_num
                 )
             }
             MouseEvent::ButtonUp { button, x, y } => {
@@ -507,10 +517,17 @@ impl LinuxOverlayWebview {
                             }}));
                         }}
                     }})()"#,
-                    x = x, y = y, button = button_num
+                    x = x,
+                    y = y,
+                    button = button_num
                 )
             }
-            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
+            MouseEvent::Scroll {
+                delta_x,
+                delta_y,
+                x,
+                y,
+            } => {
                 format!(
                     r#"(function() {{
                         const target = document.elementFromPoint({x}, {y}) || document.body;
@@ -521,7 +538,10 @@ impl LinuxOverlayWebview {
                             view: window
                         }}));
                     }})()"#,
-                    x = x, y = y, delta_x = delta_x, delta_y = delta_y
+                    x = x,
+                    y = y,
+                    delta_x = delta_x,
+                    delta_y = delta_y
                 )
             }
         };

@@ -13,9 +13,9 @@ use bevy::prelude::*;
 use pentimento_ipc::LightingSettings;
 
 #[cfg(feature = "atmosphere")]
-use bevy::prelude::light_consts::lux;
-#[cfg(feature = "atmosphere")]
 use bevy::pbr::ScatteringMedium;
+#[cfg(feature = "atmosphere")]
+use bevy::prelude::light_consts::lux;
 
 /// Calculate sun direction from time of day and azimuth angle
 ///
@@ -35,9 +35,9 @@ fn calculate_sun_direction_from_time(time_of_day: f32, azimuth_angle: f32) -> Ve
 
     // Base direction without azimuth rotation
     let base_dir = Vec3::new(
-        -sun_angle.cos(), // East to west
+        -sun_angle.cos(),          // East to west
         sun_angle.sin().max(0.05), // Height (keep slightly above horizon for lighting)
-        -0.3, // Slight southern offset (typical for northern hemisphere)
+        -0.3,                      // Slight southern offset (typical for northern hemisphere)
     );
 
     // Rotate by azimuth angle around Y axis
@@ -60,7 +60,7 @@ fn calculate_sun_color_from_time(time_of_day: f32) -> [f32; 3] {
         let warmth = 1.0 - (sun_height / 0.3);
         [
             1.0,
-            0.98 - warmth * 0.3, // More orange
+            0.98 - warmth * 0.3,  // More orange
             0.95 - warmth * 0.45, // Less blue
         ]
     } else {
@@ -397,7 +397,10 @@ fn update_lighting(
         let intensity = base_ambient_intensity * (1.0 + cloudiness * 0.5);
         (color, intensity)
     } else {
-        (lighting.settings.ambient_color, lighting.settings.ambient_intensity)
+        (
+            lighting.settings.ambient_color,
+            lighting.settings.ambient_intensity,
+        )
     };
 
     // Apply pollution effects to ambient

@@ -157,7 +157,10 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
                                 if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
                                     if pipeline.layers.set_active(layer_id) {
                                         outbound_layer_msgs.push(make_layer_state_msg(pipeline));
-                                        info!("Set active layer {} on plane {}", layer_id, plane_id);
+                                        info!(
+                                            "Set active layer {} on plane {}",
+                                            layer_id, plane_id
+                                        );
                                     }
                                 }
                             }
@@ -167,7 +170,10 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
                                 if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
                                     pipeline.layers.set_visibility(layer_id, visible);
                                     outbound_layer_msgs.push(make_layer_state_msg(pipeline));
-                                    info!("Set layer {} visibility={} on plane {}", layer_id, visible, plane_id);
+                                    info!(
+                                        "Set layer {} visibility={} on plane {}",
+                                        layer_id, visible, plane_id
+                                    );
                                 }
                             }
                         }
@@ -176,16 +182,25 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
                                 if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
                                     pipeline.layers.set_opacity(layer_id, opacity);
                                     outbound_layer_msgs.push(make_layer_state_msg(pipeline));
-                                    info!("Set layer {} opacity={:.2} on plane {}", layer_id, opacity, plane_id);
+                                    info!(
+                                        "Set layer {} opacity={:.2} on plane {}",
+                                        layer_id, opacity, plane_id
+                                    );
                                 }
                             }
                         }
-                        PaintCommand::ReorderLayer { layer_id, new_index } => {
+                        PaintCommand::ReorderLayer {
+                            layer_id,
+                            new_index,
+                        } => {
                             if let Some(plane_id) = active_plane_id {
                                 if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
                                     pipeline.layers.reorder(layer_id, new_index as usize);
                                     outbound_layer_msgs.push(make_layer_state_msg(pipeline));
-                                    info!("Reordered layer {} to index {} on plane {}", layer_id, new_index, plane_id);
+                                    info!(
+                                        "Reordered layer {} to index {} on plane {}",
+                                        layer_id, new_index, plane_id
+                                    );
                                 }
                             }
                         }
@@ -222,7 +237,10 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
             UiToBevy::SetDepthView { enabled } => {
                 if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
                     settings.enabled = enabled;
-                    info!("Depth view mode: {}", if enabled { "enabled" } else { "disabled" });
+                    info!(
+                        "Depth view mode: {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    );
                 }
             }
             _ => {

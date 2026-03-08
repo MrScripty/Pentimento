@@ -31,11 +31,7 @@ impl std::fmt::Debug for StrokeLog {
             .read()
             .map(|s| s.values().map(|v| v.len()).sum::<usize>())
             .unwrap_or(0);
-        let listener_count = self
-            .event_listeners
-            .read()
-            .map(|l| l.len())
-            .unwrap_or(0);
+        let listener_count = self.event_listeners.read().map(|l| l.len()).unwrap_or(0);
         f.debug_struct("StrokeLog")
             .field("stroke_count", &stroke_count)
             .field("listener_count", &listener_count)
@@ -105,13 +101,19 @@ impl StrokeLog {
     where
         F: Fn(StrokeLogEvent) + Send + Sync + 'static,
     {
-        let mut listeners = self.event_listeners.write().expect("StrokeLog lock poisoned");
+        let mut listeners = self
+            .event_listeners
+            .write()
+            .expect("StrokeLog lock poisoned");
         listeners.push(Box::new(listener));
     }
 
     /// Emit an event to all registered listeners.
     fn emit_event(&self, event: StrokeLogEvent) {
-        let listeners = self.event_listeners.read().expect("StrokeLog lock poisoned");
+        let listeners = self
+            .event_listeners
+            .read()
+            .expect("StrokeLog lock poisoned");
         for listener in listeners.iter() {
             listener(event.clone());
         }

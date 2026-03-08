@@ -10,8 +10,12 @@ impl TiledSurface {
         let tile_start_y = coord.y * self.tile_size;
 
         // Calculate actual tile dimensions (may be smaller at edges)
-        let tile_width = self.tile_size.min(self.surface.width.saturating_sub(tile_start_x));
-        let tile_height = self.tile_size.min(self.surface.height.saturating_sub(tile_start_y));
+        let tile_width = self
+            .tile_size
+            .min(self.surface.width.saturating_sub(tile_start_x));
+        let tile_height = self
+            .tile_size
+            .min(self.surface.height.saturating_sub(tile_start_y));
 
         let mut data = Vec::with_capacity((tile_width * tile_height) as usize);
 
@@ -33,8 +37,12 @@ impl TiledSurface {
         let tile_start_x = coord.x * self.tile_size;
         let tile_start_y = coord.y * self.tile_size;
 
-        let tile_width = self.tile_size.min(self.surface.width.saturating_sub(tile_start_x));
-        let tile_height = self.tile_size.min(self.surface.height.saturating_sub(tile_start_y));
+        let tile_width = self
+            .tile_size
+            .min(self.surface.width.saturating_sub(tile_start_x));
+        let tile_height = self
+            .tile_size
+            .min(self.surface.height.saturating_sub(tile_start_y));
 
         (tile_start_x, tile_start_y, tile_width, tile_height)
     }

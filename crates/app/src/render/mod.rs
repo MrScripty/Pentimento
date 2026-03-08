@@ -27,29 +27,30 @@ use bevy::window::RawHandleWrapper;
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
 use pentimento_ipc::UiToBevy;
 use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, OutboundUiMessages, SceneAmbientOcclusion, SceneLighting,
+    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, OutboundUiMessages, SceneAmbientOcclusion,
+    SceneLighting,
 };
 
 use crate::config::{CompositeMode, PentimentoConfig};
 use crate::embedded_ui::UiAssets;
 
 // Keep submodules for mode-specific initialization helpers
-mod ui_composite;
-mod ui_overlay;
-#[cfg(feature = "cef")]
-mod ui_cef;
 #[cfg(feature = "dioxus")]
 mod ui_blend_material;
+#[cfg(feature = "cef")]
+mod ui_cef;
+mod ui_composite;
 #[cfg(feature = "dioxus")]
 mod ui_dioxus;
+mod ui_overlay;
 
 // Re-export types needed by the input module
-pub use ui_composite::WebviewResource;
-pub use ui_overlay::OverlayWebviewResource;
 #[cfg(feature = "cef")]
 pub use ui_cef::CefWebviewResource;
+pub use ui_composite::WebviewResource;
 #[cfg(feature = "dioxus")]
 pub use ui_dioxus::DioxusRendererResource;
+pub use ui_overlay::OverlayWebviewResource;
 
 // ============================================================================
 // Unified Frontend Resource
@@ -157,12 +158,13 @@ pub fn create_frontend(
 
         CompositeMode::Overlay => {
             // Overlay mode - compositor-managed (no texture capture needed)
-            let window_handle = config
-                .window_handle
-                .ok_or_else(|| FrontendError::Backend("Overlay mode requires window handle".into()))?;
+            let window_handle = config.window_handle.ok_or_else(|| {
+                FrontendError::Backend("Overlay mode requires window handle".into())
+            })?;
 
-            let webview = pentimento_webview::OverlayWebview::new(window_handle, &config.html, config.size)
-                .map_err(|e| FrontendError::Backend(e.to_string()))?;
+            let webview =
+                pentimento_webview::OverlayWebview::new(window_handle, &config.html, config.size)
+                    .map_err(|e| FrontendError::Backend(e.to_string()))?;
 
             // Overlay uses RGBA format for the placeholder texture (not actually used for capture)
             Ok(FrontendResource {
@@ -184,11 +186,9 @@ pub fn create_frontend(
         }
 
         #[cfg(not(feature = "cef"))]
-        CompositeMode::Cef => {
-            Err(FrontendError::Backend(
-                "CEF mode requires the 'cef' feature. Build with: cargo build --features cef".into(),
-            ))
-        }
+        CompositeMode::Cef => Err(FrontendError::Backend(
+            "CEF mode requires the 'cef' feature. Build with: cargo build --features cef".into(),
+        )),
 
         CompositeMode::Dioxus => {
             // Dioxus mode uses a separate plugin with GPU-based rendering
@@ -378,13 +378,27 @@ pub fn update_ui_texture(
         match capture_result {
             CaptureResult::Rgba(data, cap_width, cap_height) => {
                 // RGBA format (WebKit/Capture mode)
-                upload_texture_data(&mut images, &ui_texture.handle, data, cap_width, cap_height, &mut status);
+                upload_texture_data(
+                    &mut images,
+                    &ui_texture.handle,
+                    data,
+                    cap_width,
+                    cap_height,
+                    &mut status,
+                );
             }
 
             CaptureResult::Bgra(arc_data, cap_width, cap_height) => {
                 // BGRA format (CEF mode) - unwrap Arc to get owned Vec
                 let bgra_data = Arc::try_unwrap(arc_data).unwrap_or_else(|arc| (*arc).clone());
-                upload_texture_data(&mut images, &ui_texture.handle, bgra_data, cap_width, cap_height, &mut status);
+                upload_texture_data(
+                    &mut images,
+                    &ui_texture.handle,
+                    bgra_data,
+                    cap_width,
+                    cap_height,
+                    &mut status,
+                );
             }
 
             CaptureResult::CompositorManaged => {
@@ -577,7 +591,10 @@ fn handle_frontend_ipc_messages(world: &mut World) {
             UiToBevy::SetDepthView { enabled } => {
                 if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
                     settings.enabled = enabled;
-                    info!("Depth view mode: {}", if enabled { "enabled" } else { "disabled" });
+                    info!(
+                        "Depth view mode: {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    );
                 }
             }
             _ => {
@@ -608,7 +625,10 @@ impl Plugin for RenderPlugin {
                     .add_systems(Update, handle_frontend_resize)
                     .add_systems(Update, handle_frontend_ipc_messages);
 
-                info!("Render plugin initialized with {:?} mode (unified pipeline)", mode);
+                info!(
+                    "Render plugin initialized with {:?} mode (unified pipeline)",
+                    mode
+                );
             }
 
             #[cfg(feature = "cef")]
@@ -626,7 +646,9 @@ impl Plugin for RenderPlugin {
 
             #[cfg(not(feature = "cef"))]
             CompositeMode::Cef => {
-                error!("CEF mode requires the 'cef' feature. Build with: cargo build --features cef");
+                error!(
+                    "CEF mode requires the 'cef' feature. Build with: cargo build --features cef"
+                );
                 panic!("CEF mode not available - rebuild with --features cef");
             }
 
@@ -640,7 +662,9 @@ impl Plugin for RenderPlugin {
 
             #[cfg(not(feature = "dioxus"))]
             CompositeMode::Dioxus => {
-                error!("Dioxus mode requires the 'dioxus' feature. Build with: cargo build --features dioxus");
+                error!(
+                    "Dioxus mode requires the 'dioxus' feature. Build with: cargo build --features dioxus"
+                );
                 panic!("Dioxus mode not available - rebuild with --features dioxus");
             }
 

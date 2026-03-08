@@ -12,9 +12,9 @@ use painting::half_edge::{FaceId, HalfEdgeId, HalfEdgeMesh, VertexId};
 use pentimento_ipc::{BevyToUi, EditMode, MeshEditTool, MeshSelectionMode};
 use std::collections::HashSet;
 
-use crate::edit_mode::EditModeState;
-use crate::canvas_plane::ActiveCanvasPlane;
 use crate::OutboundUiMessages;
+use crate::canvas_plane::ActiveCanvasPlane;
+use crate::edit_mode::EditModeState;
 #[cfg(feature = "selection")]
 use crate::selection::Selected;
 
@@ -126,15 +126,13 @@ fn handle_tab_key_for_mesh_edit(
     }
 
     // Don't handle Tab if Ctrl is held (Ctrl+Tab is for sculpt mode)
-    let ctrl = key_input.pressed(KeyCode::ControlLeft)
-        || key_input.pressed(KeyCode::ControlRight);
+    let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     if ctrl {
         return;
     }
 
     // Don't handle Tab if Shift is held (Shift+Tab is for paint mode)
-    let shift = key_input.pressed(KeyCode::ShiftLeft)
-        || key_input.pressed(KeyCode::ShiftRight);
+    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     if shift {
         return;
     }

@@ -255,7 +255,11 @@ impl BrushEngine {
         if !dabs.is_empty() {
             debug!(
                 "BrushEngine::stroke_to: generated {} dabs along path from ({:.1}, {:.1}) to ({:.1}, {:.1})",
-                dabs.len(), last_x, last_y, x, y
+                dabs.len(),
+                last_x,
+                last_y,
+                x,
+                y
             );
         }
 

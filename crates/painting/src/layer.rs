@@ -4,8 +4,8 @@
 //! visibility, and opacity. Layers are composited bottom-to-top into a
 //! flattened output surface for GPU upload.
 
-use crate::tiles::TiledSurface;
 use crate::constants::DEFAULT_TILE_SIZE;
+use crate::tiles::TiledSurface;
 
 /// A single painting layer
 pub struct Layer {
@@ -103,7 +103,10 @@ impl LayerStack {
         let layer = Layer::new(id, layer_name, self.width, self.height);
 
         // Insert above the active layer
-        let active_idx = self.layers.iter().position(|l| l.id == self.active_layer_id);
+        let active_idx = self
+            .layers
+            .iter()
+            .position(|l| l.id == self.active_layer_id);
         let insert_idx = match active_idx {
             Some(idx) => idx + 1,
             None => self.layers.len(),
@@ -339,18 +342,30 @@ mod tests {
         let mut stack = LayerStack::new(4, 4);
 
         // Paint red on background
-        stack.active_layer_mut().unwrap().surface.surface_mut()
+        stack
+            .active_layer_mut()
+            .unwrap()
+            .surface
+            .surface_mut()
             .clear([1.0, 0.0, 0.0, 1.0]);
 
         // Add layer and paint blue
         let id = stack.add_layer("Blue".to_string());
-        stack.active_layer_mut().unwrap().surface.surface_mut()
+        stack
+            .active_layer_mut()
+            .unwrap()
+            .surface
+            .surface_mut()
             .clear([0.0, 0.0, 1.0, 0.5]);
 
         stack.composite();
 
         // Composite should show blue blended over red
-        let pixel = stack.composited_surface().surface().get_pixel(0, 0).unwrap();
+        let pixel = stack
+            .composited_surface()
+            .surface()
+            .get_pixel(0, 0)
+            .unwrap();
         // Blue at 0.5 alpha over red at 1.0 alpha:
         // r = 0.0 * 0.5 + 1.0 * 0.5 = 0.5
         // b = 1.0 * 0.5 + 0.0 * 0.5 = 0.5

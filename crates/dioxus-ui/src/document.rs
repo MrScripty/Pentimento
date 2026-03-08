@@ -24,14 +24,14 @@ use crossbeam_channel::Receiver;
 use dioxus::prelude::*;
 use dioxus_native_dom::DioxusDocument;
 use tracing::{debug, info};
+use vello::Scene;
 use vello::kurbo::{Affine, Circle};
 use vello::peniko::{Color, Fill};
-use vello::Scene;
 
-use crate::bridge::DioxusBridge;
-use crate::document_proxy::{DocumentMessage, DioxusDocumentProxy};
-use crate::net_provider::BevyNetProvider;
 use crate::PentimentoApp;
+use crate::bridge::DioxusBridge;
+use crate::document_proxy::{DioxusDocumentProxy, DocumentMessage};
+use crate::net_provider::BevyNetProvider;
 
 /// Wrapper around DioxusDocument that provides Vello rendering integration.
 ///
@@ -74,14 +74,17 @@ impl BlitzDocument {
         let (doc_sender, doc_receiver) = crossbeam_channel::unbounded();
 
         // Create the Dioxus VirtualDom with our app component
-        let vdom = VirtualDom::new_with_props(
-            PentimentoApp,
-            crate::app::PentimentoAppProps { bridge },
-        );
+        let vdom =
+            VirtualDom::new_with_props(PentimentoApp, crate::app::PentimentoAppProps { bridge });
 
         // Configure the document with viewport settings
         let config = DocumentConfig {
-            viewport: Some(Viewport::new(width, height, scale as f32, ColorScheme::Dark)),
+            viewport: Some(Viewport::new(
+                width,
+                height,
+                scale as f32,
+                ColorScheme::Dark,
+            )),
             ..Default::default()
         };
 
@@ -148,10 +151,12 @@ impl BlitzDocument {
         self.height = height;
 
         // Update the viewport in the document
-        self.doc
-            .inner
-            .borrow_mut()
-            .set_viewport(Viewport::new(width, height, self.scale as f32, ColorScheme::Dark));
+        self.doc.inner.borrow_mut().set_viewport(Viewport::new(
+            width,
+            height,
+            self.scale as f32,
+            ColorScheme::Dark,
+        ));
 
         // Re-resolve layout with new dimensions
         self.doc.inner.borrow_mut().resolve(0.0);
@@ -260,7 +265,8 @@ impl BlitzDocument {
             match msg {
                 DocumentMessage::CreateHeadElement(el) => {
                     debug!("Creating head element: <{}>", el.name);
-                    self.doc.create_head_element(&el.name, &el.attributes, &el.contents);
+                    self.doc
+                        .create_head_element(&el.name, &el.attributes, &el.contents);
                     had_messages = true;
                 }
             }
@@ -343,7 +349,10 @@ impl BlitzDocument {
             self.click_dots.push((x, y));
 
             let doc_ref = self.doc.inner.borrow();
-            info!("Click({:.0},{:.0}) - doc dimensions: {}x{}", x, y, self.width, self.height);
+            info!(
+                "Click({:.0},{:.0}) - doc dimensions: {}x{}",
+                x, y, self.width, self.height
+            );
 
             // Our custom hit testing
             if let Some(hit_node_id) = self.deepest_hit(&doc_ref, x, y) {
@@ -351,7 +360,10 @@ impl BlitzDocument {
                     if let Some(el) = node.element_data() {
                         let tag = el.name.local.as_ref();
                         let class = el.attr(blitz_dom::local_name!("class")).unwrap_or("");
-                        info!("  -> Custom HIT: <{}> class='{}' node_id={}", tag, class, hit_node_id);
+                        info!(
+                            "  -> Custom HIT: <{}> class='{}' node_id={}",
+                            tag, class, hit_node_id
+                        );
                     }
                 }
             } else {
@@ -365,9 +377,15 @@ impl BlitzDocument {
                         let tag = el.name.local.as_ref();
                         let class = el.attr(blitz_dom::local_name!("class")).unwrap_or("");
                         let style = el.attr(blitz_dom::local_name!("style")).unwrap_or("");
-                        info!("  -> Blitz HIT:  <{}> class='{}' style='{}' node_id={}", tag, class, style, blitz_hit.node_id);
+                        info!(
+                            "  -> Blitz HIT:  <{}> class='{}' style='{}' node_id={}",
+                            tag, class, style, blitz_hit.node_id
+                        );
                     } else {
-                        info!("  -> Blitz HIT:  (non-element node) node_id={}", blitz_hit.node_id);
+                        info!(
+                            "  -> Blitz HIT:  (non-element node) node_id={}",
+                            blitz_hit.node_id
+                        );
                     }
                 }
                 true
@@ -410,12 +428,15 @@ impl BlitzDocument {
 
         // Calculate absolute position of this node
         // For position:fixed elements, the position is relative to viewport (0,0)
-        let is_fixed = node.element_data()
+        let is_fixed = node
+            .element_data()
             .map(|el| {
                 // Check if this element has position:fixed via its computed style
                 // For now, check class names that we know use position:fixed
                 let class = el.attr(blitz_dom::local_name!("class")).unwrap_or("");
-                class.contains("toolbar") || class.contains("side-panel") || class.contains("add-object-menu")
+                class.contains("toolbar")
+                    || class.contains("side-panel")
+                    || class.contains("add-object-menu")
             })
             .unwrap_or(false);
 
@@ -424,7 +445,10 @@ impl BlitzDocument {
             (layout.location.x, layout.location.y)
         } else {
             // Normal flow: add to parent's position
-            (parent_abs_x + layout.location.x, parent_abs_y + layout.location.y)
+            (
+                parent_abs_x + layout.location.x,
+                parent_abs_y + layout.location.y,
+            )
         };
 
         let width = layout.size.width;
@@ -441,7 +465,8 @@ impl BlitzDocument {
         // Check children first (they're on top)
         for child_id in node.children.iter() {
             if let Some(child) = doc.get_node(*child_id) {
-                if let Some(child_hit) = self.deepest_hit_recursive(doc, child, x, y, abs_x, abs_y) {
+                if let Some(child_hit) = self.deepest_hit_recursive(doc, child, x, y, abs_x, abs_y)
+                {
                     deepest_hit = Some(child_hit);
                 }
             }

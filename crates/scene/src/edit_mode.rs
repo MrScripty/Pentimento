@@ -20,7 +20,10 @@ pub struct EditModeState {
 #[derive(Message, Debug, Clone)]
 pub enum EditModeEvent {
     /// Enter a specific edit mode
-    Enter { mode: EditMode, target: Option<Entity> },
+    Enter {
+        mode: EditMode,
+        target: Option<Entity>,
+    },
     /// Exit current edit mode
     Exit,
 }

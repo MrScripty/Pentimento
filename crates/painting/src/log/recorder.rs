@@ -1,7 +1,7 @@
 //! Stroke recorder for building strokes with delta overflow handling.
 
 use crate::types::{BlendMode, Dab, Quantization, SpaceKind, StrokeHeader, StrokePacket};
-use crate::validation::{compute_delta, to_fixed_point, validate_dab, ValidationError};
+use crate::validation::{ValidationError, compute_delta, to_fixed_point, validate_dab};
 
 use super::dab_params::DabParams;
 use super::events::StrokeLogEvent;

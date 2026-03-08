@@ -47,6 +47,10 @@ pub enum MaterialCommand {
         slot: String,
         texture_id: String,
     },
-    Create { name: String },
-    Delete { material_id: String },
+    Create {
+        name: String,
+    },
+    Delete {
+        material_id: String,
+    },
 }

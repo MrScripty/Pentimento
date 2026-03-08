@@ -1,0 +1,21 @@
+pre-commit:
+  parallel: true
+  commands:
+    rust-format:
+      glob: "*.rs"
+      run: ./scripts/rustfmt-active.sh --check
+    frontend-typecheck:
+      glob: "*.{ts,svelte}"
+      run: npm run typecheck
+
+pre-push:
+  commands:
+    verify:
+      run: ./launcher.sh --test
+    history-cleanup-reminder:
+      run: bash -lc 'echo "[advisory] inspect unpushed history for regression/fix pairs: git log --oneline --decorate @{upstream}..HEAD"'
+
+commit-msg:
+  commands:
+    conventional-commit:
+      run: ./scripts/check-commit-message.sh {1}

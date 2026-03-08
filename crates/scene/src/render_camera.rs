@@ -7,8 +7,8 @@
 //! Users can select the render camera and press Tab to look through it,
 //! similar to how canvas planes work.
 
-use bevy::prelude::*;
 use bevy::math::Mat4;
+use bevy::prelude::*;
 
 /// Component marking a camera as the render camera for density calculations.
 ///

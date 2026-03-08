@@ -9,10 +9,10 @@ use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use pentimento_ipc::{BevyToUi, EditMode};
 
+use crate::OutboundUiMessages;
 use crate::camera::{MainCamera, OrbitCamera};
 use crate::paint_mode::PaintMode;
 use crate::painting_system::CanvasTexture;
-use crate::OutboundUiMessages;
 #[cfg(feature = "selection")]
 use crate::selection::{Selectable, Selected};
 
@@ -246,13 +246,8 @@ fn handle_canvas_plane_events(
                 transform.rotate_local_y(std::f32::consts::PI);
 
                 // Create canvas plane with world dimensions
-                let mut canvas_plane = CanvasPlane::new(
-                    plane_id,
-                    *width,
-                    *height,
-                    plane_width,
-                    plane_height,
-                );
+                let mut canvas_plane =
+                    CanvasPlane::new(plane_id, *width, *height, plane_width, plane_height);
                 // Store camera position for returning to paint view
                 canvas_plane.paint_camera_pos = Some(camera_pos);
                 canvas_plane.paint_camera_target = Some(plane_pos);
@@ -283,7 +278,9 @@ fn handle_canvas_plane_events(
 
                 // Enable paint mode and notify UI
                 paint_mode.active = true;
-                outbound.send(BevyToUi::EditModeChanged { mode: EditMode::Paint });
+                outbound.send(BevyToUi::EditModeChanged {
+                    mode: EditMode::Paint,
+                });
                 info!("Entered paint mode with camera locked");
             }
             CanvasPlaneEvent::Select(entity) => {
@@ -320,14 +317,17 @@ fn handle_canvas_plane_events(
                     // When unlocking, deactivate paint mode and notify UI
                     if was_locked && !active_plane.camera_locked {
                         paint_mode.active = false;
-                        outbound.send(BevyToUi::EditModeChanged { mode: EditMode::None });
+                        outbound.send(BevyToUi::EditModeChanged {
+                            mode: EditMode::None,
+                        });
                         info!("Camera lock disabled, exiting paint mode");
                     } else if !was_locked && active_plane.camera_locked {
                         // When locking, restore camera to paint position and activate paint mode
                         if let Ok(canvas_plane) = canvas_query.get(plane_entity) {
-                            if let (Some(cam_pos), Some(cam_target)) =
-                                (canvas_plane.paint_camera_pos, canvas_plane.paint_camera_target)
-                            {
+                            if let (Some(cam_pos), Some(cam_target)) = (
+                                canvas_plane.paint_camera_pos,
+                                canvas_plane.paint_camera_target,
+                            ) {
                                 // Update OrbitCamera to match stored position
                                 for mut orbit in orbit_camera_query.iter_mut() {
                                     orbit.target = cam_target;
@@ -344,7 +344,9 @@ fn handle_canvas_plane_events(
                             }
                         }
                         paint_mode.active = true;
-                        outbound.send(BevyToUi::EditModeChanged { mode: EditMode::Paint });
+                        outbound.send(BevyToUi::EditModeChanged {
+                            mode: EditMode::Paint,
+                        });
                         info!("Camera lock enabled, entering paint mode");
                     }
                 }

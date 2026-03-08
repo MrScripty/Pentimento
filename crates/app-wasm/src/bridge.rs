@@ -57,8 +57,9 @@ pub fn send_to_ui(msg: BevyToUi) {
             let init = web_sys::CustomEventInit::new();
             init.set_detail(&JsValue::from_str(&json));
 
-            let event = web_sys::CustomEvent::new_with_event_init_dict("pentimento:bevy-to-ui", &init)
-                .expect("failed to create event");
+            let event =
+                web_sys::CustomEvent::new_with_event_init_dict("pentimento:bevy-to-ui", &init)
+                    .expect("failed to create event");
 
             window
                 .dispatch_event(&event)

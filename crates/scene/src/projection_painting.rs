@@ -7,16 +7,18 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::math::{Vec2, Vec3};
+use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy::mesh::{Indices, VertexAttributeValues};
 use std::collections::HashMap;
 
 use painting::{
-    projection::{canvas_uv_to_ray, pixel_to_canvas_uv, project_brush_size_to_depth, CanvasPlaneParams},
-    raycast::{raycast_mesh, MeshRaycastData},
-    projection_target::{ProjectionTargetStorage, UvAtlasTarget},
     BlendMode,
+    projection::{
+        CanvasPlaneParams, canvas_uv_to_ray, pixel_to_canvas_uv, project_brush_size_to_depth,
+    },
+    projection_target::{ProjectionTargetStorage, UvAtlasTarget},
+    raycast::{MeshRaycastData, raycast_mesh},
 };
 
 use crate::camera::MainCamera;
@@ -108,10 +110,9 @@ impl MeshRaycastCache {
 fn extract_mesh_raycast_data(mesh: &Mesh) -> Option<MeshRaycastData> {
     // Get positions
     let positions: Vec<Vec3> = match mesh.attribute(Mesh::ATTRIBUTE_POSITION)? {
-        VertexAttributeValues::Float32x3(pos) => pos
-            .iter()
-            .map(|p| Vec3::new(p[0], p[1], p[2]))
-            .collect(),
+        VertexAttributeValues::Float32x3(pos) => {
+            pos.iter().map(|p| Vec3::new(p[0], p[1], p[2])).collect()
+        }
         _ => return None,
     };
 
@@ -123,10 +124,9 @@ fn extract_mesh_raycast_data(mesh: &Mesh) -> Option<MeshRaycastData> {
 
     // Get normals
     let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
-        Some(VertexAttributeValues::Float32x3(norm)) => norm
-            .iter()
-            .map(|n| Vec3::new(n[0], n[1], n[2]))
-            .collect(),
+        Some(VertexAttributeValues::Float32x3(norm)) => {
+            norm.iter().map(|n| Vec3::new(n[0], n[1], n[2])).collect()
+        }
         _ => {
             // Generate flat normals if not present
             vec![Vec3::Y; positions.len()]
@@ -135,19 +135,17 @@ fn extract_mesh_raycast_data(mesh: &Mesh) -> Option<MeshRaycastData> {
 
     // Get UVs
     let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
-        Some(VertexAttributeValues::Float32x2(uv)) => uv
-            .iter()
-            .map(|u| Vec2::new(u[0], u[1]))
-            .collect(),
+        Some(VertexAttributeValues::Float32x2(uv)) => {
+            uv.iter().map(|u| Vec2::new(u[0], u[1])).collect()
+        }
         _ => Vec::new(),
     };
 
     // Get tangents
     let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
-        Some(VertexAttributeValues::Float32x4(tang)) => tang
-            .iter()
-            .map(|t| Vec3::new(t[0], t[1], t[2]))
-            .collect(),
+        Some(VertexAttributeValues::Float32x4(tang)) => {
+            tang.iter().map(|t| Vec3::new(t[0], t[1], t[2])).collect()
+        }
         _ => Vec::new(),
     };
 
@@ -335,8 +333,12 @@ fn project_canvas_to_scene(
 
                 if let Some(tex_coord) = target.hit_to_tex_coord(&hit) {
                     // Calculate projected brush size based on depth
-                    let world_radius =
-                        project_brush_size_to_depth(0.5, &canvas_params, camera_to_canvas_dist, dist);
+                    let world_radius = project_brush_size_to_depth(
+                        0.5,
+                        &canvas_params,
+                        camera_to_canvas_dist,
+                        dist,
+                    );
 
                     // Convert world radius to texture pixels
                     let (tex_w, _tex_h) = target.resolution();
@@ -358,7 +360,10 @@ fn setup_projection_textures(
     mut images: ResMut<Assets<Image>>,
     _materials: ResMut<Assets<StandardMaterial>>,
     mut targets: ResMut<ProjectionTargets>,
-    query: Query<(Entity, &ProjectionTarget, &MeshMaterial3d<StandardMaterial>), Changed<ProjectionTarget>>,
+    query: Query<
+        (Entity, &ProjectionTarget, &MeshMaterial3d<StandardMaterial>),
+        Changed<ProjectionTarget>,
+    >,
 ) {
     for (entity, proj_target, _material_handle) in query.iter() {
         // Get resolution from storage mode
@@ -397,7 +402,10 @@ fn setup_projection_textures(
             let handle = images.add(image);
             targets.set_texture(entity, handle.clone());
 
-            info!("Created projection texture for entity {:?} ({}x{})", entity, width, height);
+            info!(
+                "Created projection texture for entity {:?} ({}x{})",
+                entity, width, height
+            );
         }
     }
 }

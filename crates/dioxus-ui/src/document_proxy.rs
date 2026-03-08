@@ -57,14 +57,16 @@ impl Document for DioxusDocumentProxy {
             name,
             attributes.len()
         );
-        let _ = self.sender.send(DocumentMessage::CreateHeadElement(HeadElement {
-            name: name.to_string(),
-            attributes: attributes
-                .iter()
-                .map(|(name, value)| (name.to_string(), value.clone()))
-                .collect(),
-            contents,
-        }));
+        let _ = self
+            .sender
+            .send(DocumentMessage::CreateHeadElement(HeadElement {
+                name: name.to_string(),
+                attributes: attributes
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.clone()))
+                    .collect(),
+                contents,
+            }));
     }
 
     fn set_title(&self, title: String) {

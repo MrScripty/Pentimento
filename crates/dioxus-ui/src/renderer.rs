@@ -42,7 +42,10 @@ impl VelloRenderer {
         width: u32,
         height: u32,
     ) -> Result<Self, VelloRendererError> {
-        info!("Creating Vello renderer {}x{} with shared device", width, height);
+        info!(
+            "Creating Vello renderer {}x{} with shared device",
+            width, height
+        );
 
         let renderer = Renderer::new(
             device,
@@ -130,10 +133,8 @@ impl VelloRenderer {
 
         // Title placeholder - white rectangle
         let title_color = Color::WHITE;
-        let title_rect = RoundedRect::from_rect(
-            vello::kurbo::Rect::new(16.0, 14.0, 96.0, 34.0),
-            2.0,
-        );
+        let title_rect =
+            RoundedRect::from_rect(vello::kurbo::Rect::new(16.0, 14.0, 96.0, 34.0), 2.0);
         self.scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,

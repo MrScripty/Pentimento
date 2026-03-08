@@ -23,8 +23,8 @@
 //! }
 //! ```
 
-use bevy::input::mouse::MouseMotion;
 use bevy::input::InputSystems;
+use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use std::time::Instant;
 
@@ -45,10 +45,7 @@ impl Plugin for InputPlugin {
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(
                 PreUpdate,
-                (
-                    clear_motion_events,
-                    mouse::track_mouse_position,
-                )
+                (clear_motion_events, mouse::track_mouse_position)
                     .chain()
                     .after(InputSystems),
             )
@@ -64,13 +61,22 @@ impl Plugin for InputPlugin {
 
         // CEF DevTools hotkey (Ctrl+Shift+I)
         #[cfg(feature = "cef")]
-        app.add_systems(PreUpdate, hotkeys::handle_devtools_hotkey.after(InputSystems));
+        app.add_systems(
+            PreUpdate,
+            hotkeys::handle_devtools_hotkey.after(InputSystems),
+        );
 
         // Paint undo hotkey (Ctrl+Z)
-        app.add_systems(PreUpdate, hotkeys::handle_paint_undo_hotkey.after(InputSystems));
+        app.add_systems(
+            PreUpdate,
+            hotkeys::handle_paint_undo_hotkey.after(InputSystems),
+        );
 
         // Add object menu hotkey (Shift+A)
-        app.add_systems(PreUpdate, hotkeys::handle_add_menu_hotkey.after(InputSystems));
+        app.add_systems(
+            PreUpdate,
+            hotkeys::handle_add_menu_hotkey.after(InputSystems),
+        );
 
         info!("Input plugin initialized");
     }

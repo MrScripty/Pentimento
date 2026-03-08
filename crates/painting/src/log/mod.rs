@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn test_stroke_log_event_listener() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let log = StrokeLog::new();
         let event_count = Arc::new(AtomicUsize::new(0));

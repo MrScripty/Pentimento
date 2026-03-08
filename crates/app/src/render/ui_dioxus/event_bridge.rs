@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use pentimento_dioxus_ui::{
     BlitzDocument, BlitzKey, BlitzKeyCode, BlitzKeyEvent, BlitzKeyLocation, BlitzModifiers,
-    BlitzPointerId, BlitzPointerEvent, BlitzWheelDelta, BlitzWheelEvent, DioxusBridgeHandle,
+    BlitzPointerEvent, BlitzPointerId, BlitzWheelDelta, BlitzWheelEvent, DioxusBridgeHandle,
     KeyState, MouseEventButton, MouseEventButtons, PointerCoords, PointerDetails, UiEvent,
 };
 use pentimento_ipc::MouseEvent;
@@ -118,7 +118,12 @@ impl DioxusRendererResource {
                 self.buttons_pressed.remove(MouseEventButtons::from(btn));
                 UiEvent::PointerUp(self.create_pointer_event(x, y, btn))
             }
-            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
+            MouseEvent::Scroll {
+                delta_x,
+                delta_y,
+                x,
+                y,
+            } => {
                 self.mouse_x = x;
                 self.mouse_y = y;
                 UiEvent::Wheel(BlitzWheelEvent {
@@ -170,7 +175,11 @@ impl DioxusRendererResource {
             location: BlitzKeyLocation::Standard,
             is_auto_repeating: false,
             is_composing: false,
-            state: if event.pressed { KeyState::Pressed } else { KeyState::Released },
+            state: if event.pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
             text: if event.pressed && event.key.len() == 1 {
                 Some(event.key.clone().into())
             } else {

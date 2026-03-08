@@ -30,9 +30,9 @@ pub mod validation;
 
 pub use brush::*;
 pub use constants::*;
-pub use layer::{LayerStack, Layer};
 #[cfg(feature = "bevy")]
 pub use half_edge::*;
+pub use layer::{Layer, LayerStack};
 pub use log::*;
 pub use mesh_surface::*;
 pub use pipeline::*;

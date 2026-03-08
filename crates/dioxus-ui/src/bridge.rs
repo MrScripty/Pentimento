@@ -4,13 +4,13 @@
 
 use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, BevyToUi, BlendMode,
-    CameraCommand, DiffusionRequest, EditMode, LightingSettings, MaterialCommand,
-    MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand, PrimitiveType,
-    UiToBevy,
+    CameraCommand, DiffusionRequest, EditMode, LightingSettings, MaterialCommand, MeshEditCommand,
+    MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand, PrimitiveType, UiToBevy,
 };
 use std::sync::{
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc, Mutex,
+    mpsc,
 };
 
 /// Shared state that persists between renders.
@@ -261,7 +261,10 @@ impl DioxusBridge {
 
     /// Add a paint canvas in front of the camera and enter paint mode
     pub fn add_paint_canvas(&self, width: Option<u32>, height: Option<u32>) {
-        self.send(UiToBevy::AddPaintCanvas(AddPaintCanvasRequest { width, height }));
+        self.send(UiToBevy::AddPaintCanvas(AddPaintCanvasRequest {
+            width,
+            height,
+        }));
     }
 
     // ========================================================================
@@ -277,7 +280,9 @@ impl DioxusBridge {
 
     /// Set brush color (RGBA, 0.0-1.0)
     pub fn set_brush_color(&self, color: [f32; 4]) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushColor { color }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushColor {
+            color,
+        }));
     }
 
     /// Set brush size in pixels
@@ -287,12 +292,16 @@ impl DioxusBridge {
 
     /// Set brush opacity (0.0-1.0)
     pub fn set_brush_opacity(&self, opacity: f32) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushOpacity { opacity }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushOpacity {
+            opacity,
+        }));
     }
 
     /// Set brush hardness (0.0-1.0)
     pub fn set_brush_hardness(&self, hardness: f32) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushHardness { hardness }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushHardness {
+            hardness,
+        }));
     }
 
     /// Set blend mode (Normal or Erase)
@@ -307,7 +316,9 @@ impl DioxusBridge {
 
     /// Enable/disable live projection mode (paint projects to meshes in real-time)
     pub fn set_live_projection(&self, enabled: bool) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetLiveProjection { enabled }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetLiveProjection {
+            enabled,
+        }));
     }
 
     /// Project current canvas contents to all visible meshes (one-shot)
@@ -326,32 +337,48 @@ impl DioxusBridge {
 
     /// Remove a layer by ID
     pub fn remove_layer(&self, layer_id: u32) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::RemoveLayer { layer_id }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::RemoveLayer {
+            layer_id,
+        }));
     }
 
     /// Set the active (painting target) layer
     pub fn set_active_layer(&self, layer_id: u32) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetActiveLayer { layer_id }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetActiveLayer {
+            layer_id,
+        }));
     }
 
     /// Toggle layer visibility
     pub fn set_layer_visibility(&self, layer_id: u32, visible: bool) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetLayerVisibility { layer_id, visible }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetLayerVisibility {
+            layer_id,
+            visible,
+        }));
     }
 
     /// Set layer opacity (0.0-1.0)
     pub fn set_layer_opacity(&self, layer_id: u32, opacity: f32) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::SetLayerOpacity { layer_id, opacity }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetLayerOpacity {
+            layer_id,
+            opacity,
+        }));
     }
 
     /// Reorder layer to a new index position
     pub fn reorder_layer(&self, layer_id: u32, new_index: u32) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::ReorderLayer { layer_id, new_index }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::ReorderLayer {
+            layer_id,
+            new_index,
+        }));
     }
 
     /// Rename a layer
     pub fn rename_layer(&self, layer_id: u32, name: String) {
-        self.send(UiToBevy::PaintCommand(PaintCommand::RenameLayer { layer_id, name }));
+        self.send(UiToBevy::PaintCommand(PaintCommand::RenameLayer {
+            layer_id,
+            name,
+        }));
     }
 
     // ========================================================================
@@ -360,9 +387,9 @@ impl DioxusBridge {
 
     /// Set mesh edit selection mode (Vertex/Edge/Face)
     pub fn set_mesh_selection_mode(&self, mode: MeshSelectionMode) {
-        self.send(UiToBevy::MeshEditCommand(MeshEditCommand::SetSelectionMode(
-            mode,
-        )));
+        self.send(UiToBevy::MeshEditCommand(
+            MeshEditCommand::SetSelectionMode(mode),
+        ));
     }
 
     /// Set mesh edit tool

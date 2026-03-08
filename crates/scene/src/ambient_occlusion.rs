@@ -70,10 +70,12 @@ fn update_ambient_occlusion(
             };
 
             // Insert or update SSAO component
-            commands.entity(camera_entity).insert(ScreenSpaceAmbientOcclusion {
-                quality_level: quality,
-                constant_object_thickness: settings.constant_object_thickness,
-            });
+            commands
+                .entity(camera_entity)
+                .insert(ScreenSpaceAmbientOcclusion {
+                    quality_level: quality,
+                    constant_object_thickness: settings.constant_object_thickness,
+                });
 
             info!(
                 "SSAO enabled: quality={:?}, thickness={}",

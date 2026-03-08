@@ -56,7 +56,10 @@ pub fn setup_ui_cef(world: &mut World) {
         )
     };
 
-    info!("Setting up CEF UI composite system ({}x{} physical)", width, height);
+    info!(
+        "Setting up CEF UI composite system ({}x{} physical)",
+        width, height
+    );
 
     // Get HTML content for the webview
     let html = UiAssets::get_html();
@@ -219,7 +222,10 @@ pub fn handle_cef_window_resize(
         return;
     }
 
-    info!("Window resized to {}x{} physical, updating CEF webview", width, height);
+    info!(
+        "Window resized to {}x{} physical, updating CEF webview",
+        width, height
+    );
     last_size.width = width;
     last_size.height = height;
 

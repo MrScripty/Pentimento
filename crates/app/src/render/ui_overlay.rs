@@ -53,7 +53,10 @@ pub fn setup_ui_overlay(world: &mut World) {
         }
     };
 
-    info!("Setting up UI overlay system (deferred creation, {}x{})", width, height);
+    info!(
+        "Setting up UI overlay system (deferred creation, {}x{})",
+        width, height
+    );
 
     // Initialize tracking resources - webview creation is deferred to avoid GLX conflicts
     // The overlay will be created after a few frames when the Bevy window is stable

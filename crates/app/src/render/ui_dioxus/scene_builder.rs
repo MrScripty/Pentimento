@@ -6,9 +6,7 @@ use pentimento_dioxus_ui::{BlitzDocument, UiEvent};
 use pentimento_scene::OutboundUiMessages;
 
 use super::event_bridge::{BlitzDocumentResource, DioxusEventReceiver};
-use super::resources::{
-    DioxusRenderTarget, DioxusSetupStatus, DioxusUiState, VelloSceneBuffer,
-};
+use super::resources::{DioxusRenderTarget, DioxusSetupStatus, DioxusUiState, VelloSceneBuffer};
 
 /// Build the UI scene from BlitzDocument (runs every frame in main world).
 /// This is an exclusive system because BlitzDocumentResource is NonSend.

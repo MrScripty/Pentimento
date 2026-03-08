@@ -31,11 +31,11 @@ use crate::error::WebviewError;
 use cef::args::Args;
 use cef::rc::Rc as _;
 use cef::{
-    api_hash, sys, wrap_app, wrap_client, wrap_display_handler, wrap_render_handler, App, Browser,
-    BrowserSettings, CefString, CefStringUtf16, Client, DisplayHandler, ImplApp, ImplBrowser,
-    ImplBrowserHost, ImplClient, ImplDisplayHandler, ImplFrame, ImplRenderHandler, KeyEvent,
-    KeyEventType, LogSeverity, MouseButtonType, PaintElementType, Rect, RenderHandler, Settings,
-    WindowInfo, WrapApp, WrapClient, WrapDisplayHandler, WrapRenderHandler,
+    App, Browser, BrowserSettings, CefString, CefStringUtf16, Client, DisplayHandler, ImplApp,
+    ImplBrowser, ImplBrowserHost, ImplClient, ImplDisplayHandler, ImplFrame, ImplRenderHandler,
+    KeyEvent, KeyEventType, LogSeverity, MouseButtonType, PaintElementType, Rect, RenderHandler,
+    Settings, WindowInfo, WrapApp, WrapClient, WrapDisplayHandler, WrapRenderHandler, api_hash,
+    sys, wrap_app, wrap_client, wrap_display_handler, wrap_render_handler,
 };
 use pentimento_ipc::{KeyboardEvent, MouseButton, MouseEvent, UiToBevy};
 use std::ffi::c_int;
@@ -248,7 +248,8 @@ impl RenderHandlerBuilder {
 
 impl ClientBuilder {
     pub fn build(shared: Arc<SharedState>) -> Client {
-        let render_handler = RenderHandlerBuilder::build(OsrRenderHandler::new(Arc::clone(&shared)));
+        let render_handler =
+            RenderHandlerBuilder::build(OsrRenderHandler::new(Arc::clone(&shared)));
         let display_handler = DisplayHandlerBuilder::build(OsrDisplayHandler::new(shared));
         Self::new(render_handler, display_handler)
     }

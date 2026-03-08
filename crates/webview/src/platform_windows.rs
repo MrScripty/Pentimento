@@ -2,8 +2,8 @@
 
 use crate::error::WebviewError;
 use pentimento_ipc::{KeyboardEvent, MouseEvent, UiToBevy};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 
 /// Windows webview implementation using WebView2

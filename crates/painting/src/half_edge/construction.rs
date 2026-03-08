@@ -5,8 +5,8 @@ use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use super::types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
 use super::HalfEdgeMesh;
+use super::types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
 
 impl HalfEdgeMesh {
     /// Build a half-edge mesh from a Bevy mesh
@@ -27,12 +27,12 @@ impl HalfEdgeMesh {
             .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
         // Extract UVs (optional)
-        let uvs: Option<Vec<[f32; 2]>> = mesh
-            .attribute(Mesh::ATTRIBUTE_UV_0)
-            .and_then(|attr| match attr {
-                VertexAttributeValues::Float32x2(v) => Some(v.clone()),
-                _ => None,
-            });
+        let uvs: Option<Vec<[f32; 2]>> =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+                .and_then(|attr| match attr {
+                    VertexAttributeValues::Float32x2(v) => Some(v.clone()),
+                    _ => None,
+                });
 
         // Extract indices
         let indices: Vec<u32> = match mesh.indices() {
@@ -186,11 +186,9 @@ impl HalfEdgeMesh {
             }
 
             // Add to edge map and try to find twins
-            for (he_id, (origin, dest)) in [
-                (he0_id, (v0, v1)),
-                (he1_id, (v1, v2)),
-                (he2_id, (v2, v0)),
-            ] {
+            for (he_id, (origin, dest)) in
+                [(he0_id, (v0, v1)), (he1_id, (v1, v2)), (he2_id, (v2, v0))]
+            {
                 // Check if the opposite half-edge exists
                 if let Some(&twin_id) = edge_map.get(&(dest, origin)) {
                     // Link twins

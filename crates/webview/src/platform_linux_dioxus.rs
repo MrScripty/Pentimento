@@ -20,8 +20,8 @@
 use crate::error::WebviewError;
 use pentimento_dioxus_ui::{DioxusBridge, DioxusBridgeHandle};
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, info};
 
 /// Dioxus renderer state
@@ -51,10 +51,7 @@ pub struct LinuxDioxusRenderer {
 
 impl LinuxDioxusRenderer {
     /// Create a new Dioxus renderer
-    pub fn new(
-        size: (u32, u32),
-        dirty: Arc<AtomicBool>,
-    ) -> Result<Self, WebviewError> {
+    pub fn new(size: (u32, u32), dirty: Arc<AtomicBool>) -> Result<Self, WebviewError> {
         info!("Creating Dioxus renderer {}x{}", size.0, size.1);
 
         // Create the IPC bridge
@@ -93,7 +90,7 @@ impl LinuxDioxusRenderer {
             for x in 0..width {
                 let idx = (y * width + x) * 4;
                 if idx + 3 < framebuffer.len() {
-                    framebuffer[idx] = 30;     // R
+                    framebuffer[idx] = 30; // R
                     framebuffer[idx + 1] = 30; // G
                     framebuffer[idx + 2] = 30; // B
                     framebuffer[idx + 3] = 216; // A (85% opacity)
@@ -106,10 +103,12 @@ impl LinuxDioxusRenderer {
         let panel_top = 56.min(height);
         let panel_margin = 8;
         for y in panel_top..height.saturating_sub(panel_margin) {
-            for x in (width.saturating_sub(panel_width + panel_margin))..width.saturating_sub(panel_margin) {
+            for x in (width.saturating_sub(panel_width + panel_margin))
+                ..width.saturating_sub(panel_margin)
+            {
                 let idx = (y * width + x) * 4;
                 if idx + 3 < framebuffer.len() {
-                    framebuffer[idx] = 30;     // R
+                    framebuffer[idx] = 30; // R
                     framebuffer[idx + 1] = 30; // G
                     framebuffer[idx + 2] = 30; // B
                     framebuffer[idx + 3] = 216; // A (85% opacity)
@@ -126,7 +125,7 @@ impl LinuxDioxusRenderer {
             for x in text_x..(text_x + text_width).min(width) {
                 let idx = (y * width + x) * 4;
                 if idx + 3 < framebuffer.len() {
-                    framebuffer[idx] = 255;    // R
+                    framebuffer[idx] = 255; // R
                     framebuffer[idx + 1] = 255; // G
                     framebuffer[idx + 2] = 255; // B
                     framebuffer[idx + 3] = 255; // A

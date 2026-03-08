@@ -3,9 +3,9 @@
 use dioxus::prelude::*;
 
 use crate::bridge::DioxusBridge;
+use crate::components::Slider;
 use crate::components::brush_palette::BrushPalette;
 use crate::components::color_picker::ColorPicker;
-use crate::components::Slider;
 
 const PAINT_SIDE_PANEL_CSS: &str = r#"
 .paint-side-panel {
@@ -104,14 +104,14 @@ const PAINT_SIDE_PANEL_CSS: &str = r#"
 
 /// Preset color swatches
 const PRESET_SWATCHES: [[f32; 4]; 8] = [
-    [0.0, 0.0, 0.0, 1.0],   // Black
-    [1.0, 1.0, 1.0, 1.0],   // White
-    [1.0, 0.0, 0.0, 1.0],   // Red
-    [0.0, 0.5, 1.0, 1.0],   // Blue
-    [0.0, 0.8, 0.2, 1.0],   // Green
-    [1.0, 1.0, 0.0, 1.0],   // Yellow
-    [0.6, 0.2, 0.8, 1.0],   // Purple
-    [1.0, 0.5, 0.0, 1.0],   // Orange
+    [0.0, 0.0, 0.0, 1.0], // Black
+    [1.0, 1.0, 1.0, 1.0], // White
+    [1.0, 0.0, 0.0, 1.0], // Red
+    [0.0, 0.5, 1.0, 1.0], // Blue
+    [0.0, 0.8, 0.2, 1.0], // Green
+    [1.0, 1.0, 0.0, 1.0], // Yellow
+    [0.6, 0.2, 0.8, 1.0], // Purple
+    [1.0, 0.5, 0.0, 1.0], // Orange
 ];
 
 /// Maximum number of recent colors to track

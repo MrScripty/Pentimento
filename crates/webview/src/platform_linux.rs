@@ -4,14 +4,16 @@ use crate::error::WebviewError;
 use pentimento_ipc::{KeyboardEvent, MouseButton, MouseEvent, UiToBevy};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 use cairo::{Format, ImageSurface};
 use gio::prelude::*;
 use gtk::prelude::*;
-use webkit2gtk::{LoadEvent, SnapshotOptions, SnapshotRegion, WebView as WebKitWebView, WebViewExt};
+use webkit2gtk::{
+    LoadEvent, SnapshotOptions, SnapshotRegion, WebView as WebKitWebView, WebViewExt,
+};
 use wry::WebViewBuilderExtUnix;
 
 /// Webview lifecycle states for managing capture timing
@@ -120,8 +122,9 @@ impl LinuxWebview {
 
         // Extract the WebKitWebView from the container for snapshot capture
         // wry places the WebView as a child of the container
-        let webkit_webview = Self::find_webkit_webview(&container)
-            .ok_or_else(|| WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into()))?;
+        let webkit_webview = Self::find_webkit_webview(&container).ok_or_else(|| {
+            WebviewError::WebviewCreate("Failed to find WebKitWebView in container".into())
+        })?;
 
         // CRITICAL: Set the webkit webview size to match the intended viewport
         // Without this, the viewport defaults to 200x200 and coordinate mapping breaks
@@ -198,9 +201,7 @@ impl LinuxWebview {
     pub fn poll(&mut self) {
         // Determine how many GTK iterations based on current state
         let iterations = match self.state {
-            WebviewState::Initializing | WebviewState::WarmingUp { .. } => {
-                WARMUP_GTK_ITERATIONS
-            }
+            WebviewState::Initializing | WebviewState::WarmingUp { .. } => WARMUP_GTK_ITERATIONS,
             WebviewState::Ready | WebviewState::Resizing { .. } => READY_GTK_ITERATIONS,
         };
 
@@ -276,16 +277,14 @@ impl LinuxWebview {
                             docHeight: document.documentElement.clientHeight
                         })"#,
                         gio::Cancellable::NONE,
-                        move |result| {
-                            match result {
-                                Ok(js_value) => {
-                                    if let Some(value) = js_value.js_value() {
-                                        let json_str = value.to_string();
-                                        tracing::info!("WebKit viewport dimensions: {}", json_str);
-                                    }
+                        move |result| match result {
+                            Ok(js_value) => {
+                                if let Some(value) = js_value.js_value() {
+                                    let json_str = value.to_string();
+                                    tracing::info!("WebKit viewport dimensions: {}", json_str);
                                 }
-                                Err(e) => tracing::warn!("Failed to query viewport: {}", e),
                             }
+                            Err(e) => tracing::warn!("Failed to query viewport: {}", e),
                         },
                     );
                     self.state = WebviewState::Ready;
@@ -309,16 +308,14 @@ impl LinuxWebview {
                             docHeight: document.documentElement.clientHeight
                         })"#,
                         gio::Cancellable::NONE,
-                        move |result| {
-                            match result {
-                                Ok(js_value) => {
-                                    if let Some(value) = js_value.js_value() {
-                                        let json_str = value.to_string();
-                                        tracing::info!("WebKit viewport after resize: {}", json_str);
-                                    }
+                        move |result| match result {
+                            Ok(js_value) => {
+                                if let Some(value) = js_value.js_value() {
+                                    let json_str = value.to_string();
+                                    tracing::info!("WebKit viewport after resize: {}", json_str);
                                 }
-                                Err(e) => tracing::warn!("Failed to query viewport: {}", e),
                             }
+                            Err(e) => tracing::warn!("Failed to query viewport: {}", e),
                         },
                     );
                     self.state = WebviewState::Ready;
@@ -356,8 +353,10 @@ impl LinuxWebview {
         // Wait for settling after mouse events to avoid capturing intermediate render state
         if self.frames_until_capture_allowed > 0 {
             self.frames_until_capture_allowed -= 1;
-            tracing::trace!("Capture delayed: {} frames remaining for mouse event settling",
-                           self.frames_until_capture_allowed);
+            tracing::trace!(
+                "Capture delayed: {} frames remaining for mouse event settling",
+                self.frames_until_capture_allowed
+            );
             // Keep dirty true so we retry once settling completes.
             self.dirty.store(true, Ordering::SeqCst);
             return None;
@@ -394,7 +393,11 @@ impl LinuxWebview {
                         match Self::cairo_surface_to_rgba(&surface, width as i32, height as i32) {
                             Ok(img) => {
                                 *cache.borrow_mut() = Some(img);
-                                tracing::debug!("Snapshot captured successfully at {}x{}", width, height);
+                                tracing::debug!(
+                                    "Snapshot captured successfully at {}x{}",
+                                    width,
+                                    height
+                                );
                             }
                             Err(e) => {
                                 tracing::error!("Failed to convert Cairo surface: {}", e);
@@ -439,8 +442,7 @@ impl LinuxWebview {
         ctx.set_source_surface(surface, 0.0, 0.0)
             .map_err(|e| format!("Failed to set source surface: {}", e))?;
 
-        ctx.paint()
-            .map_err(|e| format!("Failed to paint: {}", e))?;
+        ctx.paint().map_err(|e| format!("Failed to paint: {}", e))?;
 
         drop(ctx);
         img_surface.flush();
@@ -484,12 +486,7 @@ impl LinuxWebview {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        tracing::info!(
-            "Webview resize: {:?} -> ({}, {})",
-            self.size,
-            width,
-            height
-        );
+        tracing::info!("Webview resize: {:?} -> ({}, {})", self.size, width, height);
 
         self.size = (width, height);
         let (logical_width, logical_height) = self.logical_size();
@@ -511,10 +508,12 @@ impl LinuxWebview {
 
         // Update wry webview bounds (critical for Linux with gtk::Fixed)
         // Without this, the webview renders fuzzy. This matches overlay mode.
-        self.webview.set_bounds(wry::Rect {
-            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
-            size: wry::dpi::PhysicalSize::new(width, height).into(),
-        }).ok();
+        self.webview
+            .set_bounds(wry::Rect {
+                position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                size: wry::dpi::PhysicalSize::new(width, height).into(),
+            })
+            .ok();
 
         // Force WebKit to re-layout by triggering a resize event in JavaScript
         // This helps ensure the viewport updates to match the new size
@@ -571,7 +570,12 @@ impl LinuxWebview {
         // Log mouse events for debugging coordinate issues
         match &event {
             MouseEvent::ButtonDown { x, y, .. } => {
-                tracing::info!("inject_mouse ButtonDown at ({:.1}, {:.1}), webview size: {:?}", x, y, self.size);
+                tracing::info!(
+                    "inject_mouse ButtonDown at ({:.1}, {:.1}), webview size: {:?}",
+                    x,
+                    y,
+                    self.size
+                );
             }
             MouseEvent::ButtonUp { x, y, .. } => {
                 tracing::debug!("inject_mouse ButtonUp at ({:.1}, {:.1})", x, y);
@@ -589,8 +593,9 @@ impl LinuxWebview {
         let (js, needs_raf_dirty) = match event {
             MouseEvent::Move { x, y } => {
                 // Mouse move doesn't need dirty update
-                (format!(
-                    r#"(function() {{
+                (
+                    format!(
+                        r#"(function() {{
                         const viewWidth = {view_width};
                         const viewHeight = {view_height};
                         const scaleX = viewWidth > 0 ? window.innerWidth / viewWidth : 1;
@@ -643,11 +648,13 @@ impl LinuxWebview {
                             view: window
                         }}));
                     }})()"#,
-                    x = x,
-                    y = y,
-                    view_width = self.size.0,
-                    view_height = self.size.1
-                ), false)
+                        x = x,
+                        y = y,
+                        view_width = self.size.0,
+                        view_height = self.size.1
+                    ),
+                    false,
+                )
             }
             MouseEvent::ButtonDown { button, x, y } => {
                 let button_num = match button {
@@ -657,8 +664,9 @@ impl LinuxWebview {
                 };
                 // mousedown alone typically doesn't change visible UI state much
                 // Added debug logging to diagnose viewport coordinate mismatch
-                (format!(
-                    r#"(function() {{
+                (
+                    format!(
+                        r#"(function() {{
                         const viewWidth = {view_width};
                         const viewHeight = {view_height};
                         const scaleX = viewWidth > 0 ? window.innerWidth / viewWidth : 1;
@@ -715,12 +723,14 @@ impl LinuxWebview {
                             view: window
                         }}));
                     }})()"#,
-                    x = x,
-                    y = y,
-                    button = button_num,
-                    view_width = self.size.0,
-                    view_height = self.size.1
-                ), false) // Don't mark dirty yet - wait for click
+                        x = x,
+                        y = y,
+                        button = button_num,
+                        view_width = self.size.0,
+                        view_height = self.size.1
+                    ),
+                    false,
+                ) // Don't mark dirty yet - wait for click
             }
             MouseEvent::ButtonUp { button, x, y } => {
                 let button_num = match button {
@@ -729,8 +739,9 @@ impl LinuxWebview {
                     MouseButton::Right => 2,
                 };
                 // Click is where state changes happen - use RAF to wait for DOM update
-                (format!(
-                    r#"(function() {{
+                (
+                    format!(
+                        r#"(function() {{
                         const viewWidth = {view_width};
                         const viewHeight = {view_height};
                         const scaleX = viewWidth > 0 ? window.innerWidth / viewWidth : 1;
@@ -803,15 +814,22 @@ impl LinuxWebview {
                             }});
                         }}
                     }})()"#,
-                    x = x,
-                    y = y,
-                    button = button_num,
-                    view_width = self.size.0,
-                    view_height = self.size.1
-                ), true)
+                        x = x,
+                        y = y,
+                        button = button_num,
+                        view_width = self.size.0,
+                        view_height = self.size.1
+                    ),
+                    true,
+                )
             }
-            MouseEvent::Scroll { delta_x, delta_y, x, y } => {
-                (format!(
+            MouseEvent::Scroll {
+                delta_x,
+                delta_y,
+                x,
+                y,
+            } => (
+                format!(
                     r#"(function() {{
                         const viewWidth = {view_width};
                         const viewHeight = {view_height};
@@ -880,12 +898,14 @@ impl LinuxWebview {
                     delta_y = delta_y,
                     view_width = self.size.0,
                     view_height = self.size.1
-                ), true)
-            }
+                ),
+                true,
+            ),
         };
 
         // Execute the JavaScript to dispatch the event
-        self.webkit_webview.run_javascript(&js, gio::Cancellable::NONE, |_| {});
+        self.webkit_webview
+            .run_javascript(&js, gio::Cancellable::NONE, |_| {});
 
         // Delay capture after mouse events to allow RAF callbacks and layout/paint to complete
         // This prevents capturing WebKit in an intermediate render state (which causes fuzziness)
@@ -930,14 +950,12 @@ impl LinuxWebview {
             meta = event.modifiers.meta
         );
 
-        self.webkit_webview.run_javascript(&js, gio::Cancellable::NONE, |_| {});
+        self.webkit_webview
+            .run_javascript(&js, gio::Cancellable::NONE, |_| {});
 
         // Only mark dirty for key presses (not releases) that might change UI
         // Modifier keys alone don't typically change visible UI
-        let is_modifier = matches!(
-            event.key.as_str(),
-            "Shift" | "Control" | "Alt" | "Meta"
-        );
+        let is_modifier = matches!(event.key.as_str(), "Shift" | "Control" | "Alt" | "Meta");
         if event.pressed && !is_modifier {
             self.dirty.store(true, Ordering::SeqCst);
         }

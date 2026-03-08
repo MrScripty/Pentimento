@@ -112,8 +112,7 @@ fn handle_paint_mode_toggle(
     mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
     // Shift+Tab to toggle paint mode
-    let shift = key_input.pressed(KeyCode::ShiftLeft)
-        || key_input.pressed(KeyCode::ShiftRight);
+    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
 
     if shift && tab {
@@ -198,7 +197,10 @@ fn handle_paint_input(
 
     // Handle stroke start (just pressed) - use current cursor position
     if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions.last().copied().or_else(|| window.cursor_position());
+        let cursor_pos = cursor_positions
+            .last()
+            .copied()
+            .or_else(|| window.cursor_position());
         if let Some(cursor_pos) = cursor_pos {
             let ray = camera.viewport_to_world(camera_transform, cursor_pos);
             if let Some(ray) = ray.ok() {
@@ -261,7 +263,10 @@ fn handle_paint_input(
             for cursor_pos in positions_to_process {
                 let ray = camera.viewport_to_world(camera_transform, cursor_pos);
                 let Some(ray) = ray.ok() else {
-                    info!("StrokeMove: ray cast failed for cursor_pos {:?}", cursor_pos);
+                    info!(
+                        "StrokeMove: ray cast failed for cursor_pos {:?}",
+                        cursor_pos
+                    );
                     continue;
                 };
 
@@ -277,11 +282,7 @@ fn handle_paint_input(
                     let speed = if let Some(last_pos) = stroke_state.last_world_pos {
                         let distance = world_pos.distance(last_pos);
                         let dt = (current_time - stroke_state.last_time) as f32;
-                        if dt > 0.0 {
-                            distance / dt
-                        } else {
-                            0.0
-                        }
+                        if dt > 0.0 { distance / dt } else { 0.0 }
                     } else {
                         0.0
                     };
@@ -296,7 +297,10 @@ fn handle_paint_input(
                         pressure: 1.0, // Default pressure for mouse
                         speed,
                     });
-                    info!("StrokeMove: wrote event uv=({:.3}, {:.3})", uv_pos.x, uv_pos.y);
+                    info!(
+                        "StrokeMove: wrote event uv=({:.3}, {:.3})",
+                        uv_pos.x, uv_pos.y
+                    );
                 } else {
                     info!("StrokeMove: ray-plane intersection returned None");
                 }

@@ -1,7 +1,7 @@
 //! Resource types for Dioxus UI rendering.
 
-use bevy::prelude::*;
 use bevy::asset::AssetId;
+use bevy::prelude::*;
 use bevy::render::extract_resource::ExtractResource;
 use pentimento_dioxus_ui::Scene;
 

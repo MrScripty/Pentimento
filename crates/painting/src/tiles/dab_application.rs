@@ -23,14 +23,7 @@ impl TiledSurface {
     ) -> Option<(u32, u32, u32, u32)> {
         // Delegate to ellipse implementation with circular parameters
         self.apply_dab_ellipse(
-            center_x,
-            center_y,
-            radius,
-            color,
-            opacity,
-            hardness,
-            blend_mode,
-            0.0, // angle
+            center_x, center_y, radius, color, opacity, hardness, blend_mode, 0.0, // angle
             1.0, // aspect_ratio (1.0 = circle)
         )
     }
@@ -172,11 +165,7 @@ impl TiledSurface {
 pub fn calculate_hardness_falloff(distance_normalized: f32, hardness: f32) -> f32 {
     if hardness >= 1.0 {
         // Pure hard edge
-        if distance_normalized <= 1.0 {
-            1.0
-        } else {
-            0.0
-        }
+        if distance_normalized <= 1.0 { 1.0 } else { 0.0 }
     } else {
         let t = distance_normalized.clamp(0.0, 1.0);
         let soft = 1.0 - t; // Linear falloff for soft brush

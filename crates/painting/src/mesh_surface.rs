@@ -77,8 +77,17 @@ impl MeshUvSurface {
         let x = uv.x * width;
         let y = (1.0 - uv.y) * height; // Flip Y for texture coordinates
 
-        self.atlas
-            .apply_dab_ellipse(x, y, radius, color, opacity, hardness, blend_mode, angle, aspect_ratio)
+        self.atlas.apply_dab_ellipse(
+            x,
+            y,
+            radius,
+            color,
+            opacity,
+            hardness,
+            blend_mode,
+            angle,
+            aspect_ratio,
+        )
     }
 
     /// Get the underlying tiled surface for GPU upload.
@@ -358,11 +367,7 @@ impl MeshPtexSurface {
 #[inline]
 fn calculate_hardness_falloff(distance_normalized: f32, hardness: f32) -> f32 {
     if hardness >= 1.0 {
-        if distance_normalized <= 1.0 {
-            1.0
-        } else {
-            0.0
-        }
+        if distance_normalized <= 1.0 { 1.0 } else { 0.0 }
     } else {
         let t = distance_normalized.clamp(0.0, 1.0);
         let soft = 1.0 - t;

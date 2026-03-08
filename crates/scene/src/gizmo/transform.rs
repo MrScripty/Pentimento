@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use pentimento_ipc::{CoordinateSpace, GizmoAxis, GizmoMode};
 
 #[cfg(feature = "selection")]
-use crate::selection::Selected;
-#[cfg(feature = "selection")]
 use crate::MainCamera;
+#[cfg(feature = "selection")]
+use crate::selection::Selected;
 
 use super::state::GizmoState;
 
@@ -102,15 +102,16 @@ pub(crate) fn apply_gizmo_transform(
             GizmoMode::Translate => {
                 // Camera-relative movement: project mouse input through camera orientation
                 // For Local mode, use the object's rotated axis directions
-                let (axis_x, axis_y, axis_z) = if gizmo_state.coordinate_space == CoordinateSpace::Local {
-                    (
-                        original.rotation * Vec3::X,
-                        original.rotation * Vec3::Y,
-                        original.rotation * Vec3::Z,
-                    )
-                } else {
-                    (Vec3::X, Vec3::Y, Vec3::Z)
-                };
+                let (axis_x, axis_y, axis_z) =
+                    if gizmo_state.coordinate_space == CoordinateSpace::Local {
+                        (
+                            original.rotation * Vec3::X,
+                            original.rotation * Vec3::Y,
+                            original.rotation * Vec3::Z,
+                        )
+                    } else {
+                        (Vec3::X, Vec3::Y, Vec3::Z)
+                    };
 
                 let base_movement = match gizmo_state.axis_constraint {
                     GizmoAxis::None => {
@@ -135,18 +136,24 @@ pub(crate) fn apply_gizmo_transform(
                     }
                     GizmoAxis::XY => {
                         // Project onto XY plane using camera orientation
-                        let move_x = camera_right.dot(axis_x) * delta.x - camera_up.dot(axis_x) * delta.y;
-                        let move_y = camera_right.dot(axis_y) * delta.x - camera_up.dot(axis_y) * delta.y;
+                        let move_x =
+                            camera_right.dot(axis_x) * delta.x - camera_up.dot(axis_x) * delta.y;
+                        let move_y =
+                            camera_right.dot(axis_y) * delta.x - camera_up.dot(axis_y) * delta.y;
                         (axis_x * move_x + axis_y * move_y) * sensitivity
                     }
                     GizmoAxis::XZ => {
-                        let move_x = camera_right.dot(axis_x) * delta.x - camera_up.dot(axis_x) * delta.y;
-                        let move_z = camera_right.dot(axis_z) * delta.x - camera_up.dot(axis_z) * delta.y;
+                        let move_x =
+                            camera_right.dot(axis_x) * delta.x - camera_up.dot(axis_x) * delta.y;
+                        let move_z =
+                            camera_right.dot(axis_z) * delta.x - camera_up.dot(axis_z) * delta.y;
                         (axis_x * move_x + axis_z * move_z) * sensitivity
                     }
                     GizmoAxis::YZ => {
-                        let move_y = camera_right.dot(axis_y) * delta.x - camera_up.dot(axis_y) * delta.y;
-                        let move_z = camera_right.dot(axis_z) * delta.x - camera_up.dot(axis_z) * delta.y;
+                        let move_y =
+                            camera_right.dot(axis_y) * delta.x - camera_up.dot(axis_y) * delta.y;
+                        let move_z =
+                            camera_right.dot(axis_z) * delta.x - camera_up.dot(axis_z) * delta.y;
                         (axis_y * move_y + axis_z * move_z) * sensitivity
                     }
                 };
@@ -224,18 +231,19 @@ pub(crate) fn apply_gizmo_transform(
                 // Combined gives intuitive "grab and spin" behavior
 
                 // Get axes (local or global)
-                let (axis_x, axis_y, axis_z) = if gizmo_state.coordinate_space == CoordinateSpace::Local {
-                    (
-                        original.rotation * Vec3::X,
-                        original.rotation * Vec3::Y,
-                        original.rotation * Vec3::Z,
-                    )
-                } else {
-                    (Vec3::X, Vec3::Y, Vec3::Z)
-                };
+                let (axis_x, axis_y, axis_z) =
+                    if gizmo_state.coordinate_space == CoordinateSpace::Local {
+                        (
+                            original.rotation * Vec3::X,
+                            original.rotation * Vec3::Y,
+                            original.rotation * Vec3::Z,
+                        )
+                    } else {
+                        (Vec3::X, Vec3::Y, Vec3::Z)
+                    };
 
                 let rotation_x = -delta.y * sensitivity; // Vertical mouse rotates around X
-                let rotation_y = delta.x * sensitivity;  // Horizontal mouse rotates around Y
+                let rotation_y = delta.x * sensitivity; // Horizontal mouse rotates around Y
 
                 // Apply axis constraints if set
                 let (rot_x, rot_y) = match gizmo_state.axis_constraint {

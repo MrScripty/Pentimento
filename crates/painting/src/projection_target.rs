@@ -142,7 +142,9 @@ impl ProjectionTargetStorage for UvAtlasTarget {
 
         match blend_mode {
             BlendMode::Normal => {
-                self.surface.surface_mut().blend_pixel(px, py, color, opacity);
+                self.surface
+                    .surface_mut()
+                    .blend_pixel(px, py, color, opacity);
             }
             BlendMode::Erase => {
                 self.surface.surface_mut().erase_pixel(px, py, opacity);
@@ -204,7 +206,8 @@ impl ProjectionTargetStorage for UvAtlasTarget {
         // Mark all tiles dirty after clear
         for ty in 0..self.surface.tiles_y() {
             for tx in 0..self.surface.tiles_x() {
-                self.surface.mark_dirty(tx * self.surface.tile_size(), ty * self.surface.tile_size());
+                self.surface
+                    .mark_dirty(tx * self.surface.tile_size(), ty * self.surface.tile_size());
             }
         }
     }
@@ -371,8 +374,18 @@ mod tests {
         let mut target = UvAtlasTarget::new(256, 256);
 
         // Apply pixels in different tiles
-        target.apply_projected_pixel(Vec2::new(0.1, 0.1), [1.0, 0.0, 0.0, 1.0], 1.0, BlendMode::Normal);
-        target.apply_projected_pixel(Vec2::new(0.9, 0.9), [0.0, 1.0, 0.0, 1.0], 1.0, BlendMode::Normal);
+        target.apply_projected_pixel(
+            Vec2::new(0.1, 0.1),
+            [1.0, 0.0, 0.0, 1.0],
+            1.0,
+            BlendMode::Normal,
+        );
+        target.apply_projected_pixel(
+            Vec2::new(0.9, 0.9),
+            [0.0, 1.0, 0.0, 1.0],
+            1.0,
+            BlendMode::Normal,
+        );
 
         let regions = target.take_dirty_regions();
         assert_eq!(regions.len(), 2);

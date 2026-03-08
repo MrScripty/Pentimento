@@ -29,21 +29,26 @@ impl BevyNetProvider {
 impl NetProvider for BevyNetProvider {
     fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
         let scheme = request.url.scheme();
-        debug!("BevyNetProvider fetch: {} (scheme: {})", request.url, scheme);
+        debug!(
+            "BevyNetProvider fetch: {} (scheme: {})",
+            request.url, scheme
+        );
 
         match scheme {
             // Load Dioxus assets (CSS, images bundled with app)
-            "dioxus" => {
-                match dioxus_asset_resolver::native::serve_asset(request.url.path()) {
-                    Ok(res) => {
-                        debug!("Loaded dioxus asset: {}", request.url.path());
-                        handler.bytes(request.url.to_string(), res.into_body().into());
-                    }
-                    Err(e) => {
-                        warn!("Failed to load dioxus asset {}: {:?}", request.url.path(), e);
-                    }
+            "dioxus" => match dioxus_asset_resolver::native::serve_asset(request.url.path()) {
+                Ok(res) => {
+                    debug!("Loaded dioxus asset: {}", request.url.path());
+                    handler.bytes(request.url.to_string(), res.into_body().into());
                 }
-            }
+                Err(e) => {
+                    warn!(
+                        "Failed to load dioxus asset {}: {:?}",
+                        request.url.path(),
+                        e
+                    );
+                }
+            },
             // Decode data URIs (inline base64 images, etc.)
             "data" => {
                 let Ok(data_url) = DataUrl::process(request.url.as_str()) else {

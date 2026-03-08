@@ -7,10 +7,10 @@ use bevy::window::PrimaryWindow;
 use painting::half_edge::{FaceId, HalfEdgeId, HalfEdgeMesh, VertexId};
 use pentimento_ipc::{BevyToUi, EditMode, MeshSelectionMode};
 
+use crate::OutboundUiMessages;
 use crate::camera::MainCamera;
 use crate::edit_mode::EditModeState;
 use crate::mesh_edit_mode::{EditableMesh, MeshEditState};
-use crate::OutboundUiMessages;
 
 /// Result of a sub-object raycast
 #[derive(Debug, Clone)]
@@ -261,11 +261,7 @@ fn ray_triangle_intersection(
 
     let t = f * edge2.dot(q);
 
-    if t > epsilon {
-        Some((t, u, v))
-    } else {
-        None
-    }
+    if t > epsilon { Some((t, u, v)) } else { None }
 }
 
 /// Calculate distance from point to line segment

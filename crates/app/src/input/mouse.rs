@@ -11,8 +11,8 @@ use bevy::window::CursorMoved;
 use pentimento_ipc::{MouseButton as IpcMouseButton, MouseEvent};
 use std::time::{Duration, Instant};
 
-use super::backend::FrontendBackend;
 use super::MouseState;
+use super::backend::FrontendBackend;
 
 /// Minimum interval between mouse move events sent to webview (throttling)
 pub const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps max

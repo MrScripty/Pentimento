@@ -83,9 +83,10 @@ impl Plugin for DioxusRenderPlugin {
             return;
         };
 
-        render_app
-            .init_resource::<VelloRenderStatus>()
-            .add_systems(Render, render_vello_to_texture.in_set(RenderSystems::Render));
+        render_app.init_resource::<VelloRenderStatus>().add_systems(
+            Render,
+            render_vello_to_texture.in_set(RenderSystems::Render),
+        );
     }
 
     fn finish(&self, app: &mut App) {

@@ -141,7 +141,15 @@ mod tests {
         let mut surface = TiledSurface::new(256, 256, 128);
         surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
 
-        let result = surface.apply_dab(128.0, 128.0, 10.0, [1.0, 0.0, 0.0, 1.0], 1.0, 1.0, BlendMode::Normal);
+        let result = surface.apply_dab(
+            128.0,
+            128.0,
+            10.0,
+            [1.0, 0.0, 0.0, 1.0],
+            1.0,
+            1.0,
+            BlendMode::Normal,
+        );
 
         assert!(result.is_some());
         let (_x, _y, w, h) = result.unwrap();
@@ -157,7 +165,15 @@ mod tests {
     fn test_apply_dab_marks_dirty() {
         let mut surface = TiledSurface::new(256, 256, 128);
 
-        surface.apply_dab(128.0, 128.0, 10.0, [1.0, 0.0, 0.0, 1.0], 1.0, 1.0, BlendMode::Normal);
+        surface.apply_dab(
+            128.0,
+            128.0,
+            10.0,
+            [1.0, 0.0, 0.0, 1.0],
+            1.0,
+            1.0,
+            BlendMode::Normal,
+        );
 
         assert!(surface.has_dirty_tiles());
     }
@@ -169,7 +185,15 @@ mod tests {
         surface.surface_mut().clear([1.0, 0.0, 0.0, 1.0]);
 
         // Erase at center
-        let result = surface.apply_dab(128.0, 128.0, 10.0, [0.0, 0.0, 0.0, 1.0], 1.0, 1.0, BlendMode::Erase);
+        let result = surface.apply_dab(
+            128.0,
+            128.0,
+            10.0,
+            [0.0, 0.0, 0.0, 1.0],
+            1.0,
+            1.0,
+            BlendMode::Erase,
+        );
 
         assert!(result.is_some());
 
@@ -223,12 +247,15 @@ mod tests {
         surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
 
         let result = surface.apply_dab_ellipse(
-            128.0, 128.0, 10.0,
+            128.0,
+            128.0,
+            10.0,
             [1.0, 0.0, 0.0, 1.0],
-            1.0, 1.0,
+            1.0,
+            1.0,
             BlendMode::Normal,
-            0.0,  // angle
-            1.0,  // aspect_ratio (circular)
+            0.0, // angle
+            1.0, // aspect_ratio (circular)
         );
 
         assert!(result.is_some());
@@ -243,12 +270,15 @@ mod tests {
         surface.surface_mut().clear([1.0, 1.0, 1.0, 1.0]);
 
         let result = surface.apply_dab_ellipse(
-            128.0, 128.0, 20.0,
+            128.0,
+            128.0,
+            20.0,
             [1.0, 0.0, 0.0, 1.0],
-            1.0, 1.0,
+            1.0,
+            1.0,
             BlendMode::Normal,
-            0.0,      // angle = 0 (horizontal major axis)
-            0.5,      // aspect_ratio (half as tall as wide)
+            0.0, // angle = 0 (horizontal major axis)
+            0.5, // aspect_ratio (half as tall as wide)
         );
 
         assert!(result.is_some());
@@ -276,12 +306,15 @@ mod tests {
 
         let angle = std::f32::consts::FRAC_PI_4; // 45 degrees
         let result = surface.apply_dab_ellipse(
-            128.0, 128.0, 20.0,
+            128.0,
+            128.0,
+            20.0,
             [1.0, 0.0, 0.0, 1.0],
-            1.0, 1.0,
+            1.0,
+            1.0,
             BlendMode::Normal,
             angle,
-            0.3,  // Very elliptical
+            0.3, // Very elliptical
         );
 
         assert!(result.is_some());

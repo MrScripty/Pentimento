@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use tracing::trace;
 
-use super::types::{Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
 use super::HalfEdgeMesh;
+use super::types::{Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
 
 /// Result of mesh compaction - maps old IDs to new IDs.
 ///
@@ -241,11 +241,7 @@ impl HalfEdgeMesh {
 
         trace!(
             "flip_edge_topology: flipped edge {:?} from ({:?}->{:?}) to ({:?}<->{:?})",
-            edge_id,
-            v_a,
-            v_b,
-            v_c,
-            v_d
+            edge_id, v_a, v_b, v_c, v_d
         );
 
         true
@@ -572,10 +568,7 @@ impl HalfEdgeMesh {
         let v1_id = next_he.origin;
         trace!(
             "collapse_edge_topology: v0={:?}, v1={:?}, face={:?}, twin={:?}",
-            v0_id,
-            v1_id,
-            face_id,
-            twin_id
+            v0_id, v1_id, face_id, twin_id
         );
 
         // Calculate midpoint
@@ -950,7 +943,11 @@ impl HalfEdgeMesh {
                         tracing::warn!(
                             "compact: NON-MANIFOLD directed edge ({:?}->{:?}) shared by \
                              face {:?} and {:?}. Removing face {:?}.",
-                            he.origin, dest, earlier_face, face_id, face_id
+                            he.origin,
+                            dest,
+                            earlier_face,
+                            face_id,
+                            face_id
                         );
                         is_nonmanifold = true;
                         break;
@@ -1039,7 +1036,10 @@ impl HalfEdgeMesh {
                 let he = &self.half_edges[he_id.0 as usize];
                 tracing::warn!(
                     "compact: excluding live half-edge {:?} (origin={:?}, next={:?}, prev={:?}) - dead references",
-                    he_id, he.origin, he.next, he.prev
+                    he_id,
+                    he.origin,
+                    he.next,
+                    he.prev
                 );
                 included_he_ids.remove(he_id);
             }

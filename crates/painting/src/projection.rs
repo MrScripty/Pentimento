@@ -141,14 +141,7 @@ pub fn world_to_texel_size(
 ///
 /// # Returns
 /// Approximate UV units per world unit as a Vec2 (u_scale, v_scale).
-pub fn estimate_uv_scale(
-    p0: Vec3,
-    p1: Vec3,
-    p2: Vec3,
-    uv0: Vec2,
-    uv1: Vec2,
-    uv2: Vec2,
-) -> Vec2 {
+pub fn estimate_uv_scale(p0: Vec3, p1: Vec3, p2: Vec3, uv0: Vec2, uv1: Vec2, uv2: Vec2) -> Vec2 {
     // Edge vectors in world space
     let e1_world = p1 - p0;
     let e2_world = p2 - p0;
@@ -200,10 +193,7 @@ pub fn barycentric_to_ptex_coords(barycentric: Vec3, face_resolution: u32) -> Ve
     let u = barycentric.x;
     let v = barycentric.y;
 
-    Vec2::new(
-        u * face_resolution as f32,
-        v * face_resolution as f32,
-    )
+    Vec2::new(u * face_resolution as f32, v * face_resolution as f32)
 }
 
 // ============================================================================
@@ -383,11 +373,11 @@ mod tests {
     #[test]
     fn test_project_brush_circular() {
         let dab = project_brush_to_surface(
-            1.0,           // 1 world unit radius
-            Vec3::ZERO,    // hit position
+            1.0,                 // 1 world unit radius
+            Vec3::ZERO,          // hit position
             Vec2::new(0.5, 0.5), // center of texture
-            Vec3::Y,       // up normal
-            100.0,         // 100 pixels per world unit
+            Vec3::Y,             // up normal
+            100.0,               // 100 pixels per world unit
         );
 
         // Brush should be circular (aspect ratio 1.0)

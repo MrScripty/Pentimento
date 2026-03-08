@@ -5,8 +5,8 @@
 //! - Manifold property checking
 //! - Topology consistency verification
 
-use super::types::HalfEdgeError;
 use super::HalfEdgeMesh;
+use super::types::HalfEdgeError;
 
 impl HalfEdgeMesh {
     /// Debug-only mesh connectivity check.
@@ -118,7 +118,9 @@ impl HalfEdgeMesh {
             if let Some(twin_id) = he.twin {
                 let twin = self
                     .half_edge(twin_id)
-                    .ok_or(HalfEdgeError::InvalidTopology("Invalid twin reference".into()))?;
+                    .ok_or(HalfEdgeError::InvalidTopology(
+                        "Invalid twin reference".into(),
+                    ))?;
                 if twin.twin != Some(he.id) {
                     return Err(HalfEdgeError::InvalidTopology(
                         "Twin symmetry violated".into(),

@@ -55,7 +55,11 @@ pub fn Slider(props: SliderProps) -> Element {
     let current_value = props.value;
     let handle_mousedown = move |evt: Event<MouseData>| {
         let client_x = evt.data().client_coordinates().x;
-        tracing::info!("Slider mousedown: bounds={:?}, client_x={}", element_bounds(), client_x);
+        tracing::info!(
+            "Slider mousedown: bounds={:?}, client_x={}",
+            element_bounds(),
+            client_x
+        );
 
         // Start dragging
         is_dragging.set(true);
@@ -100,7 +104,12 @@ pub fn Slider(props: SliderProps) -> Element {
         let delta_value = delta_normalized * (max - min);
         let new_value = drag_start_value() + delta_value;
         let stepped = (new_value / step).round() * step;
-        tracing::debug!("Slider drag: delta_x={}, width={}, new_value={}", delta_x, width, stepped);
+        tracing::debug!(
+            "Slider drag: delta_x={}, width={}, new_value={}",
+            delta_x,
+            width,
+            stepped
+        );
         on_change.call(stepped.clamp(min, max));
     };
 

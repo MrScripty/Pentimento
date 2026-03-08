@@ -6,12 +6,12 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::{
+    Render, RenderApp, RenderSystems,
     extract_resource::ExtractResource,
     render_asset::RenderAssets,
     render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     renderer::RenderQueue,
     texture::GpuImage,
-    Render, RenderApp, RenderSystems,
 };
 use std::collections::HashMap;
 
@@ -54,7 +54,12 @@ impl PaintingResource {
     }
 
     /// Get or create a pipeline for a canvas plane
-    pub fn get_or_create_pipeline(&mut self, plane_id: u32, width: u32, height: u32) -> &mut PaintingPipeline {
+    pub fn get_or_create_pipeline(
+        &mut self,
+        plane_id: u32,
+        width: u32,
+        height: u32,
+    ) -> &mut PaintingPipeline {
         let brush_color = self.brush_color;
         let brush_preset = self.brush_preset.clone();
         let blend_mode = self.blend_mode;
@@ -228,9 +233,9 @@ impl Plugin for PaintingSystemPlugin {
         app.init_resource::<PaintingResource>()
             .init_resource::<DirtyTileUploadBuffer>()
             // ExtractResourcePlugin must be added to main app, not render_app
-            .add_plugins(
-                bevy::render::extract_resource::ExtractResourcePlugin::<DirtyTileUploadBuffer>::default(),
-            )
+            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<
+                DirtyTileUploadBuffer,
+            >::default())
             .add_systems(
                 Update,
                 (
@@ -247,7 +252,10 @@ impl Plugin for PaintingSystemPlugin {
             return;
         };
 
-        render_app.add_systems(Render, upload_dirty_tiles_to_gpu.in_set(RenderSystems::Prepare));
+        render_app.add_systems(
+            Render,
+            upload_dirty_tiles_to_gpu.in_set(RenderSystems::Prepare),
+        );
     }
 }
 
@@ -338,7 +346,10 @@ fn process_paint_events(
 ) {
     // Get the active plane info if available
     let active_plane_info = active_plane.entity.and_then(|e| {
-        canvas_query.get(e).ok().map(|cp| (cp.plane_id, cp.width, cp.height))
+        canvas_query
+            .get(e)
+            .ok()
+            .map(|cp| (cp.plane_id, cp.width, cp.height))
     });
 
     for event in paint_events.read() {
@@ -391,14 +402,23 @@ fn process_paint_events(
                         let y = uv_pos.y * height as f32;
                         info!(
                             "process_paint_events: StrokeMove pixel=({:.1}, {:.1}), pressure={}, is_stroking={}",
-                            x, y, pressure, pipeline.is_stroking()
+                            x,
+                            y,
+                            pressure,
+                            pipeline.is_stroking()
                         );
                         pipeline.stroke_to(x, y, *pressure);
                     } else {
-                        info!("process_paint_events: StrokeMove but no pipeline for plane_id={}", plane_id);
+                        info!(
+                            "process_paint_events: StrokeMove but no pipeline for plane_id={}",
+                            plane_id
+                        );
                     }
                 } else {
-                    info!("process_paint_events: StrokeMove but active_plane_info is None (entity={:?})", active_plane.entity);
+                    info!(
+                        "process_paint_events: StrokeMove but active_plane_info is None (entity={:?})",
+                        active_plane.entity
+                    );
                 }
             }
             PaintEvent::StrokeEnd => {
@@ -524,7 +544,6 @@ fn upload_dirty_tiles_to_gpu(
                 tile.offset.0, tile.offset.1, tile.size.0, tile.size.1
             );
         }
-
     }
 }
 

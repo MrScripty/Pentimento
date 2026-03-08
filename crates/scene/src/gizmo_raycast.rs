@@ -197,7 +197,8 @@ fn ray_cone_intersection(
     let d = ray_dir;
 
     // cos^2(theta) where theta is the half-angle
-    let cos_sq = cone_height * cone_height / (cone_height * cone_height + cone_base_radius * cone_base_radius);
+    let cos_sq = cone_height * cone_height
+        / (cone_height * cone_height + cone_base_radius * cone_base_radius);
 
     let d_dot_v = d.dot(cone_axis);
     let o_dot_v = o.dot(cone_axis);
@@ -287,7 +288,8 @@ fn ray_capsule_intersection(
     let axis_norm = axis / height;
 
     // Test cylinder body
-    let mut closest_t = ray_cylinder_intersection(ray_origin, ray_dir, cap1, axis_norm, radius, height);
+    let mut closest_t =
+        ray_cylinder_intersection(ray_origin, ray_dir, cap1, axis_norm, radius, height);
 
     // Test hemispherical caps
     if let Some(t) = ray_sphere_intersection(ray_origin, ray_dir, cap1, radius) {
@@ -325,9 +327,21 @@ fn ray_box_intersection(
     let max = box_center + box_half_size;
 
     let inv_dir = Vec3::new(
-        if ray_dir.x.abs() > EPSILON { 1.0 / ray_dir.x } else { f32::INFINITY },
-        if ray_dir.y.abs() > EPSILON { 1.0 / ray_dir.y } else { f32::INFINITY },
-        if ray_dir.z.abs() > EPSILON { 1.0 / ray_dir.z } else { f32::INFINITY },
+        if ray_dir.x.abs() > EPSILON {
+            1.0 / ray_dir.x
+        } else {
+            f32::INFINITY
+        },
+        if ray_dir.y.abs() > EPSILON {
+            1.0 / ray_dir.y
+        } else {
+            f32::INFINITY
+        },
+        if ray_dir.z.abs() > EPSILON {
+            1.0 / ray_dir.z
+        } else {
+            f32::INFINITY
+        },
     );
 
     let t1 = (min.x - ray_origin.x) * inv_dir.x;
@@ -402,7 +416,12 @@ pub fn raycast_gizmo(
     // Test center sphere (uniform scale)
     check_hit(
         GizmoHandle::ScaleUniform,
-        ray_sphere_intersection(ray_origin, ray_dir, gizmo_center, geometry.center_sphere_radius),
+        ray_sphere_intersection(
+            ray_origin,
+            ray_dir,
+            gizmo_center,
+            geometry.center_sphere_radius,
+        ),
     );
 
     // Test translation arrows (capsule for shaft + cone for head)

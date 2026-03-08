@@ -8,8 +8,8 @@
 //! This approach is WebGL2-compatible for WASM builds.
 //! Uses Bevy's standard post-processing pattern with ViewTarget::post_process_write().
 
-use bevy::asset::embedded_asset;
 use bevy::asset::RenderAssetUsages;
+use bevy::asset::embedded_asset;
 use bevy::camera::ClearColorConfig;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
@@ -98,9 +98,10 @@ fn setup_outline_system(
     });
 
     // Get main camera transform for ID camera
-    let main_transform = main_camera.single().map(|(_, t, _)| *t).unwrap_or_else(|_| {
-        Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y)
-    });
+    let main_transform = main_camera
+        .single()
+        .map(|(_, t, _)| *t)
+        .unwrap_or_else(|_| Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y));
 
     // Note: OutlineCamera marker is added to main camera in setup_scene (lib.rs)
     // This ensures it exists from spawn time for proper extraction to render world
@@ -122,7 +123,10 @@ fn setup_outline_system(
         Tonemapping::Reinhard,
     ));
 
-    info!("Surface ID outline system initialized ({}x{})", width, height);
+    info!(
+        "Surface ID outline system initialized ({}x{})",
+        width, height
+    );
 }
 
 /// Create a render target texture
@@ -276,7 +280,8 @@ fn handle_window_resize(
     }
 
     // Create new ID buffer
-    let new_id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
+    let new_id_buffer =
+        create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
 
     // Update camera target component
     if let Ok(camera_entity) = id_camera.single() {

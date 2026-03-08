@@ -27,8 +27,9 @@ impl UiAssets {
     fn embedded_html() -> String {
         // Get the HTML file
         let html = match Self::get("ui/index.html") {
-            Some(file) => String::from_utf8(file.data.to_vec())
-                .expect("index.html is not valid UTF-8"),
+            Some(file) => {
+                String::from_utf8(file.data.to_vec()).expect("index.html is not valid UTF-8")
+            }
             None => {
                 // Return a placeholder if UI hasn't been built yet
                 return Self::placeholder_html();

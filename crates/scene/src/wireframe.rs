@@ -38,10 +38,7 @@ impl Plugin for WireframeOverlayPlugin {
 }
 
 /// Sync WireframeConfig with WireframeSettings
-fn sync_wireframe_config(
-    settings: Res<WireframeSettings>,
-    mut config: ResMut<WireframeConfig>,
-) {
+fn sync_wireframe_config(settings: Res<WireframeSettings>, mut config: ResMut<WireframeConfig>) {
     if settings.is_changed() {
         config.global = settings.enabled;
         config.default_color = settings.color;

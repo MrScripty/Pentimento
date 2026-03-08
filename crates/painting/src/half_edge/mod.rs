@@ -15,9 +15,9 @@ pub use modification::CompactionMap;
 pub use types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
 pub use validation::ManifoldError;
 
+use types::Face as FaceInternal;
 use types::HalfEdge as HalfEdgeInternal;
 use types::Vertex as VertexInternal;
-use types::Face as FaceInternal;
 
 /// Half-edge mesh data structure
 ///
@@ -45,19 +45,11 @@ mod tests {
         );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_POSITION,
-            vec![
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.5, 1.0, 0.0],
-            ],
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]],
         );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_NORMAL,
-            vec![
-                [0.0, 0.0, 1.0],
-                [0.0, 0.0, 1.0],
-                [0.0, 0.0, 1.0],
-            ],
+            vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
         );
         mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
         mesh

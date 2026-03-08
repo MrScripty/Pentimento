@@ -13,7 +13,10 @@ impl TiledSurface {
         }
         let tile_x = x / self.tile_size;
         let tile_y = y / self.tile_size;
-        self.dirty_tiles.insert(TileCoord { x: tile_x, y: tile_y });
+        self.dirty_tiles.insert(TileCoord {
+            x: tile_x,
+            y: tile_y,
+        });
     }
 
     /// Mark a rectangular region as dirty
@@ -48,7 +51,12 @@ impl TiledSurface {
         let tiles_after = self.dirty_tiles.len();
         debug!(
             "mark_region_dirty: ({}, {}) {}x{} -> {} new tiles (total {})",
-            x, y, w, h, tiles_after - tiles_before, tiles_after
+            x,
+            y,
+            w,
+            h,
+            tiles_after - tiles_before,
+            tiles_after
         );
     }
 

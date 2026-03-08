@@ -17,8 +17,8 @@ use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
-use painting::types::{MeshHit, MeshStorageMode};
 use painting::projection::build_tangent_space;
+use painting::types::{MeshHit, MeshStorageMode};
 
 use crate::camera::MainCamera;
 use crate::paint_mode::{PaintMode, StrokeIdGenerator};
@@ -153,7 +153,10 @@ fn handle_mesh_paint_input(
 
     // Handle stroke start
     if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions.last().copied().or_else(|| window.cursor_position());
+        let cursor_pos = cursor_positions
+            .last()
+            .copied()
+            .or_else(|| window.cursor_position());
         if let Some(cursor_pos) = cursor_pos {
             if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos).ok() {
                 // Find closest mesh hit
@@ -205,21 +208,14 @@ fn handle_mesh_paint_input(
                         mesh_query.get(active_entity)
                     {
                         if let Some(mesh) = meshes.get(&mesh_handle.0) {
-                            if let Some(hit) =
-                                ray_mesh_intersection(&ray, mesh, mesh_transform)
-                            {
-                                let speed =
-                                    if let Some(last_pos) = stroke_state.last_world_pos {
-                                        let distance = hit.world_pos.distance(last_pos);
-                                        let dt = (current_time - stroke_state.last_time) as f32;
-                                        if dt > 0.0 {
-                                            distance / dt
-                                        } else {
-                                            0.0
-                                        }
-                                    } else {
-                                        0.0
-                                    };
+                            if let Some(hit) = ray_mesh_intersection(&ray, mesh, mesh_transform) {
+                                let speed = if let Some(last_pos) = stroke_state.last_world_pos {
+                                    let distance = hit.world_pos.distance(last_pos);
+                                    let dt = (current_time - stroke_state.last_time) as f32;
+                                    if dt > 0.0 { distance / dt } else { 0.0 }
+                                } else {
+                                    0.0
+                                };
 
                                 stroke_state.last_world_pos = Some(hit.world_pos);
                                 stroke_state.last_time = current_time;
@@ -330,13 +326,9 @@ pub fn ray_mesh_intersection(
         let v2 = Vec3::from(positions[i2]);
 
         // Möller–Trumbore ray-triangle intersection
-        if let Some((t, u, v)) = ray_triangle_intersection(
-            local_ray_origin,
-            local_ray_dir,
-            v0,
-            v1,
-            v2,
-        ) {
+        if let Some((t, u, v)) =
+            ray_triangle_intersection(local_ray_origin, local_ray_dir, v0, v1, v2)
+        {
             if t > 0.0 && (closest_hit.is_none() || t < closest_hit.as_ref().unwrap().0) {
                 let w = 1.0 - u - v;
                 closest_hit = Some((t, face_id as u32, Vec3::new(w, u, v)));
@@ -366,7 +358,8 @@ pub fn ray_mesh_intersection(
         let n0 = Vec3::from(normals[i0]);
         let n1 = Vec3::from(normals[i1]);
         let n2 = Vec3::from(normals[i2]);
-        let local_normal = (n0 * barycentric.x + n1 * barycentric.y + n2 * barycentric.z).normalize();
+        let local_normal =
+            (n0 * barycentric.x + n1 * barycentric.y + n2 * barycentric.z).normalize();
         // Transform normal (use rotation only, not scale)
         (transform.rotation() * local_normal).normalize()
     } else {
@@ -391,7 +384,8 @@ pub fn ray_mesh_intersection(
         let t1 = Vec4::from(tangents[i1]);
         let t2 = Vec4::from(tangents[i2]);
         let local_tangent4 = t0 * barycentric.x + t1 * barycentric.y + t2 * barycentric.z;
-        let local_tangent = Vec3::new(local_tangent4.x, local_tangent4.y, local_tangent4.z).normalize();
+        let local_tangent =
+            Vec3::new(local_tangent4.x, local_tangent4.y, local_tangent4.z).normalize();
         let world_tangent = (transform.rotation() * local_tangent).normalize();
         let bitangent = normal.cross(world_tangent) * local_tangent4.w;
         (world_tangent, bitangent.normalize())
@@ -455,11 +449,7 @@ fn ray_triangle_intersection(
 
     let t = f * edge2.dot(q);
 
-    if t > EPSILON {
-        Some((t, u, v))
-    } else {
-        None
-    }
+    if t > EPSILON { Some((t, u, v)) } else { None }
 }
 
 #[cfg(test)]

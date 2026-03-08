@@ -8,9 +8,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use std::collections::HashMap;
 
+use painting::BrushPreset;
 use painting::mesh_surface::{MeshPtexSurface, MeshUvSurface};
 use painting::types::{BlendMode, MeshHit, MeshStorageMode};
-use painting::BrushPreset;
 
 use crate::mesh_paint_mode::{MeshPaintEvent, PaintableMesh};
 
@@ -126,16 +126,15 @@ pub struct MeshPaintingSystemPlugin;
 
 impl Plugin for MeshPaintingSystemPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MeshPaintingResource>()
-            .add_systems(
-                Update,
-                (
-                    setup_mesh_paint_textures,
-                    process_mesh_paint_events,
-                    upload_mesh_dirty_tiles,
-                )
-                    .chain(),
-            );
+        app.init_resource::<MeshPaintingResource>().add_systems(
+            Update,
+            (
+                setup_mesh_paint_textures,
+                process_mesh_paint_events,
+                upload_mesh_dirty_tiles,
+            )
+                .chain(),
+        );
     }
 }
 
@@ -146,7 +145,11 @@ fn setup_mesh_paint_textures(
     materials: Res<Assets<StandardMaterial>>,
     mut painting_res: ResMut<MeshPaintingResource>,
     query: Query<
-        (Entity, &PaintableMesh, Option<&MeshMaterial3d<StandardMaterial>>),
+        (
+            Entity,
+            &PaintableMesh,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+        ),
         Without<MeshPaintTexture>,
     >,
 ) {
@@ -173,17 +176,24 @@ fn setup_mesh_paint_textures(
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
         );
 
-        image.texture_descriptor.usage =
-            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+        image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_DST
+            | TextureUsages::RENDER_ATTACHMENT;
 
         let image_handle = images.add(image);
 
         // Initialize the surface
         match paintable.storage_mode {
             MeshStorageMode::UvAtlas { resolution } => {
-                let surface =
-                    painting_res.get_or_create_uv_surface(paintable.mesh_id, resolution.0, resolution.1);
-                surface.surface_mut().surface_mut().clear([0.0, 0.0, 0.0, 0.0]);
+                let surface = painting_res.get_or_create_uv_surface(
+                    paintable.mesh_id,
+                    resolution.0,
+                    resolution.1,
+                );
+                surface
+                    .surface_mut()
+                    .surface_mut()
+                    .clear([0.0, 0.0, 0.0, 0.0]);
             }
             MeshStorageMode::Ptex { face_resolution } => {
                 painting_res.get_or_create_ptex_surface(paintable.mesh_id, face_resolution);
@@ -234,7 +244,10 @@ fn process_mesh_paint_events(
                 hit,
                 stroke_id,
             } => {
-                info!("Mesh stroke start: mesh_id={}, stroke_id={}", mesh_id, stroke_id);
+                info!(
+                    "Mesh stroke start: mesh_id={}, stroke_id={}",
+                    mesh_id, stroke_id
+                );
                 apply_dab_to_mesh(&mut painting_res, &mesh_query, *mesh_entity, hit);
             }
             MeshPaintEvent::StrokeMove {
@@ -350,7 +363,16 @@ fn apply_dab_for_move(
             let avg_res = (width + height) as f32 / 2.0;
             let texel_radius = brush_size * avg_res / 10.0;
 
-            surface.apply_dab(uv, texel_radius, color, opacity, hardness, blend_mode, 0.0, 1.0);
+            surface.apply_dab(
+                uv,
+                texel_radius,
+                color,
+                opacity,
+                hardness,
+                blend_mode,
+                0.0,
+                1.0,
+            );
         }
         return;
     }
@@ -399,10 +421,10 @@ fn upload_mesh_dirty_tiles(
                     let height = cpu_surface.height as usize;
 
                     // Get original texture data for compositing
-                    let original_data: Option<Vec<u8>> =
-                        paint_texture.original_texture.as_ref().and_then(|handle| {
-                            images.get(handle).and_then(|img| img.data.clone())
-                        });
+                    let original_data: Option<Vec<u8>> = paint_texture
+                        .original_texture
+                        .as_ref()
+                        .and_then(|handle| images.get(handle).and_then(|img| img.data.clone()));
 
                     // Composite paint over original
                     let mut data = vec![0u8; width * height * 4];

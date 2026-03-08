@@ -2,9 +2,11 @@
   "name": "pentimento-electron",
   "version": "0.1.0",
   "description": "Pentimento Electron wrapper for Bevy WASM + Svelte UI",
-  "main": "main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "electron ."
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "npm run build && electron ."
   },
   "devDependencies": {
     "electron": "^38.0.0"

@@ -136,7 +136,11 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
             }
             BevyToUi::ShowAddObjectMenu { show, position } => {
                 eprintln!(">>> IPC: ShowAddObjectMenu show={} <<<", show);
-                tracing::info!("IPC: Setting show_add_menu signal from {} to {}", show_add_menu(), show);
+                tracing::info!(
+                    "IPC: Setting show_add_menu signal from {} to {}",
+                    show_add_menu(),
+                    show
+                );
                 show_add_menu.set(show);
                 tracing::info!("IPC: After set, show_add_menu() = {}", show_add_menu());
                 if let Some([x, y]) = position {
@@ -158,8 +162,12 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
     }
 
     // Debug: log the signal values that will be passed to AddObjectMenu
-    tracing::info!("Rendering with show_add_menu={}, position=({:.0}, {:.0})",
-        show_add_menu(), add_menu_position().0, add_menu_position().1);
+    tracing::info!(
+        "Rendering with show_add_menu={}, position=({:.0}, {:.0})",
+        show_add_menu(),
+        add_menu_position().0,
+        add_menu_position().1
+    );
 
     // Handle keyboard events for Shift+A, ESC, and Ctrl+Z
     let bridge_for_keydown = props.bridge.clone();
@@ -168,7 +176,12 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
         let mods = evt.data().modifiers();
 
         // Debug: log keyboard events
-        tracing::info!("Dioxus keydown: key={:?} shift={} ctrl={}", key, mods.shift(), mods.ctrl());
+        tracing::info!(
+            "Dioxus keydown: key={:?} shift={} ctrl={}",
+            key,
+            mods.shift(),
+            mods.ctrl()
+        );
 
         // ESC closes add object menu
         if matches!(&key, Key::Escape) && show_add_menu() {
@@ -179,7 +192,10 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
         // Shift+A opens Add Object popup menu at cursor position
         let is_a = matches!(&key, Key::Character(c) if c == "a" || c == "A");
         if mods.shift() && !mods.ctrl() && is_a {
-            tracing::info!("Dioxus: Shift+A detected, opening Add Object menu at {:?}", cursor_pos());
+            tracing::info!(
+                "Dioxus: Shift+A detected, opening Add Object menu at {:?}",
+                cursor_pos()
+            );
             add_menu_position.set(cursor_pos());
             show_add_menu.set(true);
         }

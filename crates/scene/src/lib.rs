@@ -30,10 +30,6 @@ mod mesh_edit_highlight;
 mod mesh_edit_mode;
 #[cfg(feature = "mesh_editing")]
 mod mesh_edit_selection;
-mod paint_mode;
-mod painting_system;
-mod projection_mode;
-mod projection_painting;
 #[cfg(feature = "mesh_painting")]
 mod mesh_paint_mode;
 #[cfg(feature = "mesh_painting")]
@@ -42,7 +38,11 @@ mod mesh_painting_system;
 mod normal_indicator;
 #[cfg(feature = "selection")]
 mod outline;
+mod paint_mode;
+mod painting_system;
 pub mod pixel_coverage;
+mod projection_mode;
+mod projection_painting;
 mod render_camera;
 #[cfg(feature = "sculpting")]
 mod sculpt_mode;
@@ -53,29 +53,25 @@ mod wireframe;
 
 pub use add_object::{AddObjectEvent, AddObjectPlugin};
 pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
-pub use depth_view::{DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings};
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
-pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use canvas_plane::{
     ActiveCanvasPlane, CanvasMaterialUpdated, CanvasPlane, CanvasPlaneEvent,
     CanvasPlaneIdGenerator, CanvasPlanePlugin,
 };
+pub use depth_view::{
+    DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings,
+};
+pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]
 pub use gizmo_raycast::{GizmoGeometry, GizmoHandle};
-pub use lighting::{LightingPlugin, SceneLighting, SunLight};
 #[cfg(feature = "atmosphere")]
 pub use lighting::AtmosphereState;
-pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
-pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
-pub use projection_mode::{ProjectionEvent, ProjectionMode, ProjectionModePlugin, ProjectionTarget};
-pub use projection_painting::{ProjectionPaintingPlugin, ProjectionTargets, MeshRaycastCache};
+pub use lighting::{LightingPlugin, SceneLighting, SunLight};
 #[cfg(feature = "mesh_editing")]
 pub use mesh_edit_highlight::MeshEditHighlightPlugin;
 #[cfg(feature = "mesh_editing")]
-pub use mesh_edit_mode::{
-    EditableMesh, MeshEditEvent, MeshEditModePlugin, MeshEditState,
-};
+pub use mesh_edit_mode::{EditableMesh, MeshEditEvent, MeshEditModePlugin, MeshEditState};
 #[cfg(feature = "mesh_editing")]
 pub use mesh_edit_selection::MeshEditSelectionPlugin;
 #[cfg(feature = "mesh_painting")]
@@ -83,14 +79,18 @@ pub use mesh_paint_mode::{
     MeshIdGenerator, MeshPaintEvent, MeshPaintModePlugin, MeshPaintState, PaintableMesh,
 };
 #[cfg(feature = "mesh_painting")]
-pub use mesh_painting_system::{
-    MeshPaintTexture, MeshPaintingResource, MeshPaintingSystemPlugin,
-};
+pub use mesh_painting_system::{MeshPaintTexture, MeshPaintingResource, MeshPaintingSystemPlugin};
 #[cfg(feature = "mesh_painting")]
 pub use normal_indicator::{NormalIndicatorPlugin, NormalIndicatorState};
 #[cfg(feature = "selection")]
 pub use outline::{OutlineCamera, OutlinePlugin};
+pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
+pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
 pub use pixel_coverage::{PixelCoveragePlugin, PixelCoverageState, estimate_pixel_coverage_cpu};
+pub use projection_mode::{
+    ProjectionEvent, ProjectionMode, ProjectionModePlugin, ProjectionTarget,
+};
+pub use projection_painting::{MeshRaycastCache, ProjectionPaintingPlugin, ProjectionTargets};
 pub use render_camera::{ActiveRenderCamera, RenderCamera, RenderCameraPlugin};
 #[cfg(feature = "sculpting")]
 pub use sculpt_mode::{SculptEvent, SculptModePlugin, SculptState};
@@ -209,65 +209,83 @@ fn setup_scene(
 
     // Test cube
     #[allow(unused_variables)]
-    let cube = commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.8, 0.2, 0.2),
-            metallic: 0.5,
-            perceptual_roughness: 0.3,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 0.5, 0.0),
-        Name::new("Cube"),
-    )).id();
+    let cube = commands
+        .spawn((
+            Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.8, 0.2, 0.2),
+                metallic: 0.5,
+                perceptual_roughness: 0.3,
+                ..default()
+            })),
+            Transform::from_xyz(0.0, 0.5, 0.0),
+            Name::new("Cube"),
+        ))
+        .id();
     #[cfg(feature = "selection")]
-    commands.entity(cube).insert(Selectable { id: "cube".to_string() });
+    commands.entity(cube).insert(Selectable {
+        id: "cube".to_string(),
+    });
     #[cfg(feature = "mesh_painting")]
     commands.entity(cube).insert(PaintableMesh {
         mesh_id: 0,
-        storage_mode: painting::types::MeshStorageMode::Ptex { face_resolution: 32 },
+        storage_mode: painting::types::MeshStorageMode::Ptex {
+            face_resolution: 32,
+        },
     });
 
     // Test sphere (has UVs from .uv() call)
     #[allow(unused_variables)]
-    let sphere = commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(0.5).mesh().uv(32, 18))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.6, 0.8),
-            metallic: 0.9,
-            perceptual_roughness: 0.1,
-            ..default()
-        })),
-        Transform::from_xyz(2.0, 0.5, 0.0),
-        Name::new("Sphere"),
-    )).id();
+    let sphere = commands
+        .spawn((
+            Mesh3d(meshes.add(Sphere::new(0.5).mesh().uv(32, 18))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.2, 0.6, 0.8),
+                metallic: 0.9,
+                perceptual_roughness: 0.1,
+                ..default()
+            })),
+            Transform::from_xyz(2.0, 0.5, 0.0),
+            Name::new("Sphere"),
+        ))
+        .id();
     #[cfg(feature = "selection")]
-    commands.entity(sphere).insert(Selectable { id: "sphere".to_string() });
+    commands.entity(sphere).insert(Selectable {
+        id: "sphere".to_string(),
+    });
     #[cfg(feature = "mesh_painting")]
     commands.entity(sphere).insert(PaintableMesh {
         mesh_id: 1,
-        storage_mode: painting::types::MeshStorageMode::UvAtlas { resolution: (512, 512) },
+        storage_mode: painting::types::MeshStorageMode::UvAtlas {
+            resolution: (512, 512),
+        },
     });
 
     // Test torus
     #[allow(unused_variables)]
-    let torus = commands.spawn((
-        Mesh3d(meshes.add(Torus::new(0.3, 0.5))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.8, 0.2),
-            metallic: 0.3,
-            perceptual_roughness: 0.5,
-            ..default()
-        })),
-        Transform::from_xyz(-2.0, 0.5, 0.0),
-        Name::new("Torus"),
-    )).id();
+    let torus = commands
+        .spawn((
+            Mesh3d(meshes.add(Torus::new(0.3, 0.5))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.2, 0.8, 0.2),
+                metallic: 0.3,
+                perceptual_roughness: 0.5,
+                ..default()
+            })),
+            Transform::from_xyz(-2.0, 0.5, 0.0),
+            Name::new("Torus"),
+        ))
+        .id();
     #[cfg(feature = "selection")]
-    commands.entity(torus).insert(Selectable { id: "torus".to_string() });
+    commands.entity(torus).insert(Selectable {
+        id: "torus".to_string(),
+    });
     #[cfg(feature = "mesh_painting")]
     commands.entity(torus).insert(PaintableMesh {
         mesh_id: 2,
-        storage_mode: painting::types::MeshStorageMode::Ptex { face_resolution: 32 },
+        storage_mode: painting::types::MeshStorageMode::Ptex {
+            face_resolution: 32,
+        },
     });
 
     info!("Scene initialized with test objects");

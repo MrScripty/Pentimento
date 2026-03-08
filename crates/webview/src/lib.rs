@@ -10,28 +10,28 @@ mod error;
 
 #[cfg(target_os = "linux")]
 mod platform_linux;
-#[cfg(target_os = "linux")]
-mod platform_linux_overlay;
 #[cfg(all(target_os = "linux", feature = "cef"))]
 mod platform_linux_cef;
 #[cfg(all(target_os = "linux", feature = "dioxus"))]
 mod platform_linux_dioxus;
+#[cfg(target_os = "linux")]
+mod platform_linux_overlay;
 #[cfg(target_os = "windows")]
 mod platform_windows;
 
 pub use error::WebviewError;
 
-#[cfg(target_os = "linux")]
-pub use platform_linux_overlay::LinuxOverlayWebview;
 #[cfg(all(target_os = "linux", feature = "cef"))]
 pub use platform_linux_cef::LinuxCefWebview;
 #[cfg(all(target_os = "linux", feature = "dioxus"))]
 pub use platform_linux_dioxus::LinuxDioxusRenderer;
+#[cfg(target_os = "linux")]
+pub use platform_linux_overlay::LinuxOverlayWebview;
 
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 /// Offscreen webview that can be captured as a texture
@@ -58,20 +58,12 @@ impl OffscreenWebview {
         let (from_ui_tx, from_ui_rx) = mpsc::unbounded_channel();
 
         #[cfg(target_os = "linux")]
-        let inner = platform_linux::LinuxWebview::new(
-            html_content,
-            size,
-            dirty.clone(),
-            from_ui_tx,
-        )?;
+        let inner =
+            platform_linux::LinuxWebview::new(html_content, size, dirty.clone(), from_ui_tx)?;
 
         #[cfg(target_os = "windows")]
-        let inner = platform_windows::WindowsWebview::new(
-            html_content,
-            size,
-            dirty.clone(),
-            from_ui_tx,
-        )?;
+        let inner =
+            platform_windows::WindowsWebview::new(html_content, size, dirty.clone(), from_ui_tx)?;
 
         Ok(Self {
             inner,
@@ -445,11 +437,7 @@ impl DioxusWebview {
         #[cfg(target_os = "linux")]
         let inner = platform_linux_dioxus::LinuxDioxusRenderer::new(size, dirty.clone())?;
 
-        Ok(Self {
-            inner,
-            dirty,
-            size,
-        })
+        Ok(Self { inner, dirty, size })
     }
 
     /// Poll for events. Call this each frame from Bevy's main loop.
@@ -594,8 +582,7 @@ impl CompositeBackend for OverlayWebview {
     }
 
     fn send_to_ui(&mut self, msg: BevyToUi) -> Result<(), FrontendError> {
-        OverlayWebview::send_to_ui(self, msg)
-            .map_err(|e| FrontendError::SendFailed(e.to_string()))
+        OverlayWebview::send_to_ui(self, msg).map_err(|e| FrontendError::SendFailed(e.to_string()))
     }
 
     fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {
@@ -614,9 +601,8 @@ impl CompositeBackend for CefWebview {
     }
 
     fn capture_if_dirty(&mut self) -> Option<CaptureResult> {
-        CefWebview::capture_if_dirty(self).map(|(data, width, height)| {
-            CaptureResult::Bgra(data, width, height)
-        })
+        CefWebview::capture_if_dirty(self)
+            .map(|(data, width, height)| CaptureResult::Bgra(data, width, height))
     }
 
     fn size(&self) -> (u32, u32) {
@@ -636,8 +622,7 @@ impl CompositeBackend for CefWebview {
     }
 
     fn send_to_ui(&mut self, msg: BevyToUi) -> Result<(), FrontendError> {
-        CefWebview::send_to_ui(self, msg)
-            .map_err(|e| FrontendError::SendFailed(e.to_string()))
+        CefWebview::send_to_ui(self, msg).map_err(|e| FrontendError::SendFailed(e.to_string()))
     }
 
     fn try_recv_from_ui(&mut self) -> Option<UiToBevy> {

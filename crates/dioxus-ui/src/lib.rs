@@ -42,7 +42,10 @@ pub use wgpu;
 
 // Re-export Blitz event types for input handling
 pub use blitz_traits::events::{
-    BlitzKeyEvent, BlitzPointerId, BlitzPointerEvent, BlitzWheelDelta, BlitzWheelEvent,
-    KeyState, MouseEventButton, MouseEventButtons, PointerCoords, PointerDetails, UiEvent,
+    BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, BlitzWheelDelta, BlitzWheelEvent, KeyState,
+    MouseEventButton, MouseEventButtons, PointerCoords, PointerDetails, UiEvent,
 };
-pub use keyboard_types::{Code as BlitzKeyCode, Key as BlitzKey, Location as BlitzKeyLocation, Modifiers as BlitzModifiers};
+pub use keyboard_types::{
+    Code as BlitzKeyCode, Key as BlitzKey, Location as BlitzKeyLocation,
+    Modifiers as BlitzModifiers,
+};

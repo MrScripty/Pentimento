@@ -2,13 +2,13 @@
 
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
-use pentimento_config::{DisplayConfig, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use pentimento_config::{DEFAULT_HEIGHT, DEFAULT_WIDTH, DisplayConfig};
 
 #[cfg(feature = "wireframe")]
 use bevy::render::{
+    RenderPlugin as BevyRenderPlugin,
     render_resource::WgpuFeatures,
     settings::{RenderCreation, WgpuSettings},
-    RenderPlugin as BevyRenderPlugin,
 };
 
 mod config;
@@ -54,8 +54,7 @@ fn main() {
 
     let mut app = App::new();
 
-    app.insert_resource(config)
-        .insert_resource(display_config);
+    app.insert_resource(config).insert_resource(display_config);
 
     // Configure plugins with optional wireframe support
     #[cfg(feature = "wireframe")]

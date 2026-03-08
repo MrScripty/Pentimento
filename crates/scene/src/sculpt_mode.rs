@@ -15,18 +15,18 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 use painting::half_edge::HalfEdgeMesh;
 use pentimento_ipc::{BevyToUi, EditMode};
 use sculpting::{
-    partition_mesh, BrushInput, BrushPreset, ChunkConfig, ChunkedMesh, DeformationType,
-    FalloffCurve, PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig,
-    TessellationMode,
+    BrushInput, BrushPreset, ChunkConfig, ChunkedMesh, DeformationType, FalloffCurve,
+    PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig, TessellationMode,
+    partition_mesh,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::OutboundUiMessages;
 use crate::camera::MainCamera;
 use crate::edit_mode::EditModeState;
 use crate::paint_mode::StrokeIdGenerator;
-use crate::pixel_coverage::{estimate_pixel_coverage_cpu, PixelCoverageState};
+use crate::pixel_coverage::{PixelCoverageState, estimate_pixel_coverage_cpu};
 use crate::render_camera::{ActiveRenderCamera, RenderCamera};
-use crate::OutboundUiMessages;
 #[cfg(feature = "selection")]
 use crate::selection::Selected;
 
@@ -122,7 +122,9 @@ pub struct SculptingData {
     pub model_matrix: Option<Mat4>,
     /// Cached vertex mapping from merge (original_id → unified_id).
     /// Used for position-only GPU updates without full re-merge.
-    pub cached_vertex_mapping: Option<std::collections::HashMap<painting::half_edge::VertexId, painting::half_edge::VertexId>>,
+    pub cached_vertex_mapping: Option<
+        std::collections::HashMap<painting::half_edge::VertexId, painting::half_edge::VertexId>,
+    >,
 }
 
 /// Message for sculpt mode events
@@ -336,8 +338,7 @@ fn handle_sculpt_mode_hotkey(
     mut events: MessageWriter<SculptEvent>,
 ) {
     // Check for Ctrl modifier
-    let ctrl = key_input.pressed(KeyCode::ControlLeft)
-        || key_input.pressed(KeyCode::ControlRight);
+    let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
 
     if !ctrl || !tab {
@@ -392,13 +393,19 @@ fn handle_brush_adjustment(
             sculpt_state.adjust_mode = BrushAdjustMode::Strength;
             sculpt_state.adjust_start_cursor = cursor_pos;
             sculpt_state.adjust_start_value = sculpt_state.brush_strength;
-            info!("Brush strength adjustment: drag horizontally (current: {:.2})", sculpt_state.brush_strength);
+            info!(
+                "Brush strength adjustment: drag horizontally (current: {:.2})",
+                sculpt_state.brush_strength
+            );
         } else {
             // F: Radius adjustment
             sculpt_state.adjust_mode = BrushAdjustMode::Radius;
             sculpt_state.adjust_start_cursor = cursor_pos;
             sculpt_state.adjust_start_value = sculpt_state.brush_radius;
-            info!("Brush radius adjustment: drag horizontally (current: {:.2})", sculpt_state.brush_radius);
+            info!(
+                "Brush radius adjustment: drag horizontally (current: {:.2})",
+                sculpt_state.brush_radius
+            );
         }
         return;
     }
@@ -416,7 +423,10 @@ fn handle_brush_adjustment(
                         preset.radius = sculpt_state.brush_radius;
                         pipeline.set_brush_preset(preset);
                     }
-                    info!("Radius adjustment cancelled, restored to {:.2}", sculpt_state.brush_radius);
+                    info!(
+                        "Radius adjustment cancelled, restored to {:.2}",
+                        sculpt_state.brush_radius
+                    );
                 }
                 BrushAdjustMode::Strength => {
                     sculpt_state.brush_strength = sculpt_state.adjust_start_value;
@@ -426,7 +436,10 @@ fn handle_brush_adjustment(
                         preset.strength = sculpt_state.brush_strength;
                         pipeline.set_brush_preset(preset);
                     }
-                    info!("Strength adjustment cancelled, restored to {:.2}", sculpt_state.brush_strength);
+                    info!(
+                        "Strength adjustment cancelled, restored to {:.2}",
+                        sculpt_state.brush_strength
+                    );
                 }
                 BrushAdjustMode::None => {}
             }
@@ -452,7 +465,8 @@ fn handle_brush_adjustment(
         }
 
         // Update value based on mouse movement
-        if let (Some(start_pos), Some(current_pos)) = (sculpt_state.adjust_start_cursor, cursor_pos) {
+        if let (Some(start_pos), Some(current_pos)) = (sculpt_state.adjust_start_cursor, cursor_pos)
+        {
             let delta_x = current_pos.x - start_pos.x;
             // Scale: 200 pixels = double/halve for radius, 200 pixels = ±0.5 for strength
             let sensitivity = 200.0;
@@ -461,7 +475,9 @@ fn handle_brush_adjustment(
                 BrushAdjustMode::Radius => {
                     // Exponential scaling for radius (more intuitive)
                     let factor = (delta_x / sensitivity).exp2();
-                    let new_radius = (sculpt_state.adjust_start_value * factor).max(0.01).min(10.0);
+                    let new_radius = (sculpt_state.adjust_start_value * factor)
+                        .max(0.01)
+                        .min(10.0);
                     sculpt_state.brush_radius = new_radius;
 
                     // Update pipeline
@@ -549,10 +565,15 @@ fn handle_sculpt_input(
 
     // Handle stroke start
     if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions.last().copied().or_else(|| window.cursor_position());
+        let cursor_pos = cursor_positions
+            .last()
+            .copied()
+            .or_else(|| window.cursor_position());
         if let Some(cursor_pos) = cursor_pos {
             if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                if let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform) {
+                if let Some((world_pos, normal)) =
+                    ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
+                {
                     let stroke_id = stroke_id_gen.next();
                     sculpt_events.write(SculptEvent::StrokeStart {
                         world_pos,
@@ -574,7 +595,9 @@ fn handle_sculpt_input(
 
         for cursor_pos in positions_to_process {
             if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                if let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform) {
+                if let Some((world_pos, normal)) =
+                    ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
+                {
                     sculpt_events.write(SculptEvent::StrokeMove {
                         world_pos,
                         normal,
@@ -637,7 +660,9 @@ fn ray_mesh_intersection_simple(
         let v2 = Vec3::from(positions[i2]);
 
         // Möller–Trumbore intersection
-        if let Some((t, u, v)) = ray_triangle_intersection(local_ray_origin, local_ray_dir, v0, v1, v2) {
+        if let Some((t, u, v)) =
+            ray_triangle_intersection(local_ray_origin, local_ray_dir, v0, v1, v2)
+        {
             if t > 0.0 && (closest_hit.is_none() || t < closest_hit.as_ref().unwrap().0) {
                 let w = 1.0 - u - v;
                 let local_pos = v0 * w + v1 * u + v2 * v;
@@ -673,7 +698,8 @@ fn ray_mesh_intersection_simple(
                 let n0 = Vec3::from(normals[i0]);
                 let n1 = Vec3::from(normals[i1]);
                 let n2 = Vec3::from(normals[i2]);
-                let local_normal = (n0 * barycentric.x + n1 * barycentric.y + n2 * barycentric.z).normalize();
+                let local_normal =
+                    (n0 * barycentric.x + n1 * barycentric.y + n2 * barycentric.z).normalize();
                 normal = (transform.rotation() * local_normal).normalize();
             } else {
                 let edge1 = v1 - v0;
@@ -725,11 +751,7 @@ fn ray_triangle_intersection(
 
     let t = f * edge2.dot(q);
 
-    if t > EPSILON {
-        Some((t, u, v))
-    } else {
-        None
-    }
+    if t > EPSILON { Some((t, u, v)) } else { None }
 }
 
 /// Handle sculpt mode events
@@ -779,7 +801,8 @@ fn handle_sculpt_events(
                         match HalfEdgeMesh::from_bevy_mesh(bevy_mesh) {
                             Ok(he_mesh) => {
                                 // Partition into chunks
-                                let partition_config = sculpting::PartitionConfig::from(&sculpt_state.chunk_config);
+                                let partition_config =
+                                    sculpting::PartitionConfig::from(&sculpt_state.chunk_config);
                                 let chunked_mesh = partition_mesh(&he_mesh, &partition_config);
 
                                 info!(
@@ -803,7 +826,8 @@ fn handle_sculpt_events(
                                     rebalance_after_stroke: true,
                                 };
 
-                                let pipeline = SculptingPipeline::with_config(preset, pipeline_config);
+                                let pipeline =
+                                    SculptingPipeline::with_config(preset, pipeline_config);
 
                                 sculpting_data.chunked_mesh = Some(chunked_mesh);
                                 sculpting_data.pipeline = Some(pipeline);
@@ -828,9 +852,11 @@ fn handle_sculpt_events(
                 // Merge chunks back and update original mesh
                 if let Some(chunked_mesh) = sculpting_data.chunked_mesh.take() {
                     let merged = sculpting::merge_chunks(&chunked_mesh);
-                    info!("Merged {} chunks back into single mesh with {} faces",
-                          chunked_mesh.chunk_count(),
-                          merged.mesh.face_count());
+                    info!(
+                        "Merged {} chunks back into single mesh with {} faces",
+                        chunked_mesh.chunk_count(),
+                        merged.mesh.face_count()
+                    );
                     // TODO: Update the original mesh entity with merged.mesh
                 }
 
@@ -960,7 +986,9 @@ fn handle_sculpt_events(
                 } = *sculpting_data;
 
                 // Apply deformation via pipeline with local-space coordinates
-                if let (Some(pipeline), Some(chunked_mesh)) = (pipeline.as_mut(), chunked_mesh.as_mut()) {
+                if let (Some(pipeline), Some(chunked_mesh)) =
+                    (pipeline.as_mut(), chunked_mesh.as_mut())
+                {
                     // Transform world position to local space
                     let local_pos = if let Some(inv) = inverse_transform {
                         inv.transform_point3(*world_pos)
@@ -1093,11 +1121,18 @@ fn sync_sculpt_chunks_to_gpu(
 
     if has_topology_change || cached_vertex_mapping.is_none() {
         // Full rebuild path: merge all chunks and rebuild Bevy mesh
-        debug!("sync_sculpt_to_gpu: merging chunks (topology_changed={}, cached={})",
-              has_topology_change, cached_vertex_mapping.is_some());
+        debug!(
+            "sync_sculpt_to_gpu: merging chunks (topology_changed={}, cached={})",
+            has_topology_change,
+            cached_vertex_mapping.is_some()
+        );
         let merge_start = std::time::Instant::now();
         let merged = sculpting::merge_chunks(chunked_mesh);
-        debug!("sync_sculpt_to_gpu: merge done in {:?} ({} faces)", merge_start.elapsed(), merged.mesh.face_count());
+        debug!(
+            "sync_sculpt_to_gpu: merge done in {:?} ({} faces)",
+            merge_start.elapsed(),
+            merged.mesh.face_count()
+        );
 
         if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
             if let Some(new_mesh) = half_edge_to_bevy_mesh(&merged.mesh) {
@@ -1289,8 +1324,7 @@ fn render_sculpt_brush_gizmo(
         return;
     };
 
-    let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
-    else {
+    let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform) else {
         return;
     };
 
@@ -1305,11 +1339,7 @@ fn render_sculpt_brush_gizmo(
 
     // --- Outer circle (brush radius) ---
     let circle_color = Color::srgba(0.3, 0.7, 1.0, 0.8);
-    gizmos.circle(
-        Isometry3d::new(center, rotation),
-        radius,
-        circle_color,
-    );
+    gizmos.circle(Isometry3d::new(center, rotation), radius, circle_color);
 
     // --- Falloff profile curve ---
     // Orient the profile so its "up" direction faces the camera for readability.

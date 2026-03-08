@@ -45,12 +45,48 @@ struct PresetInfo {
 }
 
 const PRESETS: &[PresetInfo] = &[
-    PresetInfo { id: 0, name: "Hard Round", base_size: 20.0, hardness: 1.0, opacity: 1.0 },
-    PresetInfo { id: 1, name: "Soft Round", base_size: 30.0, hardness: 0.3, opacity: 0.8 },
-    PresetInfo { id: 2, name: "Pencil", base_size: 8.0, hardness: 0.9, opacity: 0.9 },
-    PresetInfo { id: 3, name: "Airbrush", base_size: 40.0, hardness: 0.1, opacity: 0.3 },
-    PresetInfo { id: 4, name: "Ink", base_size: 12.0, hardness: 1.0, opacity: 1.0 },
-    PresetInfo { id: 5, name: "Marker", base_size: 25.0, hardness: 0.6, opacity: 0.6 },
+    PresetInfo {
+        id: 0,
+        name: "Hard Round",
+        base_size: 20.0,
+        hardness: 1.0,
+        opacity: 1.0,
+    },
+    PresetInfo {
+        id: 1,
+        name: "Soft Round",
+        base_size: 30.0,
+        hardness: 0.3,
+        opacity: 0.8,
+    },
+    PresetInfo {
+        id: 2,
+        name: "Pencil",
+        base_size: 8.0,
+        hardness: 0.9,
+        opacity: 0.9,
+    },
+    PresetInfo {
+        id: 3,
+        name: "Airbrush",
+        base_size: 40.0,
+        hardness: 0.1,
+        opacity: 0.3,
+    },
+    PresetInfo {
+        id: 4,
+        name: "Ink",
+        base_size: 12.0,
+        hardness: 1.0,
+        opacity: 1.0,
+    },
+    PresetInfo {
+        id: 5,
+        name: "Marker",
+        base_size: 25.0,
+        hardness: 0.6,
+        opacity: 0.6,
+    },
 ];
 
 #[derive(Props, Clone, PartialEq)]

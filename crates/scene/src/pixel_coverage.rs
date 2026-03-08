@@ -15,8 +15,8 @@
 //! for concave meshes. A future GPU depth-buffer pass can replace this for
 //! exact pixel counting.
 
-use bevy::prelude::*;
 use bevy::math::{Mat4, Vec3, Vec4};
+use bevy::prelude::*;
 
 /// Resource holding the result of pixel coverage computation.
 #[derive(Resource, Default, Debug)]
@@ -125,8 +125,7 @@ pub fn estimate_pixel_coverage_cpu(
         let s2y = (1.0 - n2.y) * 0.5 * height;
 
         // Signed area via cross product (positive = CCW = front-facing)
-        let signed_area =
-            0.5 * ((s1x - s0x) * (s2y - s0y) - (s2x - s0x) * (s1y - s0y));
+        let signed_area = 0.5 * ((s1x - s0x) * (s2y - s0y) - (s2x - s0x) * (s1y - s0y));
 
         // Backface culling: skip negative area (clockwise winding = backfacing)
         if signed_area <= 0.0 {
@@ -167,12 +166,7 @@ mod tests {
         ];
         let indices = vec![0, 1, 2];
 
-        let vp = Mat4::perspective_rh(
-            std::f32::consts::FRAC_PI_3,
-            16.0 / 9.0,
-            0.1,
-            1000.0,
-        );
+        let vp = Mat4::perspective_rh(std::f32::consts::FRAC_PI_3, 16.0 / 9.0, 0.1, 1000.0);
 
         let coverage = estimate_pixel_coverage_cpu(
             &positions,
@@ -186,7 +180,10 @@ mod tests {
         // Actually in RH, the camera looks along -Z, so z=5 is behind.
         // But let's just verify coverage is small or zero.
         // The exact behavior depends on the MVP setup.
-        assert!(coverage < 100, "Behind-camera triangle should have minimal coverage");
+        assert!(
+            coverage < 100,
+            "Behind-camera triangle should have minimal coverage"
+        );
     }
 
     #[test]
@@ -199,12 +196,7 @@ mod tests {
         ];
         let indices = vec![0, 1, 2];
 
-        let vp = Mat4::perspective_rh(
-            std::f32::consts::FRAC_PI_3,
-            16.0 / 9.0,
-            0.1,
-            1000.0,
-        );
+        let vp = Mat4::perspective_rh(std::f32::consts::FRAC_PI_3, 16.0 / 9.0, 0.1, 1000.0);
 
         let coverage = estimate_pixel_coverage_cpu(
             &positions,
@@ -213,6 +205,9 @@ mod tests {
             &vp,
             UVec2::new(1920, 1080),
         );
-        assert!(coverage > 0, "Front-facing triangle should have positive coverage");
+        assert!(
+            coverage > 0,
+            "Front-facing triangle should have positive coverage"
+        );
     }
 }

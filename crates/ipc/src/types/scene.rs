@@ -54,8 +54,14 @@ pub struct LightInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LightType {
     Directional,
-    Point { range: f32 },
-    Spot { range: f32, inner_angle: f32, outer_angle: f32 },
+    Point {
+        range: f32,
+    },
+    Spot {
+        range: f32,
+        inner_angle: f32,
+        outer_angle: f32,
+    },
 }
 
 /// Primitive mesh types for object creation.

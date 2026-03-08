@@ -5,10 +5,26 @@ use serde::{Deserialize, Serialize};
 /// Mouse input events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MouseEvent {
-    Move { x: f32, y: f32 },
-    ButtonDown { button: MouseButton, x: f32, y: f32 },
-    ButtonUp { button: MouseButton, x: f32, y: f32 },
-    Scroll { delta_x: f32, delta_y: f32, x: f32, y: f32 },
+    Move {
+        x: f32,
+        y: f32,
+    },
+    ButtonDown {
+        button: MouseButton,
+        x: f32,
+        y: f32,
+    },
+    ButtonUp {
+        button: MouseButton,
+        x: f32,
+        y: f32,
+    },
+    Scroll {
+        delta_x: f32,
+        delta_y: f32,
+        x: f32,
+        y: f32,
+    },
 }
 
 /// Mouse button identifier.

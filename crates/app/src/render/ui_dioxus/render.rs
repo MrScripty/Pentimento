@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
-use pentimento_dioxus_ui::{peniko, AaConfig, RenderParams, SharedVelloRenderer};
+use pentimento_dioxus_ui::{AaConfig, RenderParams, SharedVelloRenderer, peniko};
 
 use super::resources::{DioxusRenderTargetId, DioxusUiState, VelloRenderStatus, VelloSceneBuffer};
 

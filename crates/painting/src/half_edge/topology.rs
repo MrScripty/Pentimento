@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use super::types::{Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
 use super::HalfEdgeMesh;
+use super::types::{Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
 
 impl HalfEdgeMesh {
     // ========================================================================
@@ -63,8 +63,16 @@ impl HalfEdgeMesh {
     /// Number of edges (each edge has two half-edges, boundary edges have one)
     pub fn edge_count(&self) -> usize {
         // Count half-edges with twins + boundary half-edges
-        let paired = self.half_edges.iter().filter(|he| he.twin.is_some()).count();
-        let boundary = self.half_edges.iter().filter(|he| he.twin.is_none()).count();
+        let paired = self
+            .half_edges
+            .iter()
+            .filter(|he| he.twin.is_some())
+            .count();
+        let boundary = self
+            .half_edges
+            .iter()
+            .filter(|he| he.twin.is_none())
+            .count();
         paired / 2 + boundary
     }
 
@@ -246,11 +254,7 @@ impl HalfEdgeMesh {
                 return vertices; // Return empty rather than garbage
             }
         } else {
-            tracing::warn!(
-                "Face {:?} has invalid half_edge {:?}",
-                face_id,
-                start_he
-            );
+            tracing::warn!("Face {:?} has invalid half_edge {:?}", face_id, start_he);
             return vertices;
         }
 

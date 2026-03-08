@@ -50,9 +50,10 @@ fn handle_add_object_event(
             .unwrap_or(Vec3::new(0.0, 0.5, 0.0)); // Slightly above ground by default
 
         // Generate name
-        let name = request.name.clone().unwrap_or_else(|| {
-            format!("{:?}", request.primitive_type)
-        });
+        let name = request
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("{:?}", request.primitive_type));
 
         // Create mesh based on primitive type
         let mesh = match request.primitive_type {
@@ -86,7 +87,9 @@ fn handle_add_object_event(
 
         // Add Selectable component if selection feature is enabled
         #[cfg(feature = "selection")]
-        commands.entity(entity).insert(Selectable { id: id.clone() });
+        commands
+            .entity(entity)
+            .insert(Selectable { id: id.clone() });
 
         info!("Added object '{}' (id: {}) at {:?}", name, id, position);
     }

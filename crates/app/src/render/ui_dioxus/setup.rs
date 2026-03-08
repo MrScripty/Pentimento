@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use pentimento_dioxus_ui::{BlitzDocument, DioxusBridge};
 
 use super::event_bridge::{
-    create_event_channel, BlitzDocumentResource, DioxusBridgeResource, DioxusRendererResource,
+    BlitzDocumentResource, DioxusBridgeResource, DioxusRendererResource, create_event_channel,
 };
 use super::resources::{
     DioxusRenderTarget, DioxusRenderTargetId, DioxusSetupStatus, DioxusUiOverlay, DioxusUiState,
@@ -119,9 +119,7 @@ pub fn setup_dioxus_texture(world: &mut World) {
     // Create the blend material for proper alpha compositing
     let material_handle = world
         .resource_mut::<Assets<UiBlendMaterial>>()
-        .add(UiBlendMaterial {
-            texture: handle,
-        });
+        .add(UiBlendMaterial { texture: handle });
 
     // Create a full-screen UI node with the custom blend material
     // MaterialNode ensures proper alpha blending over the 3D scene

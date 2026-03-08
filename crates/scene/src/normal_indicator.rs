@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::camera::MainCamera;
-use crate::mesh_paint_mode::{ray_mesh_intersection, MeshPaintState, PaintableMesh};
+use crate::mesh_paint_mode::{MeshPaintState, PaintableMesh, ray_mesh_intersection};
 
 /// Resource controlling the normal indicator visualization
 #[derive(Resource)]
@@ -37,9 +37,9 @@ impl Default for NormalIndicatorState {
     fn default() -> Self {
         Self {
             enabled: true,
-            color: Color::srgb(0.5, 0.5, 0.5),       // Neutral grey
+            color: Color::srgb(0.5, 0.5, 0.5), // Neutral grey
             outline_color: Color::srgb(0.0, 0.0, 0.0), // Black outline
-            length: 0.25,                             // Short indicator
+            length: 0.25,                      // Short indicator
             current_hit: None,
         }
     }

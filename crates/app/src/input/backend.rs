@@ -20,9 +20,9 @@ use pentimento_config::DisplayConfig;
 use pentimento_ipc::{KeyboardEvent, MouseEvent};
 
 use crate::config::{CompositeMode, PentimentoConfig};
-use crate::render::FrontendResource;
 #[cfg(feature = "dioxus")]
 use crate::render::DioxusRendererResource;
+use crate::render::FrontendResource;
 
 /// Unified system parameter for accessing the frontend backend.
 ///

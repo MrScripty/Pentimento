@@ -5,10 +5,11 @@
 //! Uses the standard Bevy post-processing pattern with ViewTarget::post_process_write().
 
 use bevy::asset::embedded_asset;
-use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::FullscreenShader;
+use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::prelude::*;
 use bevy::render::{
+    Render, RenderApp, RenderSystems,
     extract_component::ExtractComponentPlugin,
     extract_resource::ExtractResourcePlugin,
     render_asset::RenderAssets,
@@ -16,23 +17,22 @@ use bevy::render::{
         NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
     },
     render_resource::{
-        binding_types::{sampler, texture_2d, uniform_buffer},
         BindGroupEntries, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
         Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
         ColorWrites, FragmentState, MultisampleState, Operations, PipelineCache, PrimitiveState,
         RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
         SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType, TextureFormat,
         TextureSampleType,
+        binding_types::{sampler, texture_2d, uniform_buffer},
     },
     renderer::{RenderContext, RenderDevice},
     texture::GpuImage,
     view::ViewTarget,
-    Render, RenderApp, RenderSystems,
 };
 
-use super::outline_settings::OutlineSettings;
 use super::OutlineCamera;
 use super::OutlineRenderTargets;
+use super::outline_settings::OutlineSettings;
 
 /// Plugin for edge detection post-processing
 pub struct EdgeDetectionPlugin;
@@ -69,7 +69,10 @@ impl Plugin for EdgeDetectionPlugin {
             ),
         );
 
-        render_app.add_systems(Render, prepare_edge_detection.in_set(RenderSystems::Prepare));
+        render_app.add_systems(
+            Render,
+            prepare_edge_detection.in_set(RenderSystems::Prepare),
+        );
     }
 
     fn finish(&self, app: &mut App) {
@@ -153,8 +156,8 @@ impl ViewNode for EdgeDetectionNode {
                 prepared.uniform_buffer.as_entire_binding(),
                 &prepared.id_texture_view,
                 &pipeline.sampler,
-                post_process.source,  // Scene texture to read from
-                &pipeline.sampler,    // Re-use sampler for scene
+                post_process.source, // Scene texture to read from
+                &pipeline.sampler,   // Re-use sampler for scene
             )),
         );
 
@@ -162,7 +165,7 @@ impl ViewNode for EdgeDetectionNode {
         let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("edge_detection_pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: post_process.destination,  // Write to ViewTarget's destination
+                view: post_process.destination, // Write to ViewTarget's destination
                 resolve_target: None,
                 ops: Operations::default(),
                 depth_slice: None,
@@ -198,10 +201,10 @@ impl FromWorld for EdgeDetectionPipeline {
             ShaderStages::FRAGMENT,
             (
                 uniform_buffer::<EdgeDetectionUniform>(false),
-                texture_2d(TextureSampleType::Float { filterable: true }),  // ID buffer
-                sampler(SamplerBindingType::Filtering),                     // ID sampler
-                texture_2d(TextureSampleType::Float { filterable: true }),  // Scene texture
-                sampler(SamplerBindingType::Filtering),                     // Scene sampler
+                texture_2d(TextureSampleType::Float { filterable: true }), // ID buffer
+                sampler(SamplerBindingType::Filtering),                    // ID sampler
+                texture_2d(TextureSampleType::Float { filterable: true }), // Scene texture
+                sampler(SamplerBindingType::Filtering),                    // Scene sampler
             ),
         );
 
@@ -212,15 +215,13 @@ impl FromWorld for EdgeDetectionPipeline {
         );
 
         // Create the actual layout for bind group creation
-        let layout = render_device.create_bind_group_layout(
-            "edge_detection_bind_group_layout",
-            &layout_entries,
-        );
+        let layout = render_device
+            .create_bind_group_layout("edge_detection_bind_group_layout", &layout_entries);
 
         let sampler = render_device.create_sampler(&SamplerDescriptor::default());
 
-        let shader = world
-            .load_asset("embedded://pentimento_scene/outline/shaders/edge_detection.wgsl");
+        let shader =
+            world.load_asset("embedded://pentimento_scene/outline/shaders/edge_detection.wgsl");
 
         let fullscreen_shader = world.resource::<FullscreenShader>();
         let vertex_state = fullscreen_shader.to_vertex_state();
@@ -293,10 +294,7 @@ fn prepare_edge_detection(
             1.0,
         ),
         thickness: settings.thickness,
-        texture_size: Vec2::new(
-            id_texture.size.width as f32,
-            id_texture.size.height as f32,
-        ),
+        texture_size: Vec2::new(id_texture.size.width as f32, id_texture.size.height as f32),
         _padding: 0.0,
     };
 

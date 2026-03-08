@@ -192,9 +192,9 @@ pub(crate) fn get_axis_colors(constraint: GizmoAxis) -> (Color, Color, Color) {
 
     match constraint {
         GizmoAxis::None => (
-            Color::srgb(bright, dim, dim),  // X = red
-            Color::srgb(dim, bright, dim),  // Y = green
-            Color::srgb(dim, dim, bright),  // Z = blue
+            Color::srgb(bright, dim, dim), // X = red
+            Color::srgb(dim, bright, dim), // Y = green
+            Color::srgb(dim, dim, bright), // Z = blue
         ),
         GizmoAxis::X => (
             Color::srgb(bright, bright, dim), // X highlighted

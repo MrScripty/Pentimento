@@ -5,11 +5,11 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 #[cfg(feature = "selection")]
-use crate::gizmo_raycast::{raycast_gizmo, GizmoGeometry, GizmoHandle};
+use crate::MainCamera;
+#[cfg(feature = "selection")]
+use crate::gizmo_raycast::{GizmoGeometry, GizmoHandle, raycast_gizmo};
 #[cfg(feature = "selection")]
 use crate::selection::{Selected, SelectionState};
-#[cfg(feature = "selection")]
-use crate::MainCamera;
 
 #[cfg(feature = "selection")]
 use super::state::GizmoState;
