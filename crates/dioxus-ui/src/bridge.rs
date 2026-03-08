@@ -268,6 +268,13 @@ impl DioxusBridge {
     // Paint commands
     // ========================================================================
 
+    /// Select a brush preset by its ID
+    pub fn select_brush_preset(&self, preset_id: u32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SelectBrushPreset {
+            preset_id,
+        }));
+    }
+
     /// Set brush color (RGBA, 0.0-1.0)
     pub fn set_brush_color(&self, color: [f32; 4]) {
         self.send(UiToBevy::PaintCommand(PaintCommand::SetBrushColor { color }));
@@ -306,6 +313,45 @@ impl DioxusBridge {
     /// Project current canvas contents to all visible meshes (one-shot)
     pub fn project_to_scene(&self) {
         self.send(UiToBevy::PaintCommand(PaintCommand::ProjectToScene));
+    }
+
+    // ========================================================================
+    // Layer commands
+    // ========================================================================
+
+    /// Add a new layer (empty name for auto-generated)
+    pub fn add_layer(&self, name: String) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::AddLayer { name }));
+    }
+
+    /// Remove a layer by ID
+    pub fn remove_layer(&self, layer_id: u32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::RemoveLayer { layer_id }));
+    }
+
+    /// Set the active (painting target) layer
+    pub fn set_active_layer(&self, layer_id: u32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetActiveLayer { layer_id }));
+    }
+
+    /// Toggle layer visibility
+    pub fn set_layer_visibility(&self, layer_id: u32, visible: bool) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetLayerVisibility { layer_id, visible }));
+    }
+
+    /// Set layer opacity (0.0-1.0)
+    pub fn set_layer_opacity(&self, layer_id: u32, opacity: f32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::SetLayerOpacity { layer_id, opacity }));
+    }
+
+    /// Reorder layer to a new index position
+    pub fn reorder_layer(&self, layer_id: u32, new_index: u32) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::ReorderLayer { layer_id, new_index }));
+    }
+
+    /// Rename a layer
+    pub fn rename_layer(&self, layer_id: u32, name: String) {
+        self.send(UiToBevy::PaintCommand(PaintCommand::RenameLayer { layer_id, name }));
     }
 
     // ========================================================================

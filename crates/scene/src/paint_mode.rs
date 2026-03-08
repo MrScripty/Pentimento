@@ -109,6 +109,7 @@ fn handle_paint_mode_toggle(
     key_input: Res<ButtonInput<KeyCode>>,
     mut paint_mode: ResMut<PaintMode>,
     mut paint_events: MessageWriter<PaintEvent>,
+    mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
     // Shift+Tab to toggle paint mode
     let shift = key_input.pressed(KeyCode::ShiftLeft)
@@ -125,6 +126,14 @@ fn handle_paint_mode_toggle(
                 "disabled"
             }
         );
+
+        // Notify UI of mode change
+        let mode = if paint_mode.active {
+            pentimento_ipc::EditMode::Paint
+        } else {
+            pentimento_ipc::EditMode::None
+        };
+        outbound.send(pentimento_ipc::BevyToUi::EditModeChanged { mode });
 
         // Cancel any in-progress stroke when toggling off
         if !paint_mode.active && paint_mode.current_stroke.is_some() {
@@ -242,9 +251,17 @@ fn handle_paint_input(
                 vec![]
             };
 
+            info!(
+                "StrokeMove: {} positions to process (cursor_events={}, window_pos={:?})",
+                positions_to_process.len(),
+                positions_to_process.len(),
+                window.cursor_position()
+            );
+
             for cursor_pos in positions_to_process {
                 let ray = camera.viewport_to_world(camera_transform, cursor_pos);
                 let Some(ray) = ray.ok() else {
+                    info!("StrokeMove: ray cast failed for cursor_pos {:?}", cursor_pos);
                     continue;
                 };
 
@@ -279,8 +296,13 @@ fn handle_paint_input(
                         pressure: 1.0, // Default pressure for mouse
                         speed,
                     });
+                    info!("StrokeMove: wrote event uv=({:.3}, {:.3})", uv_pos.x, uv_pos.y);
+                } else {
+                    info!("StrokeMove: ray-plane intersection returned None");
                 }
             }
+        } else {
+            info!("StrokeMove: mouse pressed but current_stroke is None!");
         }
     } else if mouse_button.just_released(MouseButton::Left) {
         // End stroke

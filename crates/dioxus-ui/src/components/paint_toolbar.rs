@@ -7,7 +7,9 @@ use crate::bridge::DioxusBridge;
 
 const PAINT_TOOLBAR_CSS: &str = r#"
 .paint-toolbar {
-    position: fixed;
+    /* position: absolute within main-content (which has position: relative) */
+    /* Blitz doesn't support position: fixed for hit-testing */
+    position: absolute;
     left: 50%;
     bottom: 20px;
     transform: translateX(-50%);
@@ -19,7 +21,8 @@ const PAINT_TOOLBAR_CSS: &str = r#"
     backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 24px;
-    z-index: 200;
+    z-index: 100;
+    pointer-events: auto;
 }
 
 .tool-group {

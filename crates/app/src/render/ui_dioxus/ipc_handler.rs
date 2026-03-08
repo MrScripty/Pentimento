@@ -2,10 +2,11 @@
 
 use bevy::ecs::message::Messages;
 use bevy::prelude::*;
-use pentimento_ipc::{PaintCommand, UiToBevy};
+use painting::PaintingPipeline;
+use pentimento_ipc::{BevyToUi, LayerInfo, PaintCommand, UiToBevy};
 use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, OutboundUiMessages, PaintingResource,
-    SceneAmbientOcclusion, SceneLighting,
+    ActiveCanvasPlane, AddObjectEvent, CanvasPlane, CanvasPlaneEvent, DepthViewSettings,
+    OutboundUiMessages, PaintingResource, SceneAmbientOcclusion, SceneLighting,
 };
 
 use super::event_bridge::{BlitzDocumentResource, DioxusBridgeResource};
@@ -24,6 +25,9 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
 
     if !outbound_msgs.is_empty() {
         if let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() {
+            for msg in &outbound_msgs {
+                eprintln!(">>> IPC forwarding outbound to UI: {:?}", msg);
+            }
             for msg in outbound_msgs {
                 bridge.bridge_handle.send(msg);
             }
@@ -55,8 +59,16 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
         return;
     }
 
+    // Get active canvas plane_id for layer commands
+    let active_plane_id: Option<u32> = world
+        .get_resource::<ActiveCanvasPlane>()
+        .and_then(|ap| ap.entity)
+        .and_then(|e| world.get::<CanvasPlane>(e))
+        .map(|cp| cp.plane_id);
+
     // Process each message, collecting events to send
     let mut canvas_events: Vec<CanvasPlaneEvent> = Vec::new();
+    let mut outbound_layer_msgs: Vec<BevyToUi> = Vec::new();
 
     for msg in messages {
         match msg {
@@ -73,6 +85,13 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
             UiToBevy::PaintCommand(cmd) => {
                 if let Some(mut painting_res) = world.get_resource_mut::<PaintingResource>() {
                     match cmd {
+                        PaintCommand::SelectBrushPreset { preset_id } => {
+                            let presets = painting::brush::builtin_presets();
+                            if let Some(preset) = presets.into_iter().find(|p| p.id == preset_id) {
+                                painting_res.set_brush_preset(preset);
+                                info!("Selected brush preset: id={}", preset_id);
+                            }
+                        }
                         PaintCommand::SetBrushColor { color } => {
                             painting_res.set_brush_color(color);
                             debug!("Set brush color to {:?}", color);
@@ -113,6 +132,71 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
                         PaintCommand::ProjectToScene => {
                             debug!("Project to scene requested");
                             // TODO: Implement one-shot projection
+                        }
+                        PaintCommand::AddLayer { name } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    let id = pipeline.layers.add_layer(name);
+                                    outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                    info!("Added layer {} on plane {}", id, plane_id);
+                                }
+                            }
+                        }
+                        PaintCommand::RemoveLayer { layer_id } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    if pipeline.layers.remove_layer(layer_id) {
+                                        outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                        info!("Removed layer {} on plane {}", layer_id, plane_id);
+                                    }
+                                }
+                            }
+                        }
+                        PaintCommand::SetActiveLayer { layer_id } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    if pipeline.layers.set_active(layer_id) {
+                                        outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                        info!("Set active layer {} on plane {}", layer_id, plane_id);
+                                    }
+                                }
+                            }
+                        }
+                        PaintCommand::SetLayerVisibility { layer_id, visible } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    pipeline.layers.set_visibility(layer_id, visible);
+                                    outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                    info!("Set layer {} visibility={} on plane {}", layer_id, visible, plane_id);
+                                }
+                            }
+                        }
+                        PaintCommand::SetLayerOpacity { layer_id, opacity } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    pipeline.layers.set_opacity(layer_id, opacity);
+                                    outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                    info!("Set layer {} opacity={:.2} on plane {}", layer_id, opacity, plane_id);
+                                }
+                            }
+                        }
+                        PaintCommand::ReorderLayer { layer_id, new_index } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    pipeline.layers.reorder(layer_id, new_index as usize);
+                                    outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                    info!("Reordered layer {} to index {} on plane {}", layer_id, new_index, plane_id);
+                                }
+                            }
+                        }
+                        PaintCommand::RenameLayer { layer_id, name } => {
+                            if let Some(plane_id) = active_plane_id {
+                                if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
+                                    pipeline.layers.rename(layer_id, name);
+                                    outbound_layer_msgs.push(make_layer_state_msg(pipeline));
+                                    info!("Renamed layer {} on plane {}", layer_id, plane_id);
+                                }
+                            }
                         }
                     }
                 }
@@ -156,4 +240,30 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
             }
         }
     }
+
+    // Send layer state messages to UI (forwarded to bridge on next frame)
+    if !outbound_layer_msgs.is_empty() {
+        if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+            for msg in outbound_layer_msgs {
+                outbound.send(msg);
+            }
+        }
+    }
+}
+
+/// Convert pipeline layer info to IPC LayerInfo and wrap in a BevyToUi message
+fn make_layer_state_msg(pipeline: &PaintingPipeline) -> BevyToUi {
+    let layers = pipeline
+        .layers
+        .layer_info()
+        .into_iter()
+        .map(|l| LayerInfo {
+            id: l.id,
+            name: l.name,
+            visible: l.visible,
+            opacity: l.opacity,
+            is_active: l.is_active,
+        })
+        .collect();
+    BevyToUi::LayerStateChanged { layers }
 }

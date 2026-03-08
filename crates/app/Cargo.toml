@@ -12,6 +12,7 @@ pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
 pentimento-diffusion = { path = "../diffusion", optional = true }
 pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
+painting = { path = "../painting", features = ["bevy"], optional = true }
 
 # Dioxus mode dependencies
 pollster = { version = "0.4", optional = true }
@@ -44,7 +45,7 @@ sculpting = ["pentimento-scene/sculpting"]
 wayland = []
 x11 = []
 cef = ["pentimento-webview/cef"]
-dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui", "dep:pollster"]
+dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui", "dep:pollster", "dep:painting"]
 local-diffusion = ["pentimento-diffusion/local"]
 wireframe = ["pentimento-scene/wireframe"]
 selection = ["pentimento-scene/selection"]

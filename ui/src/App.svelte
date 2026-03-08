@@ -12,24 +12,11 @@
     });
 
     // Edit mode state
-    let editMode = $state<'None' | 'Paint'>('None');
+    let editMode = $state<'None' | 'Paint' | 'MeshEdit' | 'Sculpt'>('None');
 
     // Add object menu state
     let showAddMenu = $state(false);
     let addMenuPosition = $state({ x: 0, y: 0 });
-
-    function handleKeydown(e: KeyboardEvent) {
-        // Shift+A opens the add object menu at cursor position
-        if (e.shiftKey && e.key === 'A') {
-            e.preventDefault();
-            // Position menu at center of screen (we don't have cursor position here)
-            addMenuPosition = {
-                x: window.innerWidth / 2 - 75,
-                y: window.innerHeight / 2 - 100,
-            };
-            showAddMenu = true;
-        }
-    }
 
     function handleMousemove(e: MouseEvent) {
         // Track mouse position for menu placement

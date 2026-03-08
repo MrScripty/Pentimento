@@ -42,6 +42,18 @@ impl Default for BrushPreset {
     }
 }
 
+/// Return the built-in brush presets
+pub fn builtin_presets() -> Vec<BrushPreset> {
+    vec![
+        BrushPreset::new(0, "Hard Round", 20.0, 5.0, 50.0, 1.0, 1.0, 0.25),
+        BrushPreset::new(1, "Soft Round", 30.0, 5.0, 60.0, 0.3, 0.8, 0.20),
+        BrushPreset::new(2, "Pencil", 8.0, 2.0, 16.0, 0.9, 0.9, 0.10),
+        BrushPreset::new(3, "Airbrush", 40.0, 10.0, 100.0, 0.1, 0.3, 0.15),
+        BrushPreset::new(4, "Ink", 12.0, 3.0, 24.0, 1.0, 1.0, 0.08),
+        BrushPreset::new(5, "Marker", 25.0, 10.0, 40.0, 0.6, 0.6, 0.30),
+    ]
+}
+
 impl BrushPreset {
     /// Create a new brush preset with the given parameters
     pub fn new(

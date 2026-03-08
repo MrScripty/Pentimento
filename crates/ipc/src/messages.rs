@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{
-    AddPaintCanvasRequest, CameraCommand, GizmoCommand, GizmoMode, MaterialCommand,
-    MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand, EditMode,
+    AddPaintCanvasRequest, CameraCommand, EditMode, GizmoCommand, GizmoMode, LayerInfo,
+    MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand,
 };
 use crate::types::{
     AddObjectRequest, AmbientOcclusionSettings, AppSettings, DiffusionRequest, LayoutInfo,
@@ -104,6 +104,9 @@ pub enum BevyToUi {
 
     /// Close all open menus (triggered when clicking outside UI)
     CloseMenus,
+
+    /// Layer state changed (full layer stack info for UI sync)
+    LayerStateChanged { layers: Vec<LayerInfo> },
 }
 
 /// Messages from Svelte UI to Bevy.

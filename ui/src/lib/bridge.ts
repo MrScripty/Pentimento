@@ -26,6 +26,19 @@ declare global {
 
 type MessageHandler = (msg: BevyToUi) => void;
 
+function parseBevyMessage(raw: unknown): BevyToUi | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+
+    const candidate = raw as Record<string, unknown>;
+    if (typeof candidate.type !== 'string') {
+        return null;
+    }
+
+    return candidate as BevyToUi;
+}
+
 /** Check if running in WASM mode (Tauri or Electron with Bevy WASM) */
 function isWasmMode(): boolean {
     return '__TAURI__' in window ||
@@ -55,7 +68,10 @@ class BevyBridge {
             // WASM mode (Tauri/Electron): Listen for CustomEvents from Bevy WASM
             window.addEventListener('pentimento:bevy-to-ui', ((event: CustomEvent) => {
                 try {
-                    const msg: BevyToUi = JSON.parse(event.detail);
+                    const msg = parseBevyMessage(JSON.parse(event.detail));
+                    if (!msg) {
+                        throw new Error('Invalid Bevy WASM message shape');
+                    }
                     this.handlers.forEach(handler => handler(msg));
                 } catch (e) {
                     console.error('Failed to parse Bevy WASM message:', e);
@@ -71,7 +87,10 @@ class BevyBridge {
             // Native modes: Set up message receiver (called from Rust)
             window.__PENTIMENTO_RECEIVE__ = (msgJson: string) => {
                 try {
-                    const msg: BevyToUi = JSON.parse(msgJson);
+                    const msg = parseBevyMessage(JSON.parse(msgJson));
+                    if (!msg) {
+                        throw new Error('Invalid IPC message shape');
+                    }
                     this.handlers.forEach(handler => handler(msg));
                 } catch (e) {
                     console.error('Failed to parse IPC message:', e);

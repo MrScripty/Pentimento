@@ -16,6 +16,7 @@ pub mod brush;
 pub mod constants;
 #[cfg(feature = "bevy")]
 pub mod half_edge;
+pub mod layer;
 pub mod log;
 pub mod mesh_surface;
 pub mod pipeline;
@@ -29,6 +30,7 @@ pub mod validation;
 
 pub use brush::*;
 pub use constants::*;
+pub use layer::{LayerStack, Layer};
 #[cfg(feature = "bevy")]
 pub use half_edge::*;
 pub use log::*;

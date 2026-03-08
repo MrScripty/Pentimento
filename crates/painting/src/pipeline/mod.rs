@@ -16,8 +16,9 @@ mod undo;
 use std::collections::{HashMap, HashSet};
 
 use crate::brush::{BrushEngine, BrushPreset};
+use crate::layer::LayerStack;
 use crate::log::{StrokeLog, StrokeRecorder};
-use crate::tiles::{TileCoord, TiledSurface};
+use crate::tiles::TileCoord;
 use crate::types::BlendMode;
 
 pub use undo::UndoEntry;
@@ -27,12 +28,12 @@ pub use undo::UndoEntry;
 /// This struct manages the full painting workflow:
 /// 1. Input comes in via `begin_stroke`, `stroke_to`, `end_stroke`
 /// 2. The brush engine generates dabs from input
-/// 3. Dabs are applied to the CPU surface
+/// 3. Dabs are applied to the active layer's CPU surface
 /// 4. Dabs are recorded for storage/sync
-/// 5. Dirty tiles are tracked for GPU upload
+/// 5. Layers are composited and dirty tiles tracked for GPU upload
 pub struct PaintingPipeline {
-    /// CPU surface for painting
-    pub surface: TiledSurface,
+    /// Layer stack (replaces single surface)
+    pub layers: LayerStack,
     /// Brush engine for dab generation
     pub(crate) brush: BrushEngine,
     /// Current stroke recorder (None if not painting)
@@ -61,7 +62,7 @@ impl PaintingPipeline {
     /// Create a new painting pipeline with the given surface dimensions
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            surface: TiledSurface::with_default_tile_size(width, height),
+            layers: LayerStack::new(width, height),
             brush: BrushEngine::with_default_preset(),
             recorder: None,
             log: StrokeLog::new(),
@@ -78,12 +79,12 @@ impl PaintingPipeline {
 
     /// Get the surface width
     pub fn width(&self) -> u32 {
-        self.surface.surface().width
+        self.layers.composited_surface().surface().width
     }
 
     /// Get the surface height
     pub fn height(&self) -> u32 {
-        self.surface.surface().height
+        self.layers.composited_surface().surface().height
     }
 
     /// Set the brush preset

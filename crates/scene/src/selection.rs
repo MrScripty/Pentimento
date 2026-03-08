@@ -7,6 +7,8 @@
 use bevy::picking::prelude::*;
 use bevy::prelude::*;
 
+use crate::paint_mode::PaintMode;
+
 /// Marker component for selectable objects
 #[derive(Component)]
 pub struct Selectable {
@@ -44,7 +46,12 @@ fn handle_click_selection(
     mut click_events: MessageReader<Pointer<Click>>,
     selected_query: Query<(Entity, &Selectable), With<Selected>>,
     all_selectable: Query<(Entity, &Selectable)>,
+    paint_mode: Res<PaintMode>,
 ) {
+    // Don't process selection clicks when in paint mode
+    if paint_mode.active {
+        return;
+    }
     let shift_held =
         key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
 

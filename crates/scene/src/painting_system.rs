@@ -16,7 +16,7 @@ use bevy::render::{
 use std::collections::HashMap;
 
 use painting::{BlendMode, BrushPreset, PaintingPipeline};
-use pentimento_ipc::BlendMode as IpcBlendMode;
+use pentimento_ipc::{BevyToUi, BlendMode as IpcBlendMode, LayerInfo};
 
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
 use crate::paint_mode::PaintEvent;
@@ -258,6 +258,7 @@ fn setup_canvas_textures(
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<(Entity, &CanvasPlane, &MeshMaterial3d<StandardMaterial>), Without<CanvasTexture>>,
     mut painting_res: ResMut<PaintingResource>,
+    mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
     for (entity, canvas_plane, material_handle) in query.iter() {
         let width = canvas_plane.width;
@@ -265,6 +266,21 @@ fn setup_canvas_textures(
 
         // Create the painting pipeline for this plane
         let pipeline = painting_res.get_or_create_pipeline(canvas_plane.plane_id, width, height);
+
+        // Send initial layer state to UI
+        let layers = pipeline
+            .layers
+            .layer_info()
+            .into_iter()
+            .map(|l| LayerInfo {
+                id: l.id,
+                name: l.name,
+                visible: l.visible,
+                opacity: l.opacity,
+                is_active: l.is_active,
+            })
+            .collect();
+        outbound.send(BevyToUi::LayerStateChanged { layers });
 
         // Get the surface data and convert to RGBA8
         let surface_bytes = pipeline.surface_as_bytes();
@@ -373,12 +389,16 @@ fn process_paint_events(
                     if let Some(pipeline) = painting_res.get_pipeline_mut(plane_id) {
                         let x = uv_pos.x * width as f32;
                         let y = uv_pos.y * height as f32;
-                        debug!(
-                            "StrokeMove: pixel=({:.1}, {:.1}), pressure={}",
-                            x, y, pressure
+                        info!(
+                            "process_paint_events: StrokeMove pixel=({:.1}, {:.1}), pressure={}, is_stroking={}",
+                            x, y, pressure, pipeline.is_stroking()
                         );
                         pipeline.stroke_to(x, y, *pressure);
+                    } else {
+                        info!("process_paint_events: StrokeMove but no pipeline for plane_id={}", plane_id);
                     }
+                } else {
+                    info!("process_paint_events: StrokeMove but active_plane_info is None (entity={:?})", active_plane.entity);
                 }
             }
             PaintEvent::StrokeEnd => {

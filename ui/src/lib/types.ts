@@ -3,7 +3,13 @@
  */
 
 // Edit mode
-export type EditMode = 'None' | 'Paint';
+export type EditMode = 'None' | 'Paint' | 'MeshEdit' | 'Sculpt';
+
+export type GizmoMode = 'None' | 'Translate' | 'Rotate' | 'Trackball' | 'Scale';
+export type GizmoAxis = 'None' | 'X' | 'Y' | 'Z' | 'XY' | 'XZ' | 'YZ';
+export type CoordinateSpace = 'Global' | 'Local';
+export type MeshSelectionMode = 'Vertex' | 'Edge' | 'Face';
+export type MeshEditTool = 'Select' | 'Extrude' | 'LoopCut' | 'Knife' | 'Merge' | 'Inset';
 
 // Messages from Bevy to UI
 export type BevyToUi =
@@ -16,8 +22,17 @@ export type BevyToUi =
     | { type: 'RenderStats'; data: { fps: number; frame_time_ms: number; draw_calls: number; triangles: number } }
     | { type: 'MouseEnter'; data: { region_id: string } }
     | { type: 'MouseLeave'; data: { region_id: string } }
+    | { type: 'Error'; data: { code: string; message: string } }
+    | { type: 'ShowAddObjectMenu'; data: { show: boolean; position: [number, number] | null } }
+    | { type: 'ObjectAdded'; data: { object: SceneObject } }
+    | { type: 'GizmoModeChanged'; data: { mode: GizmoMode } }
+    | { type: 'AmbientOcclusionChanged'; data: { settings: AmbientOcclusionSettings } }
     | { type: 'EditModeChanged'; data: { mode: EditMode } }
-    | { type: 'Error'; data: { code: string; message: string } };
+    | { type: 'ProjectionModeChanged'; data: { live_projection: boolean } }
+    | { type: 'MeshEditModeChanged'; data: { active: boolean; selection_mode: MeshSelectionMode; tool: MeshEditTool } }
+    | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
+    | { type: 'CloseMenus' }
+    | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } };
 
 // Messages from UI to Bevy
 export type UiToBevy =
@@ -33,7 +48,11 @@ export type UiToBevy =
     | { type: 'UpdateLighting'; data: LightingSettings }
     | { type: 'UpdateAmbientOcclusion'; data: AmbientOcclusionSettings }
     | { type: 'AddObject'; data: AddObjectRequest }
-    | { type: 'AddPaintCanvas'; data: { width: number | null; height: number | null } };
+    | { type: 'GizmoCommand'; data: GizmoCommand }
+    | { type: 'AddPaintCanvas'; data: { width: number | null; height: number | null } }
+    | { type: 'PaintCommand'; data: PaintCommand }
+    | { type: 'MeshEditCommand'; data: MeshEditCommand }
+    | { type: 'SetDepthView'; data: { enabled: boolean } };
 
 // Scene types
 export interface SceneInfo {
@@ -185,6 +204,9 @@ export interface LightingSettings {
     time_of_day: number;
     cloudiness: number;
     use_time_of_day: boolean;
+    moon_phase: number;
+    azimuth_angle: number;
+    pollution: number;
 }
 
 // Ambient occlusion settings
@@ -196,7 +218,46 @@ export interface AmbientOcclusionSettings {
 
 // Add object request
 export interface AddObjectRequest {
-    primitive_type: string;
-    position: [number, number, number] | null;
-    name: string | null;
+  primitive_type: string;
+  position: [number, number, number] | null;
+  name: string | null;
 }
+
+export interface LayerInfo {
+    id: number;
+    name: string;
+    visible: boolean;
+    opacity: number;
+    is_active: boolean;
+}
+
+export type GizmoCommand =
+    | { SetMode: GizmoMode }
+    | { ConstrainAxis: GizmoAxis }
+    | { Cancel: null }
+    | { Confirm: null };
+
+export type PaintCommand =
+    | { SetBrushColor: { color: [number, number, number, number] } }
+    | { SetBrushSize: { size: number } }
+    | { SetBrushOpacity: { opacity: number } }
+    | { SetBrushHardness: { hardness: number } }
+    | { SetBlendMode: { mode: 'Normal' | 'Erase' } }
+    | { SelectBrushPreset: { preset_id: number } }
+    | { Undo: null }
+    | { SetLiveProjection: { enabled: boolean } }
+    | { ProjectToScene: null }
+    | { AddLayer: { name: string } }
+    | { RemoveLayer: { layer_id: number } }
+    | { SetActiveLayer: { layer_id: number } }
+    | { SetLayerVisibility: { layer_id: number; visible: boolean } }
+    | { SetLayerOpacity: { layer_id: number; opacity: number } }
+    | { ReorderLayer: { layer_id: number; new_index: number } }
+    | { RenameLayer: { layer_id: number; name: string } };
+
+export type MeshEditCommand =
+    | { SetSelectionMode: MeshSelectionMode }
+    | { SetTool: MeshEditTool }
+    | { SelectAll: null }
+    | { DeselectAll: null }
+    | { InvertSelection: null };

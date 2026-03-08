@@ -2,7 +2,7 @@
 
 use dioxus::prelude::*;
 
-use pentimento_ipc::{BevyToUi, EditMode};
+use pentimento_ipc::{BevyToUi, EditMode, LayerInfo};
 
 use crate::bridge::DioxusBridge;
 use crate::components::{AddObjectMenu, PaintSidePanel, PaintToolbar, SidePanel, Toolbar};
@@ -114,12 +114,24 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
     // Toolbar menu state - lifted from Toolbar for cross-component control
     let mut open_menu = use_signal(|| None::<String>);
 
+    // Layer state
+    let mut paint_layers = use_signal(|| Vec::<LayerInfo>::new());
+
+    // Sync edit mode from shared state (updated immediately by bridge handle)
+    // This is more reliable than depending solely on channel messages
+    {
+        let shared = props.bridge.get_shared_state();
+        if shared.edit_mode != edit_mode() {
+            edit_mode.set(shared.edit_mode);
+        }
+    }
+
     // Process messages from channel - update SIGNALS which trigger reactivity
     while let Some(msg) = props.bridge.try_recv_from_bevy() {
         tracing::info!("Component received message from Bevy: {:?}", msg);
         match msg {
             BevyToUi::EditModeChanged { mode } => {
-                tracing::info!("Setting edit_mode to {:?}", mode);
+                eprintln!(">>> UI: EditModeChanged to {:?} <<<", mode);
                 edit_mode.set(mode);
             }
             BevyToUi::ShowAddObjectMenu { show, position } => {
@@ -135,6 +147,9 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
             BevyToUi::CloseMenus => {
                 // Close toolbar menus when clicking outside UI (e.g., in viewport)
                 open_menu.set(None);
+            }
+            BevyToUi::LayerStateChanged { layers } => {
+                paint_layers.set(layers);
             }
             _ => {
                 // Other messages not yet handled
@@ -210,13 +225,9 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
                     show_add_menu.set(false);
                 }
             }
-            PaintToolbar {
-                visible: edit_mode() == EditMode::Paint,
-                bridge: props.bridge.clone()
-            }
             // Main content area - flexbox row with spacer and side panel
             // Uses normal flow layout so Blitz hit testing works
-            // Has position: relative to anchor the keyboard-focus-trap
+            // Has position: relative to anchor the keyboard-focus-trap and paint toolbar
             div {
                 class: "main-content",
                 // Focus trap for viewport area - clicking here maintains keyboard focus.
@@ -227,12 +238,18 @@ pub fn PentimentoApp(props: PentimentoAppProps) -> Element {
                     tabindex: 0,
                     onclick: move |_| open_menu.set(None),
                 }
+                // Paint toolbar - position: absolute within main-content
+                PaintToolbar {
+                    visible: edit_mode() == EditMode::Paint,
+                    bridge: props.bridge.clone()
+                }
                 // Spacer fills remaining space, pushes side panel to right
                 div { class: "content-spacer" }
                 // Side panel in normal flow (no position:absolute)
                 if edit_mode() == EditMode::Paint {
                     PaintSidePanel {
-                        bridge: props.bridge.clone()
+                        bridge: props.bridge.clone(),
+                        layers: paint_layers(),
                     }
                 } else {
                     SidePanel {

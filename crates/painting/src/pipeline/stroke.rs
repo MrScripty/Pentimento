@@ -85,7 +85,7 @@ impl PaintingPipeline {
         }
     }
 
-    /// Apply a dab to the surface
+    /// Apply a dab to the active layer's surface
     pub(crate) fn apply_dab(&mut self, dab: &DabOutput) {
         let radius = dab.size / 2.0;
         debug!(
@@ -96,19 +96,24 @@ impl PaintingPipeline {
         // Capture tiles before modification for undo
         self.capture_tiles_for_dab(dab.x, dab.y, radius);
 
-        let result = self.surface.apply_dab(
-            dab.x,
-            dab.y,
-            radius,
-            self.color,
-            dab.opacity,
-            dab.hardness,
-            self.blend_mode,
-        );
-        if let Some((x, y, w, h)) = result {
-            debug!("    -> affected region: ({}, {}) {}x{}", x, y, w, h);
-        } else {
-            debug!("    -> dab outside surface bounds");
+        // Apply dab to the active layer's surface
+        let color = self.color;
+        let blend_mode = self.blend_mode;
+        if let Some(layer) = self.layers.active_layer_mut() {
+            let result = layer.surface.apply_dab(
+                dab.x,
+                dab.y,
+                radius,
+                color,
+                dab.opacity,
+                dab.hardness,
+                blend_mode,
+            );
+            if let Some((x, y, w, h)) = result {
+                debug!("    -> affected region: ({}, {}) {}x{}", x, y, w, h);
+            } else {
+                debug!("    -> dab outside surface bounds");
+            }
         }
     }
 
@@ -142,8 +147,10 @@ impl PaintingPipeline {
         // Finalize undo entry if we captured any tiles
         if !self.pending_undo_captures.is_empty() {
             let stroke_id = self.current_stroke_id.unwrap_or(0);
+            let layer_id = self.layers.active_layer_id();
             let entry = super::undo::UndoEntry {
                 stroke_id,
+                layer_id,
                 tiles: std::mem::take(&mut self.pending_undo_captures),
             };
             self.undo_stack.push(entry);
@@ -154,8 +161,9 @@ impl PaintingPipeline {
             }
 
             debug!(
-                "Saved undo entry for stroke {} ({} tiles)",
+                "Saved undo entry for stroke {} on layer {} ({} tiles)",
                 stroke_id,
+                layer_id,
                 self.undo_stack.last().map(|e| e.tiles.len()).unwrap_or(0)
             );
         }
