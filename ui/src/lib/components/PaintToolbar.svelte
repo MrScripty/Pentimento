@@ -8,7 +8,7 @@
 
 {#if visible}
     <div class="paint-toolbar panel">
-        <button class="paint-tool selected" title="Brush (B)">
+        <button type="button" class="paint-tool selected" title="Brush (B)" aria-label="Brush tool">
             B
         </button>
         <span class="toolbar-hint">Press Tab to exit</span>
@@ -54,6 +54,11 @@
     .paint-tool.selected {
         background: rgba(100, 150, 255, 0.3);
         color: white;
+    }
+
+    .paint-tool:focus-visible {
+        outline: 2px solid rgba(100, 150, 255, 0.9);
+        outline-offset: 2px;
     }
 
     .toolbar-hint {

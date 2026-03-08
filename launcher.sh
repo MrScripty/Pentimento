@@ -472,8 +472,7 @@ run_verification_suite() {
     (
         cd "$PROJECT_ROOT"
         ./scripts/rustfmt-active.sh --check
-        npm run typecheck
-        cargo test -p pentimento-ipc
+        npm run verify
         cargo check -p pentimento --features dioxus
         cargo check -p pentimento --features cef
         cargo check --target wasm32-unknown-unknown -p pentimento-wasm

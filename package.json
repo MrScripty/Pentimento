@@ -8,9 +8,11 @@
         "build": "vite build",
         "preview": "vite preview",
         "check": "svelte-check --tsconfig ./tsconfig.json",
+        "lint:a11y": "svelte-check --fail-on-warnings --tsconfig ./tsconfig.json",
         "typecheck": "npm run check && npm --prefix src-electron run typecheck",
         "lint": "./scripts/rustfmt-active.sh --check",
-        "verify": "npm run lint && npm run typecheck"
+        "test": "node --test tests/contracts/*.test.mjs",
+        "verify": "npm run lint && npm run lint:a11y && npm run typecheck && npm run test"
     },
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.0",

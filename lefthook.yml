@@ -4,6 +4,9 @@ pre-commit:
     rust-format:
       glob: "*.rs"
       run: ./scripts/rustfmt-active.sh --check
+    frontend-a11y:
+      glob: "*.{ts,svelte}"
+      run: npm run lint:a11y
     frontend-typecheck:
       glob: "*.{ts,svelte}"
       run: npm run typecheck

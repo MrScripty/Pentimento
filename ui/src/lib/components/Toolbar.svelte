@@ -18,6 +18,7 @@
 
     // Depth view toggle
     let depthViewEnabled = $state(false);
+    let toolbarElement: HTMLElement | null = null;
 
     function handleResetCamera() {
         bridge.cameraReset();
@@ -31,6 +32,23 @@
         openMenu = null;
     }
 
+    function handleWindowClick(event: MouseEvent) {
+        if (!openMenu || !toolbarElement || !(event.target instanceof Node)) {
+            return;
+        }
+
+        if (!toolbarElement.contains(event.target)) {
+            closeMenu();
+        }
+    }
+
+    function handleWindowKeydown(event: KeyboardEvent) {
+        if (event.key === 'Escape' && openMenu) {
+            event.preventDefault();
+            closeMenu();
+        }
+    }
+
     function handleMenuAction(action: string) {
         console.log('Menu action:', action);
         closeMenu();
@@ -42,42 +60,71 @@
     }
 </script>
 
-<header class="toolbar panel">
+<svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
+
+<header bind:this={toolbarElement} class="toolbar panel">
     <div class="toolbar-left">
         <h1 class="title">Pentimento</h1>
         <nav class="nav">
             <div class="menu-container">
-                <button class="nav-button" class:active={openMenu === 'file'} onclick={() => toggleMenu('file')}>File</button>
+                <button
+                    type="button"
+                    class="nav-button"
+                    class:active={openMenu === 'file'}
+                    aria-haspopup="menu"
+                    aria-expanded={openMenu === 'file'}
+                    onclick={() => toggleMenu('file')}
+                >
+                    File
+                </button>
                 {#if openMenu === 'file'}
-                    <div class="dropdown">
-                        <button class="dropdown-item" onclick={() => handleMenuAction('new')}>New Project</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('open')}>Open...</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('save')}>Save</button>
+                    <div class="dropdown" role="menu" aria-label="File">
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('new')}>New Project</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('open')}>Open...</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('save')}>Save</button>
                         <div class="dropdown-divider"></div>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('export')}>Export...</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('export')}>Export...</button>
                     </div>
                 {/if}
             </div>
             <div class="menu-container">
-                <button class="nav-button" class:active={openMenu === 'edit'} onclick={() => toggleMenu('edit')}>Edit</button>
+                <button
+                    type="button"
+                    class="nav-button"
+                    class:active={openMenu === 'edit'}
+                    aria-haspopup="menu"
+                    aria-expanded={openMenu === 'edit'}
+                    onclick={() => toggleMenu('edit')}
+                >
+                    Edit
+                </button>
                 {#if openMenu === 'edit'}
-                    <div class="dropdown">
-                        <button class="dropdown-item" onclick={() => handleMenuAction('undo')}>Undo</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('redo')}>Redo</button>
+                    <div class="dropdown" role="menu" aria-label="Edit">
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('undo')}>Undo</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('redo')}>Redo</button>
                         <div class="dropdown-divider"></div>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('cut')}>Cut</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('copy')}>Copy</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('paste')}>Paste</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('cut')}>Cut</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('copy')}>Copy</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('paste')}>Paste</button>
                     </div>
                 {/if}
             </div>
             <div class="menu-container">
-                <button class="nav-button" class:active={openMenu === 'view'} onclick={() => toggleMenu('view')}>View</button>
+                <button
+                    type="button"
+                    class="nav-button"
+                    class:active={openMenu === 'view'}
+                    aria-haspopup="menu"
+                    aria-expanded={openMenu === 'view'}
+                    onclick={() => toggleMenu('view')}
+                >
+                    View
+                </button>
                 {#if openMenu === 'view'}
-                    <div class="dropdown">
-                        <button class="dropdown-item" onclick={() => handleMenuAction('zoom-in')}>Zoom In</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('zoom-out')}>Zoom Out</button>
-                        <button class="dropdown-item" onclick={() => handleMenuAction('fit')}>Fit to Window</button>
+                    <div class="dropdown" role="menu" aria-label="View">
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('zoom-in')}>Zoom In</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('zoom-out')}>Zoom Out</button>
+                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('fit')}>Fit to Window</button>
                     </div>
                 {/if}
             </div>
@@ -86,16 +133,48 @@
 
     <div class="toolbar-center">
         <div class="tool-group">
-            <button class="tool-button" class:selected={selectedTool === 'select'} title="Select" onclick={() => selectTool('select')}>
+            <button
+                type="button"
+                class="tool-button"
+                class:selected={selectedTool === 'select'}
+                title="Select"
+                aria-label="Select tool"
+                aria-pressed={selectedTool === 'select'}
+                onclick={() => selectTool('select')}
+            >
                 <span class="icon">↖</span>
             </button>
-            <button class="tool-button" class:selected={selectedTool === 'move'} title="Move" onclick={() => selectTool('move')}>
+            <button
+                type="button"
+                class="tool-button"
+                class:selected={selectedTool === 'move'}
+                title="Move"
+                aria-label="Move tool"
+                aria-pressed={selectedTool === 'move'}
+                onclick={() => selectTool('move')}
+            >
                 <span class="icon">✥</span>
             </button>
-            <button class="tool-button" class:selected={selectedTool === 'rotate'} title="Rotate" onclick={() => selectTool('rotate')}>
+            <button
+                type="button"
+                class="tool-button"
+                class:selected={selectedTool === 'rotate'}
+                title="Rotate"
+                aria-label="Rotate tool"
+                aria-pressed={selectedTool === 'rotate'}
+                onclick={() => selectTool('rotate')}
+            >
                 <span class="icon">↻</span>
             </button>
-            <button class="tool-button" class:selected={selectedTool === 'scale'} title="Scale" onclick={() => selectTool('scale')}>
+            <button
+                type="button"
+                class="tool-button"
+                class:selected={selectedTool === 'scale'}
+                title="Scale"
+                aria-label="Scale tool"
+                aria-pressed={selectedTool === 'scale'}
+                onclick={() => selectTool('scale')}
+            >
                 <span class="icon">⤢</span>
             </button>
         </div>
@@ -103,9 +182,12 @@
 
     <div class="toolbar-right">
         <button
+            type="button"
             class="tool-button"
             class:selected={depthViewEnabled}
             title="Depth View"
+            aria-label="Toggle depth view"
+            aria-pressed={depthViewEnabled}
             onclick={() => {
                 depthViewEnabled = !depthViewEnabled;
                 bridge.setDepthView(depthViewEnabled);
@@ -113,7 +195,7 @@
         >
             <span class="icon">D</span>
         </button>
-        <button class="nav-button" onclick={handleResetCamera}>Reset Camera</button>
+        <button type="button" class="nav-button" onclick={handleResetCamera}>Reset Camera</button>
         <div class="stats">
             <span class="stat">{renderStats.fps.toFixed(0)} FPS</span>
             <span class="stat">{renderStats.frameTime.toFixed(1)}ms</span>
@@ -170,6 +252,13 @@
     .nav-button.active {
         background: rgba(255, 255, 255, 0.1);
         color: white;
+    }
+
+    .nav-button:focus-visible,
+    .dropdown-item:focus-visible,
+    .tool-button:focus-visible {
+        outline: 2px solid rgba(100, 150, 255, 0.9);
+        outline-offset: 2px;
     }
 
     .menu-container {
