@@ -4,6 +4,8 @@ pre-commit:
     rust-format:
       glob: "*.rs"
       run: ./scripts/rustfmt-active.sh --check
+    source-readmes:
+      run: ./scripts/check-source-readmes.sh --staged
     frontend-a11y:
       glob: "*.{ts,svelte}"
       run: npm run lint:a11y
