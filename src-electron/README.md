@@ -6,6 +6,7 @@ This directory contains the Electron shell that hosts the Svelte UI and Bevy WAS
 ## Contents
 | File/Folder | Description |
 |-------------|-------------|
+| `dist/` | Compiled Electron main/preload output consumed at runtime. |
 | `main.ts` | Electron main-process window bootstrap compiled to `dist/main.js`. |
 | `preload.ts` | Secure preload bridge that exposes the Electron runtime marker. |
 | `package.json` | Shell-specific build and runtime scripts. |
@@ -50,6 +51,7 @@ npm --prefix src-electron run build
 - The shell is launched by `launcher.sh` after the UI bundle and WASM artifacts exist.
 - Renderer code should rely on the preload marker rather than enabling Node integration.
 - Missing compiled shell artifacts should be treated as a build error, not auto-generated at runtime.
+- Shell verification is owned by the root launcher/typecheck flow; ad hoc local test scripts are not part of the supported workflow.
 
 ## Structured Producer Contract
 - Produces the `dist/main.js` and `dist/preload.js` artifacts consumed by Electron.

@@ -50,13 +50,12 @@
     }
 
     function handleMenuAction(action: string) {
-        console.log('Menu action:', action);
+        void action;
         closeMenu();
     }
 
     function selectTool(tool: string) {
         selectedTool = tool;
-        console.log('Selected tool:', tool);
     }
 </script>
 
