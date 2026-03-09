@@ -432,7 +432,6 @@ pub fn raycast_gizmo(
     ] {
         let shaft_start = gizmo_center;
         let shaft_end = gizmo_center + axis * (geometry.arrow_length - geometry.arrow_head_length);
-        let head_base = shaft_end;
         let head_tip = gizmo_center + axis * geometry.arrow_length;
 
         // Arrow shaft (capsule)

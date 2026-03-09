@@ -206,20 +206,6 @@ pub fn PaintSidePanel(props: PaintSidePanelProps) -> Element {
         bridge_hardness.set_brush_hardness(normalized);
     };
 
-    // Layer handlers
-    let bridge_add_layer = props.bridge.clone();
-    let handle_add_layer = move |_: Event<MouseData>| {
-        bridge_add_layer.add_layer(String::new());
-    };
-
-    let bridge_remove_layer = props.bridge.clone();
-    let layers_for_delete = props.layers.clone();
-    let handle_remove_layer = move |_: Event<MouseData>| {
-        if let Some(active) = layers_for_delete.iter().find(|l| l.is_active) {
-            bridge_remove_layer.remove_layer(active.id);
-        }
-    };
-
     rsx! {
         style { {PAINT_SIDE_PANEL_CSS} }
         aside { class: "paint-side-panel panel",

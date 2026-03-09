@@ -184,16 +184,16 @@ fn setup_scene(
     // TonyMcMapFace requires tonemapping_luts which needs zstd (not available in WASM)
     let orbit_camera = OrbitCamera::default();
     let camera_position = orbit_camera.calculate_position();
-    let mut camera_entity = commands.spawn((
+    commands.spawn((
         Camera3d::default(),
         Transform::from_translation(camera_position).looking_at(orbit_camera.target, Vec3::Y),
         Tonemapping::Reinhard,
         MainCamera,
         DepthViewCamera,
         orbit_camera,
+        #[cfg(feature = "selection")]
+        OutlineCamera,
     ));
-    #[cfg(feature = "selection")]
-    camera_entity.insert(OutlineCamera);
 
     // Sun lighting is handled by LightingPlugin
 

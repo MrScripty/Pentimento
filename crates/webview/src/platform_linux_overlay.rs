@@ -327,7 +327,7 @@ impl LinuxOverlayWebview {
         if self.state == OverlayState::Initializing && *self.load_finished.borrow() {
             // Set viewport dimensions via JavaScript to ensure WebKit knows the size
             let (width, height) = self.size;
-            self.webkit_webview.run_javascript(
+            self.webkit_webview.evaluate_javascript(
                 &format!(
                     "document.body.style.width = '{}px'; \
                      document.body.style.height = '{}px'; \
@@ -335,6 +335,8 @@ impl LinuxOverlayWebview {
                      document.documentElement.style.height = '{}px';",
                     width, height, width, height
                 ),
+                None,
+                None,
                 Cancellable::NONE,
                 |_| {},
             );
@@ -423,7 +425,7 @@ impl LinuxOverlayWebview {
             .ok();
 
         // Force WebKit to re-layout via JavaScript
-        self.webkit_webview.run_javascript(
+        self.webkit_webview.evaluate_javascript(
             &format!(
                 "window.dispatchEvent(new Event('resize')); \
                  document.body.style.width = '{}px'; \
@@ -432,6 +434,8 @@ impl LinuxOverlayWebview {
                  document.documentElement.style.height = '{}px';",
                 width, height, width, height
             ),
+            None,
+            None,
             Cancellable::NONE,
             |_| {},
         );

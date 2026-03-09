@@ -17,10 +17,6 @@ use crate::mesh_edit_mode::{EditableMesh, MeshEditState};
 pub struct SubObjectHit {
     /// Type of element hit
     pub hit_type: SubObjectHitType,
-    /// World position of the hit
-    pub world_position: Vec3,
-    /// Distance from ray origin
-    pub distance: f32,
 }
 
 /// Type of sub-object hit
@@ -123,7 +119,7 @@ fn raycast_sub_object(
     let local_dir = inv_transform.transform_vector3(*ray.direction).normalize();
 
     // Find face intersection first
-    let mut closest_hit: Option<(FaceId, Vec3, f32, Vec3)> = None; // (face_id, hit_pos, distance, barycentric)
+    let mut closest_hit: Option<(FaceId, Vec3, f32)> = None; // (face_id, hit_pos, distance)
 
     for face in mesh.faces() {
         let verts = mesh.get_face_vertices(face.id);
@@ -137,19 +133,17 @@ fn raycast_sub_object(
         let v2 = mesh.vertex(verts[2])?.position;
 
         // Möller-Trumbore intersection
-        if let Some((t, u, v)) = ray_triangle_intersection(local_origin, local_dir, v0, v1, v2) {
+        if let Some((t, _u, _v)) = ray_triangle_intersection(local_origin, local_dir, v0, v1, v2) {
             if t > 0.0 {
                 if closest_hit.is_none() || t < closest_hit.as_ref()?.2 {
                     let hit_pos = local_origin + local_dir * t;
-                    let bary = Vec3::new(1.0 - u - v, u, v);
-                    closest_hit = Some((face.id, hit_pos, t, bary));
+                    closest_hit = Some((face.id, hit_pos, t));
                 }
             }
         }
     }
 
-    let (face_id, local_hit_pos, distance, bary) = closest_hit?;
-    let world_hit_pos = transform.transform_point(local_hit_pos);
+    let (face_id, local_hit_pos, distance) = closest_hit?;
 
     // Based on selection mode, determine what was actually hit
     let hit_type = match selection_mode {
@@ -216,11 +210,7 @@ fn raycast_sub_object(
         }
     };
 
-    Some(SubObjectHit {
-        hit_type,
-        world_position: world_hit_pos,
-        distance,
-    })
+    Some(SubObjectHit { hit_type })
 }
 
 /// Möller-Trumbore ray-triangle intersection

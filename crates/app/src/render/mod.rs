@@ -37,20 +37,11 @@ use crate::embedded_ui::UiAssets;
 // Keep submodules for mode-specific initialization helpers
 #[cfg(feature = "dioxus")]
 mod ui_blend_material;
-#[cfg(feature = "cef")]
-mod ui_cef;
-mod ui_composite;
 #[cfg(feature = "dioxus")]
 mod ui_dioxus;
-mod ui_overlay;
 
-// Re-export types needed by the input module
-#[cfg(feature = "cef")]
-pub use ui_cef::CefWebviewResource;
-pub use ui_composite::WebviewResource;
 #[cfg(feature = "dioxus")]
 pub use ui_dioxus::DioxusRendererResource;
-pub use ui_overlay::OverlayWebviewResource;
 
 // ============================================================================
 // Unified Frontend Resource

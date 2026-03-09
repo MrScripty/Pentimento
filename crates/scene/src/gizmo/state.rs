@@ -16,12 +16,15 @@ pub struct GizmoState {
     /// Coordinate space (global vs local)
     pub coordinate_space: CoordinateSpace,
     /// Last single-axis pressed (for toggle detection: X→Local X→None)
+    #[cfg(feature = "selection")]
     pub(crate) last_axis_pressed: Option<GizmoAxis>,
     /// Whether a transform operation is currently active
     pub is_active: bool,
     /// Original transforms before operation started (for cancel)
+    #[cfg(feature = "selection")]
     pub(crate) original_transforms: Vec<(Entity, Transform)>,
     /// Accumulated mouse delta during operation
+    #[cfg(feature = "selection")]
     pub(crate) accumulated_delta: Vec2,
     /// Currently hovered handle (for visual feedback)
     #[cfg(feature = "selection")]
@@ -45,9 +48,12 @@ impl Default for GizmoState {
             mode: GizmoMode::None,
             axis_constraint: GizmoAxis::None,
             coordinate_space: CoordinateSpace::Global,
+            #[cfg(feature = "selection")]
             last_axis_pressed: None,
             is_active: false,
+            #[cfg(feature = "selection")]
             original_transforms: Vec::new(),
+            #[cfg(feature = "selection")]
             accumulated_delta: Vec2::ZERO,
             #[cfg(feature = "selection")]
             hovered_handle: GizmoHandle::None,
@@ -64,6 +70,7 @@ impl Default for GizmoState {
 
 impl GizmoState {
     /// Start a new transform operation
+    #[cfg(feature = "selection")]
     pub(crate) fn start_operation(&mut self, mode: GizmoMode) {
         self.mode = mode;
         self.axis_constraint = GizmoAxis::None;
@@ -99,6 +106,7 @@ impl GizmoState {
     }
 
     /// Cancel the current operation and restore original transforms
+    #[cfg(feature = "selection")]
     pub(crate) fn cancel(&mut self) {
         self.mode = GizmoMode::None;
         self.axis_constraint = GizmoAxis::None;
@@ -114,6 +122,7 @@ impl GizmoState {
     }
 
     /// Confirm the current operation
+    #[cfg(feature = "selection")]
     pub(crate) fn confirm(&mut self) {
         self.mode = GizmoMode::None;
         self.axis_constraint = GizmoAxis::None;
@@ -135,6 +144,7 @@ impl GizmoState {
 /// - Third press (same axis): remove constraint
 /// - Shift+axis: constrain to plane (exclude that axis)
 /// - Different axis: switch to new axis in Global space
+#[cfg(feature = "selection")]
 pub(crate) fn handle_axis_key(gizmo_state: &mut GizmoState, axis: GizmoAxis, shift_held: bool) {
     if shift_held {
         // Shift+axis = plane constraint (exclude that axis)

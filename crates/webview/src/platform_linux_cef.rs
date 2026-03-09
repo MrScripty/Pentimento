@@ -50,18 +50,14 @@ static CEF_INITIALIZED: OnceLock<bool> = OnceLock::new();
 /// CEF webview state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CefState {
-    /// CEF is initializing
-    Initializing,
     /// Browser is loading content
     Loading,
     /// Ready for capture
     Ready,
-    /// CEF encountered an error
-    Error,
 }
 
 /// Shared framebuffer state between RenderHandler and LinuxCefWebview
-struct SharedState {
+pub(crate) struct SharedState {
     /// Raw BGRA pixel data wrapped in Arc for zero-copy sharing between threads.
     /// The Arc allows capture() to clone just the pointer (~20ns) instead of
     /// copying the entire 18MB buffer (~6-12ms at HiDPI).
@@ -247,7 +243,7 @@ impl RenderHandlerBuilder {
 }
 
 impl ClientBuilder {
-    pub fn build(shared: Arc<SharedState>) -> Client {
+    pub(crate) fn build(shared: Arc<SharedState>) -> Client {
         let render_handler =
             RenderHandlerBuilder::build(OsrRenderHandler::new(Arc::clone(&shared)));
         let display_handler = DisplayHandlerBuilder::build(OsrDisplayHandler::new(shared));

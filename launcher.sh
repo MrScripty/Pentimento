@@ -477,6 +477,13 @@ run_verification_suite() {
         cargo check -p pentimento --features dioxus
         cargo check -p pentimento --features cef
         cargo check --target wasm32-unknown-unknown -p pentimento-wasm
+        cargo rustc -p pentimento-scene --lib --features 'wireframe selection mesh_painting mesh_editing sculpting atmosphere' -- -D warnings
+        cargo rustc -p pentimento-webview --lib --features dioxus -- -D warnings
+        cargo rustc -p pentimento-webview --lib --features cef -- -D warnings
+        cargo rustc -p pentimento-dioxus-ui --lib -- -D warnings
+        cargo rustc -p pentimento --bin pentimento --features dioxus -- -D warnings
+        cargo rustc -p pentimento --bin pentimento --features cef -- -D warnings
+        cargo rustc -p pentimento-wasm --lib --target wasm32-unknown-unknown -- -D warnings
     )
 }
 

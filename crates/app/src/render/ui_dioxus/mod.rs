@@ -31,17 +31,13 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 use pentimento_dioxus_ui::SharedVelloRenderer;
 
 use super::ui_blend_material::UiBlendMaterialPlugin;
+use render::RenderWorldVelloRenderer;
+use resources::{
+    DioxusRenderTargetId, DioxusSetupStatus, DioxusUiState, VelloRenderStatus, VelloSceneBuffer,
+};
 
 // Re-export public types
-pub use event_bridge::{
-    BlitzDocumentResource, DioxusBridgeResource, DioxusEventReceiver, DioxusEventSender,
-    DioxusRendererResource,
-};
-pub use render::RenderWorldVelloRenderer;
-pub use resources::{
-    DioxusRenderTarget, DioxusRenderTargetId, DioxusSetupStatus, DioxusUiOverlay, DioxusUiState,
-    VelloRenderStatus, VelloSceneBuffer,
-};
+pub use event_bridge::DioxusRendererResource;
 
 // Import systems for plugin registration
 use ipc_handler::handle_ui_to_bevy_messages;

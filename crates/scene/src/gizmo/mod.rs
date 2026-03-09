@@ -19,15 +19,21 @@
 //! - Second R: Trackball (free rotation - horizontal mouse = Y, vertical mouse = X)
 //! - Third R: Cancel operation
 
+#[cfg(feature = "selection")]
 mod hover;
+#[cfg(feature = "selection")]
 mod input;
+#[cfg(feature = "selection")]
 mod render;
 mod state;
+#[cfg(feature = "selection")]
 mod transform;
 
 use bevy::prelude::*;
+#[cfg(feature = "selection")]
 use pentimento_ipc::EditMode;
 
+#[cfg(feature = "selection")]
 use crate::edit_mode::EditModeState;
 #[cfg(feature = "selection")]
 use crate::gizmo_raycast::GizmoGeometry;
@@ -71,6 +77,7 @@ impl Plugin for GizmoPlugin {
 ///
 /// The gizmo interferes with brush strokes and vertex selection in these modes,
 /// so we hide it until the user exits back to normal object mode.
+#[cfg(feature = "selection")]
 fn sync_gizmo_visibility_with_edit_mode(
     edit_mode: Res<EditModeState>,
     mut gizmo_state: ResMut<GizmoState>,

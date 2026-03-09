@@ -33,10 +33,6 @@ mod hotkeys;
 mod keyboard;
 mod mouse;
 
-// Re-export for use by other modules
-pub use backend::FrontendBackend;
-pub use keyboard::bevy_keycode_to_web_key;
-
 pub struct InputPlugin;
 
 impl Plugin for InputPlugin {

@@ -231,7 +231,7 @@ impl LinuxWebview {
                     } else {
                         1.0
                     };
-                    self.webkit_webview.run_javascript(
+                    self.webkit_webview.evaluate_javascript(
                         &format!(
                             r#"(function() {{
                                 // Update viewport meta tag with exact dimensions
@@ -257,6 +257,8 @@ impl LinuxWebview {
                             height = height,
                             scale = scale
                         ),
+                        None,
+                        None,
                         gio::Cancellable::NONE,
                         |_| {},
                     );
@@ -269,21 +271,21 @@ impl LinuxWebview {
                 if frames_remaining == 0 {
                     tracing::info!("Warmup complete, transitioning to Ready state");
                     // Query viewport dimensions to verify coordinate space
-                    self.webkit_webview.run_javascript(
+                    self.webkit_webview.evaluate_javascript(
                         r#"JSON.stringify({
                             innerWidth: window.innerWidth,
                             innerHeight: window.innerHeight,
                             docWidth: document.documentElement.clientWidth,
                             docHeight: document.documentElement.clientHeight
                         })"#,
+                        None,
+                        None,
                         gio::Cancellable::NONE,
                         move |result| match result {
-                            Ok(js_value) => {
-                                if let Some(value) = js_value.js_value() {
-                                    let json_str = value.to_string();
-                                    tracing::info!("WebKit viewport dimensions: {}", json_str);
-                                }
-                            }
+                            Ok(js_value) => tracing::info!(
+                                "WebKit viewport dimensions: {}",
+                                js_value.to_string()
+                            ),
                             Err(e) => tracing::warn!("Failed to query viewport: {}", e),
                         },
                     );
@@ -300,21 +302,21 @@ impl LinuxWebview {
                 if frames_remaining == 0 {
                     tracing::info!("Resize stabilized, returning to Ready state");
                     // Query viewport dimensions after resize to verify coordinate space
-                    self.webkit_webview.run_javascript(
+                    self.webkit_webview.evaluate_javascript(
                         r#"JSON.stringify({
                             innerWidth: window.innerWidth,
                             innerHeight: window.innerHeight,
                             docWidth: document.documentElement.clientWidth,
                             docHeight: document.documentElement.clientHeight
                         })"#,
+                        None,
+                        None,
                         gio::Cancellable::NONE,
                         move |result| match result {
-                            Ok(js_value) => {
-                                if let Some(value) = js_value.js_value() {
-                                    let json_str = value.to_string();
-                                    tracing::info!("WebKit viewport after resize: {}", json_str);
-                                }
-                            }
+                            Ok(js_value) => tracing::info!(
+                                "WebKit viewport after resize: {}",
+                                js_value.to_string()
+                            ),
                             Err(e) => tracing::warn!("Failed to query viewport: {}", e),
                         },
                     );
@@ -518,7 +520,7 @@ impl LinuxWebview {
         // Force WebKit to re-layout by triggering a resize event in JavaScript
         // This helps ensure the viewport updates to match the new size
         // IMPORTANT: Must update viewport meta tag, not just CSS dimensions!
-        self.webkit_webview.run_javascript(
+        self.webkit_webview.evaluate_javascript(
             &format!(
                 r#"(function() {{
                     // Update viewport meta tag with exact dimensions
@@ -539,6 +541,8 @@ impl LinuxWebview {
                 height = logical_height,
                 scale = scale
             ),
+            None,
+            None,
             gio::Cancellable::NONE,
             |_| {},
         );
@@ -905,7 +909,7 @@ impl LinuxWebview {
 
         // Execute the JavaScript to dispatch the event
         self.webkit_webview
-            .run_javascript(&js, gio::Cancellable::NONE, |_| {});
+            .evaluate_javascript(&js, None, None, gio::Cancellable::NONE, |_| {});
 
         // Delay capture after mouse events to allow RAF callbacks and layout/paint to complete
         // This prevents capturing WebKit in an intermediate render state (which causes fuzziness)
@@ -951,7 +955,7 @@ impl LinuxWebview {
         );
 
         self.webkit_webview
-            .run_javascript(&js, gio::Cancellable::NONE, |_| {});
+            .evaluate_javascript(&js, None, None, gio::Cancellable::NONE, |_| {});
 
         // Only mark dirty for key presses (not releases) that might change UI
         // Modifier keys alone don't typically change visible UI

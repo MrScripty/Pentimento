@@ -67,7 +67,7 @@ Node.js 22+ is required for the Svelte and Electron tooling.
 - Svelte accessibility linting
 - TypeScript typechecking for the browser and Electron shells
 - Rust-to-JavaScript IPC acceptance coverage
-- cargo checks for the Dioxus, CEF, and WASM frontend paths
+- warning-free cargo checks for the Dioxus, CEF, and WASM frontend paths
 
 ## Project Structure
 

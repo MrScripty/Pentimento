@@ -11,11 +11,8 @@ mod slider;
 mod toolbar;
 
 pub use add_object_menu::AddObjectMenu;
-pub use brush_palette::BrushPalette;
-pub use color_picker::ColorPicker;
-pub use layers_panel::LayersPanel;
 pub use paint_side_panel::PaintSidePanel;
 pub use paint_toolbar::PaintToolbar;
 pub use side_panel::SidePanel;
-pub use slider::Slider;
+pub(crate) use slider::Slider;
 pub use toolbar::Toolbar;

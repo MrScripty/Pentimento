@@ -45,27 +45,6 @@ pub struct FrontendBackend<'w, 's> {
 }
 
 impl<'w, 's> FrontendBackend<'w, 's> {
-    /// Get the current composite mode
-    pub fn mode(&self) -> CompositeMode {
-        self.config.composite_mode
-    }
-
-    /// Check if the backend is available and ready to receive events
-    pub fn is_available(&self) -> bool {
-        match self.config.composite_mode {
-            CompositeMode::Capture | CompositeMode::Overlay => self.frontend.is_some(),
-            #[cfg(feature = "cef")]
-            CompositeMode::Cef => self.frontend.is_some(),
-            #[cfg(not(feature = "cef"))]
-            CompositeMode::Cef => false,
-            #[cfg(feature = "dioxus")]
-            CompositeMode::Dioxus => self.dioxus_renderer.is_some(),
-            #[cfg(not(feature = "dioxus"))]
-            CompositeMode::Dioxus => false,
-            CompositeMode::Tauri => false, // Tauri handles its own input
-        }
-    }
-
     /// Scale coordinates from logical (Bevy) to backend-specific coordinates.
     ///
     /// Different backends have different coordinate expectations:
@@ -166,10 +145,4 @@ impl<'w, 's> FrontendBackend<'w, 's> {
         }
         false
     }
-}
-
-/// Marker trait for backends that support DevTools (currently only CEF)
-#[cfg(feature = "cef")]
-pub trait DevToolsCapable {
-    fn show_dev_tools(&self);
 }
