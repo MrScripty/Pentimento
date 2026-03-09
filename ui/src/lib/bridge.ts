@@ -25,6 +25,9 @@ declare global {
 }
 
 type MessageHandler = (msg: BevyToUi) => void;
+type DisposeFn = () => void;
+
+let activeAutoMarkDirtyCleanup: DisposeFn | null = null;
 
 function parseBevyMessage(raw: unknown): BevyToUi | null {
     if (!raw || typeof raw !== 'object') {
@@ -60,15 +63,18 @@ class BevyBridge {
     private handlers: Set<MessageHandler> = new Set();
     private layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly wasmMode: boolean;
+    private readonly wasmMessageListener: EventListener | null = null;
+    private readonly nativeMessageReceiver: ((msg: string) => void) | null = null;
+    private readonly previousNativeMessageReceiver: ((msg: string) => void) | undefined;
 
     constructor() {
         this.wasmMode = isWasmMode();
 
         if (this.wasmMode) {
             // WASM mode (Tauri/Electron): Listen for CustomEvents from Bevy WASM
-            window.addEventListener('pentimento:bevy-to-ui', ((event: CustomEvent) => {
+            this.wasmMessageListener = ((event: Event) => {
                 try {
-                    const msg = parseBevyMessage(JSON.parse(event.detail));
+                    const msg = parseBevyMessage(JSON.parse((event as CustomEvent<string>).detail));
                     if (!msg) {
                         throw new Error('Invalid Bevy WASM message shape');
                     }
@@ -76,16 +82,16 @@ class BevyBridge {
                 } catch (e) {
                     console.error('Failed to parse Bevy WASM message:', e);
                 }
-            }) as EventListener);
-            const runtime = '__ELECTRON__' in window ? 'Electron' : 'Tauri';
-            console.log(`Pentimento bridge initialized in ${runtime} WASM mode`);
+            }) as EventListener;
+            window.addEventListener('pentimento:bevy-to-ui', this.wasmMessageListener);
         } else {
             const ipc = getNativeIpc();
             if (!window.__PENTIMENTO_IPC__ && ipc) {
                 window.__PENTIMENTO_IPC__ = ipc;
             }
             // Native modes: Set up message receiver (called from Rust)
-            window.__PENTIMENTO_RECEIVE__ = (msgJson: string) => {
+            this.previousNativeMessageReceiver = window.__PENTIMENTO_RECEIVE__;
+            this.nativeMessageReceiver = (msgJson: string) => {
                 try {
                     const msg = parseBevyMessage(JSON.parse(msgJson));
                     if (!msg) {
@@ -96,7 +102,7 @@ class BevyBridge {
                     console.error('Failed to parse IPC message:', e);
                 }
             };
-            console.log('Pentimento bridge initialized in native mode');
+            window.__PENTIMENTO_RECEIVE__ = this.nativeMessageReceiver;
         }
     }
 
@@ -144,6 +150,30 @@ class BevyBridge {
             this.send({ type: 'LayoutUpdate', data: layout });
             this.layoutDebounceTimer = null;
         }, 16); // ~60fps max
+    }
+
+    dispose(): void {
+        if (this.layoutDebounceTimer) {
+            clearTimeout(this.layoutDebounceTimer);
+            this.layoutDebounceTimer = null;
+        }
+
+        if (this.wasmMessageListener) {
+            window.removeEventListener('pentimento:bevy-to-ui', this.wasmMessageListener);
+        }
+
+        if (
+            this.nativeMessageReceiver &&
+            window.__PENTIMENTO_RECEIVE__ === this.nativeMessageReceiver
+        ) {
+            if (this.previousNativeMessageReceiver) {
+                window.__PENTIMENTO_RECEIVE__ = this.previousNativeMessageReceiver;
+            } else {
+                delete window.__PENTIMENTO_RECEIVE__;
+            }
+        }
+
+        this.handlers.clear();
     }
 
     // Camera controls
@@ -321,12 +351,18 @@ export const bridge = new BevyBridge();
 /**
  * Set up automatic dirty marking on DOM mutations
  */
-export function setupAutoMarkDirty(): void {
+export function setupAutoMarkDirty(target: Node = document.body): DisposeFn {
+    activeAutoMarkDirtyCleanup?.();
+
     const observer = new MutationObserver(() => {
         bridge.markDirty();
     });
+    const handleResize = () => {
+        bridge.markDirty();
+    };
+    let cleanedUp = false;
 
-    observer.observe(document.body, {
+    observer.observe(target, {
         childList: true,
         subtree: true,
         attributes: true,
@@ -334,7 +370,23 @@ export function setupAutoMarkDirty(): void {
     });
 
     // Also mark dirty on window resize
-    window.addEventListener('resize', () => {
-        bridge.markDirty();
-    });
+    window.addEventListener('resize', handleResize);
+
+    const cleanup = () => {
+        if (cleanedUp) {
+            return;
+        }
+
+        cleanedUp = true;
+        observer.disconnect();
+        window.removeEventListener('resize', handleResize);
+
+        if (activeAutoMarkDirtyCleanup === cleanup) {
+            activeAutoMarkDirtyCleanup = null;
+        }
+    };
+
+    activeAutoMarkDirtyCleanup = cleanup;
+
+    return cleanup;
 }

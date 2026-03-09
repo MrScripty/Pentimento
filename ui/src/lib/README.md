@@ -28,6 +28,7 @@ Use `bridge.ts` as the single runtime transport owner and keep `types.ts` as the
 ## Invariants
 - Components send commands through `bridge.ts`, not raw `window` globals.
 - `types.ts` mirrors `crates/ipc` and is treated as a consumer contract, not an independent schema.
+- `setupAutoMarkDirty()` returns the only supported cleanup handle for the DOM observer and resize listener it owns.
 
 ## Revisit Triggers
 - A generated Rust-to-TypeScript contract pipeline replaces manual mirroring.
@@ -52,6 +53,7 @@ bridge.subscribe((message) => console.log(message.type));
 - Consumers subscribe through `bridge.subscribe()` and receive parsed `BevyToUi` messages.
 - Outbound calls serialize `UiToBevy` messages immediately; callers should not assume retries.
 - Invalid inbound JSON is rejected at the bridge boundary and logged.
+- App bootstrap owns `setupAutoMarkDirty()` startup/teardown and must dispose the bridge on module restart.
 
 ## Structured Producer Contract
 - `types.ts` defines the stable field names the browser UI expects from Rust.

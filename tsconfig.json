@@ -13,6 +13,7 @@
         "strict": true,
         "noUnusedLocals": true,
         "noUnusedParameters": true,
+        "types": ["vite/client"],
         "noFallthroughCasesInSwitch": true,
         "paths": {
             "$lib/*": ["./ui/src/lib/*"]

@@ -11,7 +11,7 @@
         "lint:a11y": "svelte-check --fail-on-warnings --tsconfig ./tsconfig.json",
         "typecheck": "npm run check && npm --prefix src-electron run typecheck",
         "lint": "./scripts/rustfmt-active.sh --check",
-        "test": "node --test tests/contracts/*.test.mjs",
+        "test": "node --test --experimental-strip-types tests/contracts/*.test.mjs tests/ui/*.test.ts",
         "verify": "npm run lint && npm run lint:a11y && npm run typecheck && npm run test"
     },
     "devDependencies": {
