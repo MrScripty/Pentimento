@@ -15,7 +15,7 @@ const ADD_MENU_DEFAULT_Y: f32 = 72.0;
 
 pub fn show_root_ui(
     ctx: &egui::Context,
-    snapshot: &EguiUiSnapshot,
+    snapshot: &mut EguiUiSnapshot,
     runtime: &mut EguiUiRuntime,
 ) -> Vec<UiToBevy> {
     runtime.sync_from_snapshot(snapshot);

@@ -9,7 +9,7 @@ pub fn render_egui_ui(mut contexts: EguiContexts, mut frontend: ResMut<EguiFront
         return;
     };
 
-    let snapshot = frontend.snapshot.clone();
-    let commands = show_root_ui(ctx, &snapshot, &mut frontend.runtime);
+    let frontend = &mut *frontend;
+    let commands = show_root_ui(ctx, &mut frontend.snapshot, &mut frontend.runtime);
     frontend.pending_commands.extend(commands);
 }

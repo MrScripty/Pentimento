@@ -42,9 +42,10 @@ impl Default for EguiUiRuntime {
 }
 
 impl EguiUiRuntime {
-    pub fn sync_from_snapshot(&mut self, snapshot: &EguiUiSnapshot) {
+    pub fn sync_from_snapshot(&mut self, snapshot: &mut EguiUiSnapshot) {
         if snapshot.show_add_menu {
             self.add_object_menu_open = true;
+            snapshot.show_add_menu = false;
         }
     }
 }
