@@ -1,20 +1,7 @@
-use pentimento_ipc::{BevyToUi, EditMode, LayerInfo, MeshEditTool, MeshSelectionMode};
+use pentimento_frontend_core::{NativeUiState, apply_native_ui_message};
+use pentimento_ipc::BevyToUi;
 
-/// Snapshot of backend-owned state currently displayed by the egui frontend.
-#[derive(Debug, Clone, Default)]
-pub struct EguiUiSnapshot {
-    pub show_add_object_menu: bool,
-    pub add_object_menu_position: Option<[f32; 2]>,
-    pub edit_mode: EditMode,
-    pub mesh_edit_active: bool,
-    pub mesh_selection_mode: MeshSelectionMode,
-    pub mesh_edit_tool: MeshEditTool,
-    pub selected_vertex_count: usize,
-    pub selected_edge_count: usize,
-    pub selected_face_count: usize,
-    pub depth_view_enabled: bool,
-    pub layers: Vec<LayerInfo>,
-}
+pub type EguiUiSnapshot = NativeUiState;
 
 /// UI-local state owned by the egui presentation layer.
 #[derive(Debug, Clone)]
@@ -56,47 +43,12 @@ impl Default for EguiUiRuntime {
 
 impl EguiUiRuntime {
     pub fn sync_from_snapshot(&mut self, snapshot: &EguiUiSnapshot) {
-        if snapshot.show_add_object_menu {
+        if snapshot.show_add_menu {
             self.add_object_menu_open = true;
         }
     }
 }
 
-/// Apply a backend-originated message to the egui snapshot.
 pub fn apply_bevy_message(snapshot: &mut EguiUiSnapshot, message: BevyToUi) {
-    match message {
-        BevyToUi::ShowAddObjectMenu { show, position } => {
-            snapshot.show_add_object_menu = show;
-            snapshot.add_object_menu_position = position;
-        }
-        BevyToUi::EditModeChanged { mode } => {
-            snapshot.edit_mode = mode;
-        }
-        BevyToUi::MeshEditModeChanged {
-            active,
-            selection_mode,
-            tool,
-        } => {
-            snapshot.mesh_edit_active = active;
-            snapshot.mesh_selection_mode = selection_mode;
-            snapshot.mesh_edit_tool = tool;
-        }
-        BevyToUi::MeshEditSelectionChanged {
-            vertex_count,
-            edge_count,
-            face_count,
-        } => {
-            snapshot.selected_vertex_count = vertex_count;
-            snapshot.selected_edge_count = edge_count;
-            snapshot.selected_face_count = face_count;
-        }
-        BevyToUi::CloseMenus => {
-            snapshot.show_add_object_menu = false;
-            snapshot.add_object_menu_position = None;
-        }
-        BevyToUi::LayerStateChanged { layers } => {
-            snapshot.layers = layers;
-        }
-        _ => {}
-    }
+    apply_native_ui_message(snapshot, &message);
 }

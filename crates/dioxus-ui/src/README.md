@@ -21,7 +21,9 @@ The Dioxus frontend needs a Rust-native UI path that can track the same backend 
 - Native UI changes cannot assume browser DOM semantics.
 
 ## Decision
-Keep Dioxus as a dedicated crate with a bridge/document/renderer split so the Bevy integration code in `crates/app` stays thin.
+Keep Dioxus as a dedicated crate with a bridge/document/renderer split so the
+Bevy integration code in `crates/app` stays thin, while shared native frontend
+snapshot state lives in `crates/frontend-core`.
 
 ## Alternatives Rejected
 - Embedding Dioxus directly inside `crates/app`: rejected because it would mix renderer internals into app orchestration.
@@ -36,7 +38,7 @@ Keep Dioxus as a dedicated crate with a bridge/document/renderer split so the Be
 - Another native Rust UI renderer replaces Blitz/Vello.
 
 ## Dependencies
-**Internal:** `crates/ipc`, `crates/app/src/render/ui_dioxus`  
+**Internal:** `crates/ipc`, `crates/frontend-core`, `crates/app/src/render/ui_dioxus`  
 **External:** Dioxus, dioxus-native, Vello
 
 ## Related ADRs

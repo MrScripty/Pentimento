@@ -9,6 +9,7 @@ hot-reload = ["dep:dioxus-devtools"]
 
 [dependencies]
 pentimento-ipc = { path = "../ipc" }
+pentimento-frontend-core = { path = "../frontend-core" }
 dioxus = { workspace = true, features = ["document"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

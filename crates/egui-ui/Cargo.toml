@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 bevy_egui = { workspace = true }
+pentimento-frontend-core = { path = "../frontend-core" }
 pentimento-ipc = { path = "../ipc" }

@@ -259,10 +259,19 @@ fn draw_add_object_menu(
         return;
     }
 
-    let position = snapshot
-        .add_object_menu_position
-        .map(|[x, y]| egui::pos2(x, y))
-        .unwrap_or_else(|| egui::pos2(ADD_MENU_DEFAULT_X, ADD_MENU_DEFAULT_Y));
+    let position = snapshot.add_menu_position;
+    let position = egui::pos2(
+        if position.0 == 0.0 {
+            ADD_MENU_DEFAULT_X
+        } else {
+            position.0
+        },
+        if position.1 == 0.0 {
+            ADD_MENU_DEFAULT_Y
+        } else {
+            position.1
+        },
+    );
 
     let mut open = runtime.add_object_menu_open;
     egui::Window::new("Add Object")

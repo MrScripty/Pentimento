@@ -26,7 +26,8 @@ composition root.
 
 ## Decision
 Keep the egui widget tree and UI-local runtime state in a dedicated crate that
-exports a small public facade to the Bevy adapter layer.
+exports a small public facade to the Bevy adapter layer, while shared
+backend-derived native frontend state lives in `crates/frontend-core`.
 
 ## Alternatives Rejected
 - Embedding egui directly in `crates/app`: rejected because it would mix
@@ -46,7 +47,7 @@ exports a small public facade to the Bevy adapter layer.
   currently held by `state.rs`.
 
 ## Dependencies
-**Internal:** `crates/ipc`  
+**Internal:** `crates/ipc`, `crates/frontend-core`  
 **External:** `bevy_egui` re-exported `egui`
 
 ## Related ADRs

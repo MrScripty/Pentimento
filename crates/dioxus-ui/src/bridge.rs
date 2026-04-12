@@ -2,9 +2,10 @@
 //!
 //! Uses Rust channels instead of console.log interception like CEF mode.
 
+use pentimento_frontend_core::{NativeUiState, apply_native_ui_message};
 use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, BevyToUi, BlendMode,
-    CameraCommand, DiffusionRequest, EditMode, LightingSettings, MaterialCommand, MeshEditCommand,
+    CameraCommand, DiffusionRequest, LightingSettings, MaterialCommand, MeshEditCommand,
     MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand, PrimitiveType, UiToBevy,
 };
 use std::sync::{
@@ -13,43 +14,7 @@ use std::sync::{
     mpsc,
 };
 
-/// Shared state that persists between renders.
-/// Used for state that needs to be set from Bevy and read by the component.
-#[derive(Clone, PartialEq)]
-pub struct SharedUiState {
-    /// Show add object menu at position
-    pub show_add_menu: bool,
-    pub add_menu_position: (f32, f32),
-    /// Current edit mode (None/Paint/MeshEdit)
-    pub edit_mode: EditMode,
-    /// Mesh edit mode state (only valid when edit_mode == MeshEdit)
-    pub mesh_edit_active: bool,
-    pub mesh_selection_mode: MeshSelectionMode,
-    pub mesh_edit_tool: MeshEditTool,
-    /// Selection counts
-    pub selected_vertex_count: usize,
-    pub selected_edge_count: usize,
-    pub selected_face_count: usize,
-    /// Depth view mode
-    pub depth_view_enabled: bool,
-}
-
-impl Default for SharedUiState {
-    fn default() -> Self {
-        Self {
-            show_add_menu: false,
-            add_menu_position: (0.0, 0.0),
-            edit_mode: EditMode::None,
-            mesh_edit_active: false,
-            mesh_selection_mode: MeshSelectionMode::Vertex,
-            mesh_edit_tool: MeshEditTool::Select,
-            selected_vertex_count: 0,
-            selected_edge_count: 0,
-            selected_face_count: 0,
-            depth_view_enabled: false,
-        }
-    }
-}
+pub type SharedUiState = NativeUiState;
 
 /// Bridge for sending messages from Dioxus UI to Bevy
 #[derive(Clone)]
@@ -440,36 +405,7 @@ impl DioxusBridgeHandle {
         // Update shared state directly for certain messages
         {
             let mut state = self.shared_state.lock().unwrap();
-            match &msg {
-                BevyToUi::ShowAddObjectMenu { show, position } => {
-                    state.show_add_menu = *show;
-                    if let Some([x, y]) = position {
-                        state.add_menu_position = (*x, *y);
-                    }
-                }
-                BevyToUi::EditModeChanged { mode } => {
-                    state.edit_mode = *mode;
-                }
-                BevyToUi::MeshEditModeChanged {
-                    active,
-                    selection_mode,
-                    tool,
-                } => {
-                    state.mesh_edit_active = *active;
-                    state.mesh_selection_mode = *selection_mode;
-                    state.mesh_edit_tool = *tool;
-                }
-                BevyToUi::MeshEditSelectionChanged {
-                    vertex_count,
-                    edge_count,
-                    face_count,
-                } => {
-                    state.selected_vertex_count = *vertex_count;
-                    state.selected_edge_count = *edge_count;
-                    state.selected_face_count = *face_count;
-                }
-                _ => {}
-            }
+            apply_native_ui_message(&mut state, &msg);
         }
 
         match self.to_ui.send(msg) {
