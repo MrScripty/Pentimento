@@ -33,36 +33,34 @@ pub mod tessellation;
 pub mod types;
 
 pub use brush::{BrushInput, BrushPreset, DabResult, FalloffCurve, SculptBrushEngine, StrokeState};
+pub use budget::VertexBudget;
 pub use chunking::{
+    Aabb, BoundaryVertex, ChunkId, ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
     get_original_vertex_id, is_boundary_vertex, merge_chunks, merge_two_chunks, partition_mesh,
-    rebalance_chunks, split_chunk, sync_vertex_position, Aabb, BoundaryVertex, ChunkId,
-    ChunkedMesh, MergeResult, MeshChunk, PartitionConfig,
+    rebalance_chunks, split_chunk, sync_vertex_position,
 };
 pub use deformation::{
-    apply_autosmooth, apply_crease, apply_deformation, apply_flatten, apply_grab, apply_inflate,
-    apply_pinch, apply_pull, apply_push, apply_smooth, DabInfo, DeformationContext,
-    DeformationResult,
+    DabInfo, DeformationContext, DeformationResult, apply_autosmooth, apply_crease,
+    apply_deformation, apply_flatten, apply_grab, apply_inflate, apply_pinch, apply_pull,
+    apply_push, apply_smooth,
 };
 pub use gpu::{
-    recalculate_face_normals_for_dirty, recalculate_normals_for_dirty,
-    update_normals_after_deformation, DirtyVertices, SyncResult,
+    DirtyVertices, SyncResult, recalculate_face_normals_for_dirty, recalculate_normals_for_dirty,
+    update_normals_after_deformation,
 };
 #[cfg(feature = "bevy")]
 pub use gpu::{create_chunk_meshes, remove_chunk_meshes, sync_chunk_to_gpu, sync_chunks_to_gpu};
+pub use pipeline::{DabProcessResult, PipelineConfig, SculptingPipeline, StrokeEndResult};
 pub use spatial::{OctreeConfig, VertexOctree};
 pub use tessellation::{
-    calculate_collapse_position, calculate_edge_screen_length, calculate_split_position,
-    calculate_world_edge_length, can_collapse_edge, can_split_edge, collapse_edge,
-    dihedral_angle, evaluate_edge, evaluate_edge_curvature, interpolate_vertex_attributes,
-    split_edge, tessellate_at_brush, tessellate_at_brush_budget, would_cause_flip,
-    CollapseResult, CurvatureEvaluation,
-    EdgeEvaluation, ScreenSpaceConfig, SplitResult, TessellationDecision, TessellationStats,
+    CollapseResult, CurvatureEvaluation, EdgeEvaluation, ScreenSpaceConfig, SplitResult,
+    TessellationDecision, TessellationStats, calculate_collapse_position,
+    calculate_edge_screen_length, calculate_split_position, calculate_world_edge_length,
+    can_collapse_edge, can_split_edge, collapse_edge, dihedral_angle, evaluate_edge,
+    evaluate_edge_curvature, interpolate_vertex_attributes, split_edge, tessellate_at_brush,
+    tessellate_at_brush_budget, would_cause_flip,
 };
-pub use budget::VertexBudget;
 pub use types::{
     ChunkConfig, DeformationType, SculptDab, SculptStrokeHeader, SculptStrokePacket,
     TessellationAction, TessellationConfig, TessellationMode,
-};
-pub use pipeline::{
-    DabProcessResult, PipelineConfig, SculptingPipeline, StrokeEndResult,
 };

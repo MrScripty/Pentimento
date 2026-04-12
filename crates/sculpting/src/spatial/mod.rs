@@ -126,14 +126,38 @@ impl Aabb {
     fn octant_bounds(&self, octant: usize) -> Aabb {
         let center = self.center();
         let min = Vec3::new(
-            if octant & 1 != 0 { center.x } else { self.min.x },
-            if octant & 2 != 0 { center.y } else { self.min.y },
-            if octant & 4 != 0 { center.z } else { self.min.z },
+            if octant & 1 != 0 {
+                center.x
+            } else {
+                self.min.x
+            },
+            if octant & 2 != 0 {
+                center.y
+            } else {
+                self.min.y
+            },
+            if octant & 4 != 0 {
+                center.z
+            } else {
+                self.min.z
+            },
         );
         let max = Vec3::new(
-            if octant & 1 != 0 { self.max.x } else { center.x },
-            if octant & 2 != 0 { self.max.y } else { center.y },
-            if octant & 4 != 0 { self.max.z } else { center.z },
+            if octant & 1 != 0 {
+                self.max.x
+            } else {
+                center.x
+            },
+            if octant & 2 != 0 {
+                self.max.y
+            } else {
+                center.y
+            },
+            if octant & 4 != 0 {
+                self.max.z
+            } else {
+                center.z
+            },
         );
         Aabb::new(min, max)
     }
@@ -157,9 +181,7 @@ impl VertexOctree {
     }
 
     /// Build an octree from vertex positions.
-    pub fn from_vertices<'a>(
-        vertices: impl Iterator<Item = (VertexId, Vec3)>,
-    ) -> Self {
+    pub fn from_vertices<'a>(vertices: impl Iterator<Item = (VertexId, Vec3)>) -> Self {
         // First pass: compute bounds
         let mut bounds = Aabb::empty();
         let items: Vec<OctreeItem> = vertices
@@ -202,7 +224,10 @@ impl VertexOctree {
     ) {
         match node {
             OctreeNode::Leaf { bounds, items } => {
-                items.push(OctreeItem { vertex_id, position });
+                items.push(OctreeItem {
+                    vertex_id,
+                    position,
+                });
 
                 // Check if we need to split
                 if items.len() > config.max_items_per_leaf
@@ -287,11 +312,7 @@ impl VertexOctree {
         results
     }
 
-    fn query_aabb_node(
-        node: &OctreeNode,
-        query_bounds: &Aabb,
-        results: &mut Vec<VertexId>,
-    ) {
+    fn query_aabb_node(node: &OctreeNode, query_bounds: &Aabb, results: &mut Vec<VertexId>) {
         match node {
             OctreeNode::Leaf { bounds, items } => {
                 if !Self::aabb_intersects(bounds, query_bounds) {

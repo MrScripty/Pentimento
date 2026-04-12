@@ -10,9 +10,9 @@
 //! added as an optimization when profiling shows it's beneficial.
 
 #[cfg(feature = "bevy")]
-use bevy::prelude::*;
-#[cfg(feature = "bevy")]
 use bevy::asset::Assets;
+#[cfg(feature = "bevy")]
+use bevy::prelude::*;
 
 use crate::chunking::MeshChunk;
 #[cfg(feature = "bevy")]

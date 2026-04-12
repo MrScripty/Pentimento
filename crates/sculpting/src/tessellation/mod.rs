@@ -18,26 +18,26 @@
 //! - Use exact floating-point comparisons where possible
 //! - Tie-break consistently (e.g., lower edge ID wins)
 
+pub mod curvature;
 mod edge_collapse;
 mod edge_split;
-pub mod curvature;
 mod metrics;
 
+pub use curvature::{CurvatureEvaluation, dihedral_angle, evaluate_edge_curvature};
 pub use edge_collapse::{
+    CollapseCheck, CollapseOrFlipResult, CollapseRejection, CollapseResult,
     calculate_collapse_position, can_collapse_edge, can_collapse_edge_safe, collapse_edge,
-    collapse_or_flip_edge, would_cause_flip, CollapseCheck, CollapseOrFlipResult,
-    CollapseRejection, CollapseResult,
+    collapse_or_flip_edge, would_cause_flip,
 };
 pub use edge_split::{
-    calculate_curvature_aware_split_position, calculate_split_position, can_split_edge,
-    interpolate_vertex_attributes, split_edge, split_edge_curvature_aware, SplitResult,
+    SplitResult, calculate_curvature_aware_split_position, calculate_split_position,
+    can_split_edge, interpolate_vertex_attributes, split_edge, split_edge_curvature_aware,
 };
 pub use metrics::{
-    calculate_edge_screen_length, calculate_mesh_quality, calculate_triangle_aspect_ratio,
-    calculate_world_edge_length, evaluate_edge, is_degenerate_triangle, is_valid_valence,
-    EdgeEvaluation, MeshQuality, ScreenSpaceConfig,
+    EdgeEvaluation, MeshQuality, ScreenSpaceConfig, calculate_edge_screen_length,
+    calculate_mesh_quality, calculate_triangle_aspect_ratio, calculate_world_edge_length,
+    evaluate_edge, is_degenerate_triangle, is_valid_valence,
 };
-pub use curvature::{dihedral_angle, evaluate_edge_curvature, CurvatureEvaluation};
 
 use crate::budget::VertexBudget;
 use crate::chunking::MeshChunk;
@@ -107,7 +107,11 @@ pub fn tessellate_at_brush(
         let mut collapses_this_iter = 0usize;
 
         // ===== SPLIT PASS =====
-        debug!("  tessellate iter {}: starting split_pass (faces={})", iteration, chunk.mesh.face_count());
+        debug!(
+            "  tessellate iter {}: starting split_pass (faces={})",
+            iteration,
+            chunk.mesh.face_count()
+        );
         let splits_this_iter = split_pass(
             chunk,
             brush_center,
@@ -123,7 +127,12 @@ pub fn tessellate_at_brush(
         }
 
         // ===== COLLAPSE PASS =====
-        debug!("  tessellate iter {}: starting collapse_pass (faces={}, splits={})", iteration, chunk.mesh.face_count(), splits_this_iter);
+        debug!(
+            "  tessellate iter {}: starting collapse_pass (faces={}, splits={})",
+            iteration,
+            chunk.mesh.face_count(),
+            splits_this_iter
+        );
         if config.collapse_enabled && chunk.mesh.face_count() > config.min_faces {
             collapses_this_iter = collapse_pass(
                 chunk,
@@ -142,7 +151,11 @@ pub fn tessellate_at_brush(
 
         debug!(
             "  tessellate iter {}: done in {:?} - split={}, collapsed={}, faces={}",
-            iteration, iter_start.elapsed(), splits_this_iter, collapses_this_iter, chunk.mesh.face_count()
+            iteration,
+            iter_start.elapsed(),
+            splits_this_iter,
+            collapses_this_iter,
+            chunk.mesh.face_count()
         );
 
         // Converged - no more changes needed
@@ -251,7 +264,11 @@ pub fn tessellate_at_brush_budget(
 
         debug!(
             "tessellate_budget iteration {}: split={}, collapsed={}, faces={}, budget_remaining={}",
-            iteration, splits_this_iter, collapses_this_iter, chunk.mesh.face_count(), budget.remaining
+            iteration,
+            splits_this_iter,
+            collapses_this_iter,
+            chunk.mesh.face_count(),
+            budget.remaining
         );
 
         // Converged - no more changes needed
@@ -311,14 +328,20 @@ fn split_pass_budget(
     for &edge_id in &edges_in_range {
         let eval = evaluate_edge_curvature(&chunk.mesh, edge_id, config);
         if eval.decision == TessellationDecision::Split {
-            let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+            let Some(he) = chunk.mesh.half_edge(edge_id) else {
+                continue;
+            };
             let v0 = he.origin;
-            let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+            let Some(next_he) = chunk.mesh.half_edge(he.next) else {
+                continue;
+            };
             let v1 = next_he.origin;
 
             let v0_pos = chunk.mesh.vertex(v0).map(|v| v.position);
             let v1_pos = chunk.mesh.vertex(v1).map(|v| v.position);
-            let (Some(p0), Some(p1)) = (v0_pos, v1_pos) else { continue };
+            let (Some(p0), Some(p1)) = (v0_pos, v1_pos) else {
+                continue;
+            };
             let edge_len = p0.distance(p1);
 
             // Check minimum edge length floor
@@ -336,11 +359,12 @@ fn split_pass_budget(
     split_candidates.sort_by(|a, b| {
         let a_score = a.2 * a.3;
         let b_score = b.2 * b.3;
-        b_score.partial_cmp(&a_score)
+        b_score
+            .partial_cmp(&a_score)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
-                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
-                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                let a_key = (a.0.0.min(a.1.0), a.0.0.max(a.1.0));
+                let b_key = (b.0.0.min(b.1.0), b.0.0.max(b.1.0));
                 a_key.cmp(&b_key)
             })
     });
@@ -376,9 +400,7 @@ fn split_pass_budget(
         // safe to split — the new midpoint will be an interior vertex.
         // Previously this used `||` which created a "dead zone" around all boundary
         // vertices where tessellation couldn't operate, causing density discontinuities.
-        if chunk.boundary_vertices.contains_key(&v0)
-            && chunk.boundary_vertices.contains_key(&v1)
-        {
+        if chunk.boundary_vertices.contains_key(&v0) && chunk.boundary_vertices.contains_key(&v1) {
             continue;
         }
 
@@ -430,7 +452,13 @@ fn split_pass_budget(
     if actual_splits > 0 {
         chunk.mesh.rebuild_twins_from_edge_map();
         let new_verts: Vec<VertexId> = midpoint_map.values().copied().collect();
-        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5, brush_center, influence_radius);
+        tangent_smooth_new_vertices(
+            &mut chunk.mesh,
+            &new_verts,
+            0.5,
+            brush_center,
+            influence_radius,
+        );
     }
 
     actual_splits
@@ -467,9 +495,13 @@ fn collapse_pass_budget(
         let check = can_collapse_edge_safe(&chunk.mesh, edge_id);
         match check {
             CollapseCheck::Safe(_) | CollapseCheck::UseEdgeFlip => {
-                let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+                let Some(he) = chunk.mesh.half_edge(edge_id) else {
+                    continue;
+                };
                 let v0 = he.origin;
-                let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+                let Some(next_he) = chunk.mesh.half_edge(he.next) else {
+                    continue;
+                };
                 let v1 = next_he.origin;
                 let edge_len = match (chunk.mesh.vertex(v0), chunk.mesh.vertex(v1)) {
                     (Some(a), Some(b)) => a.position.distance(b.position),
@@ -487,11 +519,12 @@ fn collapse_pass_budget(
     collapse_candidates.sort_by(|a, b| {
         let a_score = a.2 * a.3;
         let b_score = b.2 * b.3;
-        a_score.partial_cmp(&b_score)
+        a_score
+            .partial_cmp(&b_score)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
-                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
-                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                let a_key = (a.0.0.min(a.1.0), a.0.0.max(a.1.0));
+                let b_key = (b.0.0.min(b.1.0), b.0.0.max(b.1.0));
                 a_key.cmp(&b_key)
             })
     });
@@ -513,17 +546,17 @@ fn collapse_pass_budget(
         }
 
         // Skip boundary edges
-        if chunk.boundary_vertices.contains_key(&v0)
-            || chunk.boundary_vertices.contains_key(&v1)
-        {
+        if chunk.boundary_vertices.contains_key(&v0) || chunk.boundary_vertices.contains_key(&v1) {
             continue;
         }
 
         // Don't collapse edges where either vertex is outside the brush area.
-        let v0_in = chunk.mesh.vertex(v0)
-            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
-        let v1_in = chunk.mesh.vertex(v1)
-            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
+        let v0_in = chunk.mesh.vertex(v0).map_or(false, |v| {
+            v.position.distance_squared(brush_center) <= influence_sq
+        });
+        let v1_in = chunk.mesh.vertex(v1).map_or(false, |v| {
+            v.position.distance_squared(brush_center) <= influence_sq
+        });
         if !v0_in || !v1_in {
             continue;
         }
@@ -548,15 +581,23 @@ fn collapse_pass_budget(
                 budget.record_collapse();
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
-                for v in neighbors_v0 { dirty_vertices.insert(v); }
-                for v in neighbors_v1 { dirty_vertices.insert(v); }
+                for v in neighbors_v0 {
+                    dirty_vertices.insert(v);
+                }
+                for v in neighbors_v1 {
+                    dirty_vertices.insert(v);
+                }
             }
             Some(CollapseOrFlipResult::Flipped) => {
                 actual_flips += 1;
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
-                for v in neighbors_v0 { dirty_vertices.insert(v); }
-                for v in neighbors_v1 { dirty_vertices.insert(v); }
+                for v in neighbors_v0 {
+                    dirty_vertices.insert(v);
+                }
+                for v in neighbors_v1 {
+                    dirty_vertices.insert(v);
+                }
             }
             None => {}
         }
@@ -648,9 +689,13 @@ fn split_pass(
         let eval = evaluate_edge_in_chunk(chunk, edge_id, config, screen_config);
         if eval.decision == TessellationDecision::Split {
             // Convert to vertex pair
-            let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+            let Some(he) = chunk.mesh.half_edge(edge_id) else {
+                continue;
+            };
             let v0 = he.origin;
-            let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+            let Some(next_he) = chunk.mesh.half_edge(he.next) else {
+                continue;
+            };
             let v1 = next_he.origin;
             let edge_len = match (chunk.mesh.vertex(v0), chunk.mesh.vertex(v1)) {
                 (Some(a), Some(b)) => a.position.distance(b.position),
@@ -667,8 +712,8 @@ fn split_pass(
         b.2.partial_cmp(&a.2)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
-                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
-                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                let a_key = (a.0.0.min(a.1.0), a.0.0.max(a.1.0));
+                let b_key = (b.0.0.min(b.1.0), b.0.0.max(b.1.0));
                 a_key.cmp(&b_key)
             })
     });
@@ -699,9 +744,7 @@ fn split_pass(
         // safe to split — the new midpoint will be an interior vertex.
         // Previously this used `||` which created a "dead zone" around all boundary
         // vertices where tessellation couldn't operate, causing density discontinuities.
-        if chunk.boundary_vertices.contains_key(&v0)
-            && chunk.boundary_vertices.contains_key(&v1)
-        {
+        if chunk.boundary_vertices.contains_key(&v0) && chunk.boundary_vertices.contains_key(&v1) {
             continue;
         }
 
@@ -759,7 +802,13 @@ fn split_pass(
 
         // Tangent-plane smooth new vertices to prevent spiky/noisy mesh
         let new_verts: Vec<VertexId> = midpoint_map.values().copied().collect();
-        tangent_smooth_new_vertices(&mut chunk.mesh, &new_verts, 0.5, brush_center, influence_radius);
+        tangent_smooth_new_vertices(
+            &mut chunk.mesh,
+            &new_verts,
+            0.5,
+            brush_center,
+            influence_radius,
+        );
     }
 
     actual_splits
@@ -786,9 +835,13 @@ fn collapse_pass(
             let check = can_collapse_edge_safe(&chunk.mesh, edge_id);
             match check {
                 CollapseCheck::Safe(_) | CollapseCheck::UseEdgeFlip => {
-                    let Some(he) = chunk.mesh.half_edge(edge_id) else { continue };
+                    let Some(he) = chunk.mesh.half_edge(edge_id) else {
+                        continue;
+                    };
                     let v0 = he.origin;
-                    let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+                    let Some(next_he) = chunk.mesh.half_edge(he.next) else {
+                        continue;
+                    };
                     let v1 = next_he.origin;
                     let edge_len = match (chunk.mesh.vertex(v0), chunk.mesh.vertex(v1)) {
                         (Some(a), Some(b)) => a.position.distance(b.position),
@@ -806,8 +859,8 @@ fn collapse_pass(
         a.2.partial_cmp(&b.2)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
-                let a_key = (a.0 .0.min(a.1 .0), a.0 .0.max(a.1 .0));
-                let b_key = (b.0 .0.min(b.1 .0), b.0 .0.max(b.1 .0));
+                let a_key = (a.0.0.min(a.1.0), a.0.0.max(a.1.0));
+                let b_key = (b.0.0.min(b.1.0), b.0.0.max(b.1.0));
                 a_key.cmp(&b_key)
             })
     });
@@ -828,19 +881,19 @@ fn collapse_pass(
         }
 
         // Skip boundary edges
-        if chunk.boundary_vertices.contains_key(&v0)
-            || chunk.boundary_vertices.contains_key(&v1)
-        {
+        if chunk.boundary_vertices.contains_key(&v0) || chunk.boundary_vertices.contains_key(&v1) {
             continue;
         }
 
         // Don't collapse edges where either vertex is outside the brush area.
         // Collapsing repositions the surviving vertex, which would move
         // geometry outside the brush influence.
-        let v0_in = chunk.mesh.vertex(v0)
-            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
-        let v1_in = chunk.mesh.vertex(v1)
-            .map_or(false, |v| v.position.distance_squared(brush_center) <= influence_sq);
+        let v0_in = chunk.mesh.vertex(v0).map_or(false, |v| {
+            v.position.distance_squared(brush_center) <= influence_sq
+        });
+        let v1_in = chunk.mesh.vertex(v1).map_or(false, |v| {
+            v.position.distance_squared(brush_center) <= influence_sq
+        });
         if !v0_in || !v1_in {
             continue;
         }
@@ -865,16 +918,24 @@ fn collapse_pass(
                 // Mark all affected vertices as dirty to prevent cascading corruption
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
-                for v in neighbors_v0 { dirty_vertices.insert(v); }
-                for v in neighbors_v1 { dirty_vertices.insert(v); }
+                for v in neighbors_v0 {
+                    dirty_vertices.insert(v);
+                }
+                for v in neighbors_v1 {
+                    dirty_vertices.insert(v);
+                }
             }
             Some(CollapseOrFlipResult::Flipped) => {
                 actual_flips += 1;
                 // Flip also modifies topology around these vertices
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
-                for v in neighbors_v0 { dirty_vertices.insert(v); }
-                for v in neighbors_v1 { dirty_vertices.insert(v); }
+                for v in neighbors_v0 {
+                    dirty_vertices.insert(v);
+                }
+                for v in neighbors_v1 {
+                    dirty_vertices.insert(v);
+                }
             }
             None => {}
         }
@@ -989,7 +1050,9 @@ fn tangent_smooth_new_vertices(
     let mut new_positions: Vec<(VertexId, Vec3)> = Vec::new();
 
     for &vid in &vertices_to_smooth {
-        let Some(vertex) = mesh.vertex(vid) else { continue };
+        let Some(vertex) = mesh.vertex(vid) else {
+            continue;
+        };
         let pos = vertex.position;
 
         // Only smooth vertices within the brush influence area
@@ -1061,11 +1124,7 @@ pub struct TessellationStats {
 ///
 /// The second case catches long edges like cube face diagonals that span
 /// across the brush area without having either endpoint inside it.
-fn collect_edges_in_range(
-    chunk: &MeshChunk,
-    center: Vec3,
-    radius: f32,
-) -> HashSet<HalfEdgeId> {
+fn collect_edges_in_range(chunk: &MeshChunk, center: Vec3, radius: f32) -> HashSet<HalfEdgeId> {
     let radius_sq = radius * radius;
     let mut edges = HashSet::new();
     let mut in_range_vertices: HashSet<VertexId> = HashSet::new();
@@ -1101,14 +1160,20 @@ fn collect_edges_in_range(
         if in_range_vertices.contains(&origin) {
             continue; // origin in range, already handled
         }
-        let Some(next_he) = chunk.mesh.half_edge(he.next) else { continue };
+        let Some(next_he) = chunk.mesh.half_edge(he.next) else {
+            continue;
+        };
         let dest = next_he.origin;
         if in_range_vertices.contains(&dest) {
             continue; // dest in range, edge from dest→origin already collected via twin
         }
         // Both endpoints outside range — check closest point on segment
-        let Some(p0) = chunk.mesh.vertex(origin).map(|v| v.position) else { continue };
-        let Some(p1) = chunk.mesh.vertex(dest).map(|v| v.position) else { continue };
+        let Some(p0) = chunk.mesh.vertex(origin).map(|v| v.position) else {
+            continue;
+        };
+        let Some(p1) = chunk.mesh.vertex(dest).map(|v| v.position) else {
+            continue;
+        };
         if segment_intersects_sphere(p0, p1, center, radius_sq) {
             edges.insert(he.id);
         }
@@ -1152,26 +1217,32 @@ fn evaluate_edge_in_chunk(
     let v0_id = he.origin;
     let v1_id = match chunk.mesh.half_edge(he.next) {
         Some(next_he) => next_he.origin,
-        None => return EdgeEvaluation {
-            screen_length: 0.0,
-            decision: TessellationDecision::None,
-        },
+        None => {
+            return EdgeEvaluation {
+                screen_length: 0.0,
+                decision: TessellationDecision::None,
+            };
+        }
     };
 
     let v0_pos = match chunk.mesh.vertex(v0_id) {
         Some(v) => v.position,
-        None => return EdgeEvaluation {
-            screen_length: 0.0,
-            decision: TessellationDecision::None,
-        },
+        None => {
+            return EdgeEvaluation {
+                screen_length: 0.0,
+                decision: TessellationDecision::None,
+            };
+        }
     };
 
     let v1_pos = match chunk.mesh.vertex(v1_id) {
         Some(v) => v.position,
-        None => return EdgeEvaluation {
-            screen_length: 0.0,
-            decision: TessellationDecision::None,
-        },
+        None => {
+            return EdgeEvaluation {
+                screen_length: 0.0,
+                decision: TessellationDecision::None,
+            };
+        }
     };
 
     evaluate_edge(v0_pos, v1_pos, config, screen_config)
@@ -1312,8 +1383,7 @@ pub fn validate_chunk_after_tessellation(chunk: &MeshChunk) -> Result<(), String
                     return Err(format!(
                         "Half-edge {:?} ({:?}→{:?}) has invalid twin {:?} ({:?}→{:?}). \
                          Twins should go in opposite directions.",
-                        he.id, he.origin, he_dest,
-                        twin_id, twin.origin, twin_dest
+                        he.id, he.origin, he_dest, twin_id, twin.origin, twin_dest
                     ));
                 }
             }

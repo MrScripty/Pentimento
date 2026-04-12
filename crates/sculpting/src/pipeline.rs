@@ -12,11 +12,11 @@
 use crate::brush::{BrushInput, BrushPreset, DabResult, SculptBrushEngine};
 use crate::budget::VertexBudget;
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
-use crate::deformation::{apply_autosmooth, apply_deformation, DabInfo};
-use crate::gpu::{update_normals_after_deformation, DirtyVertices};
+use crate::deformation::{DabInfo, apply_autosmooth, apply_deformation};
+use crate::gpu::{DirtyVertices, update_normals_after_deformation};
 use crate::spatial::{Aabb as SpatialAabb, VertexOctree};
 use crate::tessellation::{
-    tessellate_at_brush, tessellate_at_brush_budget, ScreenSpaceConfig, TessellationStats,
+    ScreenSpaceConfig, TessellationStats, tessellate_at_brush, tessellate_at_brush_budget,
 };
 use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig, TessellationMode};
 use glam::Vec3;
@@ -202,19 +202,18 @@ impl SculptingPipeline {
 
         // Process each dab
         for dab in dabs {
-            let dab_result = self.apply_dab_internal(
-                &dab,
-                last_pos,
-                first_pos,
-                chunked_mesh,
-            );
+            let dab_result = self.apply_dab_internal(&dab, last_pos, first_pos, chunked_mesh);
 
             result.vertices_modified += dab_result.vertices_modified;
-            result.chunks_affected.extend(dab_result.chunks_affected.clone());
+            result
+                .chunks_affected
+                .extend(dab_result.chunks_affected.clone());
 
             // Accumulate tessellation stats
             if let Some(tess) = dab_result.tessellation {
-                let existing = result.tessellation.get_or_insert(TessellationStats::default());
+                let existing = result
+                    .tessellation
+                    .get_or_insert(TessellationStats::default());
                 existing.edges_split += tess.edges_split;
                 existing.edges_collapsed += tess.edges_collapsed;
             }
@@ -309,9 +308,16 @@ impl SculptingPipeline {
 
         // Find affected chunks
         debug!("apply_dab_internal: finding chunks in sphere");
-        let affected_chunk_ids = chunked_mesh.chunks_intersecting_sphere(brush_center, influence_radius);
-        debug!("apply_dab_internal: found {} affected chunks", affected_chunk_ids.len());
-        trace!("apply_dab_internal: found {} affected chunks", affected_chunk_ids.len());
+        let affected_chunk_ids =
+            chunked_mesh.chunks_intersecting_sphere(brush_center, influence_radius);
+        debug!(
+            "apply_dab_internal: found {} affected chunks",
+            affected_chunk_ids.len()
+        );
+        trace!(
+            "apply_dab_internal: found {} affected chunks",
+            affected_chunk_ids.len()
+        );
 
         // Extract the next_original_vertex_id counter to avoid borrow conflicts.
         // We'll write it back after the loop. This counter is used to assign globally
@@ -320,7 +326,8 @@ impl SculptingPipeline {
 
         // Pre-compute total vertex count for budget mode (avoids borrow conflict inside chunk loop)
         if self.config.tessellation_config.mode == TessellationMode::BudgetCurvature {
-            self.budget.update_current(chunked_mesh.total_vertex_count());
+            self.budget
+                .update_current(chunked_mesh.total_vertex_count());
         }
 
         // ===== PASS 1: TESSELLATE all affected chunks FIRST =====
@@ -343,7 +350,10 @@ impl SculptingPipeline {
                 if std::env::var("PENTIMENTO_SKIP_MESH_VALIDATION").is_err() {
                     if let Err(e) = chunk.mesh.validate_connectivity() {
                         error!("MESH CORRUPT BEFORE tessellation: {}", e);
-                        panic!("Mesh corrupted before tessellation - bug is in chunk split: {}", e);
+                        panic!(
+                            "Mesh corrupted before tessellation - bug is in chunk split: {}",
+                            e
+                        );
                     }
                 }
 
@@ -354,16 +364,14 @@ impl SculptingPipeline {
                     chunk.mesh.vertex_count()
                 );
                 let tess_stats = match self.config.tessellation_config.mode {
-                    TessellationMode::BudgetCurvature => {
-                        tessellate_at_brush_budget(
-                            chunk,
-                            brush_center,
-                            brush_radius,
-                            &self.config.tessellation_config,
-                            &mut self.budget,
-                            &mut next_original_vertex_id,
-                        )
-                    }
+                    TessellationMode::BudgetCurvature => tessellate_at_brush_budget(
+                        chunk,
+                        brush_center,
+                        brush_radius,
+                        &self.config.tessellation_config,
+                        &mut self.budget,
+                        &mut next_original_vertex_id,
+                    ),
                     TessellationMode::ScreenSpace => tessellate_at_brush(
                         chunk,
                         brush_center,
@@ -421,7 +429,9 @@ impl SculptingPipeline {
                     update_normals_after_deformation(chunk, &tess_dirty);
                 }
 
-                let existing = result.tessellation.get_or_insert(TessellationStats::default());
+                let existing = result
+                    .tessellation
+                    .get_or_insert(TessellationStats::default());
                 existing.edges_split += tess_stats.edges_split;
                 existing.edges_collapsed += tess_stats.edges_collapsed;
 
@@ -547,7 +557,11 @@ impl SculptingPipeline {
     }
 
     /// Sync boundary vertices between affected chunks.
-    fn sync_boundary_vertices(&mut self, chunked_mesh: &mut ChunkedMesh, affected_chunks: &[ChunkId]) {
+    fn sync_boundary_vertices(
+        &mut self,
+        chunked_mesh: &mut ChunkedMesh,
+        affected_chunks: &[ChunkId],
+    ) {
         // For each affected chunk, sync all boundary vertices
         for &chunk_id in affected_chunks {
             let boundary_updates: Vec<(VertexId, Vec3)> = {
@@ -559,9 +573,7 @@ impl SculptingPipeline {
                 chunk
                     .boundary_vertices
                     .keys()
-                    .filter_map(|&vid| {
-                        chunk.mesh.vertex(vid).map(|v| (vid, v.position))
-                    })
+                    .filter_map(|&vid| chunk.mesh.vertex(vid).map(|v| (vid, v.position)))
                     .collect()
             };
 
@@ -606,14 +618,17 @@ impl SculptingPipeline {
                                     "BOUNDARY CONSISTENCY: original ID mismatch! \
                                      chunk {:?} vertex {:?} has original={:?}, but \
                                      neighbor chunk {:?} vertex {:?} has original={:?}",
-                                    chunk_id, local_id, original_id,
-                                    bref.chunk_id, bref.vertex_id, neighbor_original
+                                    chunk_id,
+                                    local_id,
+                                    original_id,
+                                    bref.chunk_id,
+                                    bref.vertex_id,
+                                    neighbor_original
                                 );
                             }
                         }
                         // Verify positions are synchronized
-                        let their_pos =
-                            neighbor.mesh.vertex(bref.vertex_id).map(|v| v.position);
+                        let their_pos = neighbor.mesh.vertex(bref.vertex_id).map(|v| v.position);
                         if let (Some(ours), Some(theirs)) = (our_pos, their_pos) {
                             let dist = ours.distance(theirs);
                             if dist > 1e-5 {
@@ -621,8 +636,7 @@ impl SculptingPipeline {
                                     "BOUNDARY CONSISTENCY: position desync for \
                                      original={:?}: chunk {:?}={:?} vs chunk {:?}={:?} \
                                      (delta={})",
-                                    original_id, chunk_id, ours,
-                                    bref.chunk_id, theirs, dist
+                                    original_id, chunk_id, ours, bref.chunk_id, theirs, dist
                                 );
                             }
                         }

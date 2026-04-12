@@ -117,11 +117,7 @@ pub struct EdgeEvaluation {
 ///
 /// Returns the length in pixels, or a fallback world-space based estimate
 /// if one or both vertices are off-screen.
-pub fn calculate_edge_screen_length(
-    v0: Vec3,
-    v1: Vec3,
-    screen_config: &ScreenSpaceConfig,
-) -> f32 {
+pub fn calculate_edge_screen_length(v0: Vec3, v1: Vec3, screen_config: &ScreenSpaceConfig) -> f32 {
     let screen_v0 = screen_config.project_to_screen(v0);
     let screen_v1 = screen_config.project_to_screen(v1);
 

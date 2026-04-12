@@ -36,10 +36,8 @@ impl BoundaryVertex {
 /// shared (have the same original vertex ID) between adjacent chunks.
 pub fn build_boundary_relationships(chunked_mesh: &mut ChunkedMesh) {
     // First, build a map of original_vertex_id -> [(chunk_id, local_vertex_id)]
-    let mut original_to_chunks: std::collections::HashMap<
-        VertexId,
-        Vec<(ChunkId, VertexId)>,
-    > = std::collections::HashMap::new();
+    let mut original_to_chunks: std::collections::HashMap<VertexId, Vec<(ChunkId, VertexId)>> =
+        std::collections::HashMap::new();
 
     for (&chunk_id, chunk) in &chunked_mesh.chunks {
         for (&local_id, &original_id) in &chunk.local_to_original {
@@ -145,7 +143,9 @@ pub fn sync_vertex_position(
 ) {
     // First, set in the source chunk
     if let Some(chunk) = chunked_mesh.chunks.get_mut(&chunk_id) {
-        chunk.mesh.set_vertex_position(local_vertex_id, new_position);
+        chunk
+            .mesh
+            .set_vertex_position(local_vertex_id, new_position);
         chunk.mark_dirty();
     }
 
@@ -154,7 +154,11 @@ pub fn sync_vertex_position(
 }
 
 /// Check if a vertex is on a chunk boundary.
-pub fn is_boundary_vertex(chunked_mesh: &ChunkedMesh, chunk_id: ChunkId, local_vertex_id: VertexId) -> bool {
+pub fn is_boundary_vertex(
+    chunked_mesh: &ChunkedMesh,
+    chunk_id: ChunkId,
+    local_vertex_id: VertexId,
+) -> bool {
     chunked_mesh
         .chunks
         .get(&chunk_id)

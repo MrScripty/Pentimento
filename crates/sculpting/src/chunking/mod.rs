@@ -19,13 +19,13 @@ pub mod merge;
 pub mod partition;
 
 pub use boundary::{
-    get_original_vertex_id, is_boundary_vertex, sync_vertex_position, BoundaryVertex,
+    BoundaryVertex, get_original_vertex_id, is_boundary_vertex, sync_vertex_position,
 };
-pub use merge::{merge_chunks, merge_two_chunks, rebalance_chunks, MergeResult};
-pub use partition::{partition_mesh, split_chunk, PartitionConfig};
+pub use merge::{MergeResult, merge_chunks, merge_two_chunks, rebalance_chunks};
+pub use partition::{PartitionConfig, partition_mesh, split_chunk};
 
 use crate::ChunkConfig;
-use glam::{Vec3, UVec3};
+use glam::{UVec3, Vec3};
 use painting::half_edge::{HalfEdgeMesh, VertexId};
 use std::collections::{HashMap, HashSet};
 
@@ -497,7 +497,9 @@ impl ChunkedMesh {
         // Update in neighboring chunks
         for boundary_ref in boundary_refs {
             if let Some(neighbor) = self.chunks.get_mut(&boundary_ref.chunk_id) {
-                neighbor.mesh.set_vertex_position(boundary_ref.vertex_id, new_position);
+                neighbor
+                    .mesh
+                    .set_vertex_position(boundary_ref.vertex_id, new_position);
                 neighbor.mark_dirty();
             }
         }

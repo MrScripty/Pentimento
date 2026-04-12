@@ -229,15 +229,9 @@ pub fn can_collapse_edge_safe(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Colla
     }
 
     // ===== PHASE 4: Get 1-ring neighbors and check link condition =====
-    let v0_neighbors: HashSet<VertexId> = mesh
-        .get_adjacent_vertices(v0_id)
-        .into_iter()
-        .collect();
+    let v0_neighbors: HashSet<VertexId> = mesh.get_adjacent_vertices(v0_id).into_iter().collect();
 
-    let v1_neighbors: HashSet<VertexId> = mesh
-        .get_adjacent_vertices(v1_id)
-        .into_iter()
-        .collect();
+    let v1_neighbors: HashSet<VertexId> = mesh.get_adjacent_vertices(v1_id).into_iter().collect();
 
     // Find common neighbors (excluding v0 and v1 themselves)
     let common: HashSet<VertexId> = v0_neighbors
@@ -277,7 +271,10 @@ pub fn can_collapse_edge_safe(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Colla
 /// For new code, prefer `can_collapse_edge_safe()` which provides
 /// more detailed feedback including edge flip suggestions.
 pub fn can_collapse_edge(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> bool {
-    matches!(can_collapse_edge_safe(mesh, edge_id), CollapseCheck::Safe(_))
+    matches!(
+        can_collapse_edge_safe(mesh, edge_id),
+        CollapseCheck::Safe(_)
+    )
 }
 
 /// Collapse an edge by merging its endpoints.

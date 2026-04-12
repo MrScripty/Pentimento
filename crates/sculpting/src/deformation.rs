@@ -307,7 +307,8 @@ pub fn apply_autosmooth(
 
         // Scale by falloff and autosmooth strength
         let normalized_dist = distance / dab.radius;
-        let effective = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * autosmooth_strength;
+        let effective =
+            falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * autosmooth_strength;
 
         targets.push((vid, vertex.position + tangent_offset * effective));
     }

@@ -100,11 +100,7 @@ impl SculptDab {
         let phi = phi_idx / 16.0 * std::f32::consts::PI;
         let theta = theta_idx / 16.0 * std::f32::consts::TAU;
 
-        Vec3::new(
-            phi.sin() * theta.cos(),
-            phi.sin() * theta.sin(),
-            phi.cos(),
-        )
+        Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
     }
 
     /// Encode unit normal to hint byte.
@@ -210,7 +206,7 @@ impl Default for TessellationConfig {
             split_ratio: 1.5,
             collapse_ratio: 0.4,
             // BudgetCurvature
-            curvature_split_threshold: 0.1,    // ~6 degrees
+            curvature_split_threshold: 0.1,     // ~6 degrees
             curvature_collapse_threshold: 0.03, // ~2 degrees
             min_edge_length: 0.001,
             vertices_per_pixel: 1.0,

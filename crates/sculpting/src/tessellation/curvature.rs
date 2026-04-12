@@ -119,7 +119,10 @@ mod tests {
         ];
         let indices = vec![0u32, 1, 2, 1, 3, 2];
 
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_indices(Indices::U32(indices));
@@ -133,10 +136,10 @@ mod tests {
     fn build_angled_quad(angle_degrees: f32) -> HalfEdgeMesh {
         let angle_rad = angle_degrees.to_radians();
         let positions = vec![
-            [0.0, 0.0, 0.0],                                       // v0
-            [1.0, 0.0, 0.0],                                       // v1
-            [0.0, 1.0, 0.0],                                       // v2
-            [1.0, angle_rad.cos(), angle_rad.sin()],                // v3 rotated around X axis
+            [0.0, 0.0, 0.0],                         // v0
+            [1.0, 0.0, 0.0],                         // v1
+            [0.0, 1.0, 0.0],                         // v2
+            [1.0, angle_rad.cos(), angle_rad.sin()], // v3 rotated around X axis
         ];
         let normals = vec![
             [0.0, 0.0, 1.0],
@@ -146,7 +149,10 @@ mod tests {
         ];
         let indices = vec![0u32, 1, 2, 1, 3, 2];
 
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_indices(Indices::U32(indices));

@@ -4,10 +4,10 @@
 //! for sculpting. The partitioning strategy uses spatial subdivision
 //! to create chunks of roughly equal face count.
 
-use super::{boundary, Aabb, ChunkId, ChunkedMesh, MeshChunk};
+use super::{Aabb, ChunkId, ChunkedMesh, MeshChunk, boundary};
 use crate::ChunkConfig;
 use glam::Vec3;
-use painting::half_edge::{Face, FaceId, HalfEdgeMesh, Vertex, VertexId, HalfEdge, HalfEdgeId};
+use painting::half_edge::{Face, FaceId, HalfEdge, HalfEdgeId, HalfEdgeMesh, Vertex, VertexId};
 use std::collections::{HashMap, HashSet};
 
 /// Configuration for mesh partitioning.
@@ -58,7 +58,8 @@ pub fn partition_mesh(mesh: &HalfEdgeMesh, config: &PartitionConfig) -> ChunkedM
     chunked_mesh.next_original_vertex_id = mesh.vertex_count() as u32;
 
     if mesh.face_count() <= config.max_faces {
-        let chunk = create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
+        let chunk =
+            create_chunk_from_faces(mesh, (0..mesh.face_count() as u32).map(FaceId).collect());
         chunked_mesh.add_chunk(chunk);
     } else {
         let all_faces: Vec<FaceId> = (0..mesh.face_count() as u32).map(FaceId).collect();
@@ -281,7 +282,10 @@ fn build_chunk_mesh(
                 tracing::warn!(
                     "build_chunk_mesh: DUPLICATE EDGE detected! edge ({:?} -> {:?}) already has HE {:?}, \
                      now creating HE {:?}. Source faces may share the same edge.",
-                    origin, dest, existing_he, he_id
+                    origin,
+                    dest,
+                    existing_he,
+                    he_id
                 );
             }
             edge_map.insert((origin, dest), he_id);
@@ -328,16 +332,8 @@ pub fn split_chunk(
         });
 
     // Create two new chunks
-    let left_chunk = create_chunk_from_faces_local(
-        mesh,
-        left_faces,
-        &chunk.local_to_original,
-    );
-    let right_chunk = create_chunk_from_faces_local(
-        mesh,
-        right_faces,
-        &chunk.local_to_original,
-    );
+    let left_chunk = create_chunk_from_faces_local(mesh, left_faces, &chunk.local_to_original);
+    let right_chunk = create_chunk_from_faces_local(mesh, right_faces, &chunk.local_to_original);
 
     let left_id = chunked_mesh.add_chunk(left_chunk);
     let right_id = chunked_mesh.add_chunk(right_chunk);

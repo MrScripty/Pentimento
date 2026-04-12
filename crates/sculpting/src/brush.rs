@@ -524,14 +524,24 @@ mod tests {
     #[test]
     fn test_falloff_with_hardness() {
         // With hardness=0.0, should behave identically to evaluate()
-        for curve in [FalloffCurve::Linear, FalloffCurve::Smooth, FalloffCurve::Sharp, FalloffCurve::Sphere] {
+        for curve in [
+            FalloffCurve::Linear,
+            FalloffCurve::Smooth,
+            FalloffCurve::Sharp,
+            FalloffCurve::Sphere,
+        ] {
             assert!((curve.evaluate_with_hardness(0.0, 0.0) - curve.evaluate(0.0)).abs() < 0.001);
             assert!((curve.evaluate_with_hardness(0.5, 0.0) - curve.evaluate(0.5)).abs() < 0.001);
             assert!((curve.evaluate_with_hardness(1.0, 0.0) - curve.evaluate(1.0)).abs() < 0.001);
         }
 
         // With hardness=1.0, everything should be full strength
-        for curve in [FalloffCurve::Linear, FalloffCurve::Smooth, FalloffCurve::Sharp, FalloffCurve::Sphere] {
+        for curve in [
+            FalloffCurve::Linear,
+            FalloffCurve::Smooth,
+            FalloffCurve::Sharp,
+            FalloffCurve::Sphere,
+        ] {
             assert!((curve.evaluate_with_hardness(0.0, 1.0) - 1.0).abs() < 0.001);
             assert!((curve.evaluate_with_hardness(0.5, 1.0) - 1.0).abs() < 0.001);
             assert!((curve.evaluate_with_hardness(1.0, 1.0) - 1.0).abs() < 0.001);

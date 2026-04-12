@@ -4,7 +4,7 @@
 //! a single unified mesh. Boundary vertices are welded to eliminate
 //! duplicates.
 
-use super::{boundary, ChunkId, ChunkedMesh};
+use super::{ChunkId, ChunkedMesh, boundary};
 use crate::ChunkConfig;
 use glam::Vec3;
 use painting::half_edge::{Face, FaceId, HalfEdge, HalfEdgeId, HalfEdgeMesh, Vertex, VertexId};
@@ -331,7 +331,9 @@ pub fn merge_two_chunks(
                 warn!(
                     "merge_two_chunks: skipping malformed face {:?} - expected {} vertices, got {}. \
                      This indicates corrupted mesh topology from tessellation.",
-                    face.id, local_verts.len(), new_verts.len()
+                    face.id,
+                    local_verts.len(),
+                    new_verts.len()
                 );
                 continue;
             }
@@ -459,11 +461,7 @@ pub fn rebalance_chunks(chunked_mesh: &mut ChunkedMesh) {
             #[cfg(debug_assertions)]
             for (&cid, chunk) in &chunked_mesh.chunks {
                 if let Err(e) = chunk.mesh.validate_connectivity() {
-                    tracing::error!(
-                        "MESH CORRUPTION after split_chunk: chunk {:?}: {}",
-                        cid,
-                        e
-                    );
+                    tracing::error!("MESH CORRUPTION after split_chunk: chunk {:?}: {}", cid, e);
                     panic!("Chunk mesh corrupted after split: {}", e);
                 }
             }
@@ -500,7 +498,10 @@ pub fn rebalance_chunks(chunked_mesh: &mut ChunkedMesh) {
 }
 
 /// Find a pair of adjacent chunks that can be merged.
-fn find_mergeable_pair(chunked_mesh: &ChunkedMesh, config: &ChunkConfig) -> Option<(ChunkId, ChunkId)> {
+fn find_mergeable_pair(
+    chunked_mesh: &ChunkedMesh,
+    config: &ChunkConfig,
+) -> Option<(ChunkId, ChunkId)> {
     for (&id, chunk) in &chunked_mesh.chunks {
         if chunk.face_count() >= config.min_faces {
             continue;
@@ -539,8 +540,8 @@ fn find_mergeable_pair(chunked_mesh: &ChunkedMesh, config: &ChunkConfig) -> Opti
 
 #[cfg(all(test, feature = "bevy"))]
 mod tests {
+    use super::super::partition::{PartitionConfig, partition_mesh};
     use super::*;
-    use super::super::partition::{partition_mesh, PartitionConfig};
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
     use bevy::prelude::*;
