@@ -6,7 +6,9 @@ mod resources;
 
 use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
-use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
+use bevy_egui::{
+    EguiGlobalSettings, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, PrimaryEguiContext,
+};
 use pentimento_scene::FrontendInputBlockState;
 
 use ipc_handler::sync_bevy_messages;
@@ -20,7 +22,12 @@ pub struct EguiRenderPlugin;
 impl Plugin for EguiRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
+            .insert_resource(EguiGlobalSettings {
+                auto_create_primary_context: false,
+                ..default()
+            })
             .init_resource::<EguiFrontendState>()
+            .add_systems(Startup, setup_egui_overlay_camera)
             .add_systems(
                 EguiPrimaryContextPass,
                 (
@@ -37,6 +44,18 @@ impl Plugin for EguiRenderPlugin {
 
         info!("Render plugin initialized with EGUI mode (experimental native UI)");
     }
+}
+
+fn setup_egui_overlay_camera(mut commands: Commands) {
+    commands.spawn((
+        PrimaryEguiContext,
+        Camera2d,
+        Camera {
+            order: 100,
+            clear_color: bevy::camera::ClearColorConfig::None,
+            ..default()
+        },
+    ));
 }
 
 fn drain_pending_egui_commands(world: &mut World) {
