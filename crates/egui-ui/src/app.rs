@@ -111,7 +111,7 @@ fn draw_side_panel(
 
 fn draw_scene_panel(ui: &mut egui::Ui, runtime: &mut EguiUiRuntime, commands: &mut Vec<UiToBevy>) {
     ui.collapsing("Add Object", |ui| {
-        primitive_buttons(ui, commands);
+        let _ = primitive_buttons(ui, commands);
 
         if ui.button("Paint Canvas").clicked() {
             commands.push(UiToBevy::AddPaintCanvas(
@@ -281,7 +281,7 @@ fn draw_add_object_menu(
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            primitive_buttons(ui, commands);
+            let mut should_close_menu = primitive_buttons(ui, commands);
 
             ui.separator();
 
@@ -292,6 +292,10 @@ fn draw_add_object_menu(
                         height: None,
                     },
                 ));
+                should_close_menu = true;
+            }
+
+            if should_close_menu {
                 runtime.add_object_menu_open = false;
             }
         });
@@ -346,7 +350,9 @@ fn draw_paint_toolbar(
         });
 }
 
-fn primitive_buttons(ui: &mut egui::Ui, commands: &mut Vec<UiToBevy>) {
+fn primitive_buttons(ui: &mut egui::Ui, commands: &mut Vec<UiToBevy>) -> bool {
+    let mut activated = false;
+
     for primitive in [
         PrimitiveType::Cube,
         PrimitiveType::Sphere,
@@ -362,8 +368,11 @@ fn primitive_buttons(ui: &mut egui::Ui, commands: &mut Vec<UiToBevy>) {
                 position: None,
                 name: None,
             }));
+            activated = true;
         }
     }
+
+    activated
 }
 
 fn edit_mode_label(mode: EditMode) -> &'static str {
