@@ -11,6 +11,7 @@ use pentimento_ipc::{BevyToUi, EditMode};
 
 use crate::OutboundUiMessages;
 use crate::camera::{MainCamera, OrbitCamera};
+use crate::frontend_input::FrontendInputBlockState;
 use crate::paint_mode::PaintMode;
 use crate::painting_system::CanvasTexture;
 #[cfg(feature = "selection")]
@@ -364,8 +365,13 @@ fn handle_camera_lock_input(
     key_input: Res<ButtonInput<KeyCode>>,
     active_plane: Res<ActiveCanvasPlane>,
     edit_mode: Res<crate::edit_mode::EditModeState>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut events: MessageWriter<CanvasPlaneEvent>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     // Tab key toggles camera lock when a plane is selected AND we're not in mesh edit mode
     // (mesh_edit_mode.rs handles Tab for entering/exiting mesh edit mode)
     if key_input.just_pressed(KeyCode::Tab)

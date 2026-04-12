@@ -4,6 +4,7 @@ use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use pentimento_ipc::{GizmoAxis, GizmoMode};
 
+use crate::frontend_input::FrontendInputBlockState;
 #[cfg(feature = "selection")]
 use crate::gizmo_raycast::GizmoHandle;
 #[cfg(feature = "selection")]
@@ -17,7 +18,12 @@ pub(crate) fn handle_gizmo_click(
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut gizmo_state: ResMut<GizmoState>,
     selected_query: Query<(Entity, &Transform), With<Selected>>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_pointer() {
+        return;
+    }
+
     // Start drag on mouse down when hovering a handle
     if mouse_button.just_pressed(MouseButton::Left) {
         if gizmo_state.hovered_handle != GizmoHandle::None && !gizmo_state.is_active {
@@ -52,12 +58,17 @@ pub(crate) fn handle_gizmo_hotkeys(
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut gizmo_state: ResMut<GizmoState>,
     selection: Res<SelectionState>,
+    input_blocks: Res<FrontendInputBlockState>,
     // Use ParamSet to avoid Query conflict - both queries access Transform
     mut queries: ParamSet<(
         Query<(Entity, &Transform), With<Selected>>,
         Query<&mut Transform>,
     )>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     // Only process hotkeys if something is selected
     if selection.selected_ids.is_empty() {
         if gizmo_state.is_active {

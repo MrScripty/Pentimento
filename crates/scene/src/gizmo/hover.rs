@@ -6,6 +6,7 @@ use bevy::window::PrimaryWindow;
 
 #[cfg(feature = "selection")]
 use crate::MainCamera;
+use crate::frontend_input::FrontendInputBlockState;
 #[cfg(feature = "selection")]
 use crate::gizmo_raycast::{GizmoGeometry, GizmoHandle, raycast_gizmo};
 #[cfg(feature = "selection")]
@@ -25,7 +26,14 @@ pub(crate) fn detect_gizmo_hover(
     selection: Res<SelectionState>,
     mut gizmo_state: ResMut<GizmoState>,
     geometry: Res<GizmoGeometry>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_pointer() {
+        gizmo_state.hovered_handle = GizmoHandle::None;
+        gizmo_state.hovered_hit_point = None;
+        return;
+    }
+
     // Don't update hover while dragging
     if gizmo_state.active_handle != GizmoHandle::None {
         return;
@@ -83,7 +91,13 @@ pub(crate) fn detect_gizmo_hover(
 pub(crate) fn handle_gizmo_mouse_input(
     mut motion_events: MessageReader<MouseMotion>,
     mut gizmo_state: ResMut<GizmoState>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_pointer() {
+        motion_events.clear();
+        return;
+    }
+
     if !gizmo_state.is_active {
         motion_events.clear();
         return;

@@ -20,6 +20,7 @@ mod camera;
 mod canvas_plane;
 mod depth_view;
 mod edit_mode;
+mod frontend_input;
 mod gizmo;
 #[cfg(feature = "selection")]
 mod gizmo_raycast;
@@ -62,6 +63,7 @@ pub use depth_view::{
     DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings,
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
+pub use frontend_input::FrontendInputBlockState;
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]
 pub use gizmo_raycast::{GizmoGeometry, GizmoHandle};
@@ -123,6 +125,7 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OutboundUiMessages>();
+        app.init_resource::<FrontendInputBlockState>();
 
         app.add_plugins(CameraControllerPlugin);
         app.add_plugins(LightingPlugin);

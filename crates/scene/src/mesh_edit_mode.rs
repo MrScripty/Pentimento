@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use crate::OutboundUiMessages;
 use crate::canvas_plane::ActiveCanvasPlane;
 use crate::edit_mode::EditModeState;
+use crate::frontend_input::FrontendInputBlockState;
 #[cfg(feature = "selection")]
 use crate::selection::Selected;
 
@@ -117,10 +118,15 @@ fn handle_tab_key_for_mesh_edit(
     key_input: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditModeState>,
     active_plane: Res<ActiveCanvasPlane>,
+    input_blocks: Res<FrontendInputBlockState>,
     _mesh_edit_state: Res<MeshEditState>,
     selected_meshes: Query<Entity, (With<Selected>, With<Mesh3d>)>,
     mut events: MessageWriter<MeshEditEvent>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     if !key_input.just_pressed(KeyCode::Tab) {
         return;
     }
@@ -337,8 +343,13 @@ fn send_selection_changed(state: &MeshEditState, outbound: &mut OutboundUiMessag
 fn handle_selection_mode_hotkeys(
     key_input: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditModeState>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut events: MessageWriter<MeshEditEvent>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     // Only handle in mesh edit mode
     if edit_mode.mode != EditMode::MeshEdit {
         return;

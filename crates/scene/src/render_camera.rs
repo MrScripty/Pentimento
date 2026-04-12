@@ -10,6 +10,8 @@
 use bevy::math::Mat4;
 use bevy::prelude::*;
 
+use crate::frontend_input::FrontendInputBlockState;
+
 /// Component marking a camera as the render camera for density calculations.
 ///
 /// This camera defines the maximum mesh detail allowed during sculpting.
@@ -108,8 +110,13 @@ impl Plugin for RenderCameraPlugin {
 fn handle_render_camera_selection(
     key_input: Res<ButtonInput<KeyCode>>,
     selected_cameras: Query<Entity, (With<crate::selection::Selected>, With<RenderCamera>)>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut active_render_camera: ResMut<ActiveRenderCamera>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     // Tab to activate selected render camera (without modifiers)
     let tab = key_input.just_pressed(KeyCode::Tab);
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);

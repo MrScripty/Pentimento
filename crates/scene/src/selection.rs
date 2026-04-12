@@ -7,6 +7,7 @@
 use bevy::picking::prelude::*;
 use bevy::prelude::*;
 
+use crate::frontend_input::FrontendInputBlockState;
 use crate::paint_mode::PaintMode;
 
 /// Marker component for selectable objects
@@ -47,7 +48,13 @@ fn handle_click_selection(
     selected_query: Query<(Entity, &Selectable), With<Selected>>,
     all_selectable: Query<(Entity, &Selectable)>,
     paint_mode: Res<PaintMode>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_pointer() {
+        click_events.clear();
+        return;
+    }
+
     // Don't process selection clicks when in paint mode
     if paint_mode.active {
         return;

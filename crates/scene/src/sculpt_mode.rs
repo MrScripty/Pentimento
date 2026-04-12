@@ -24,6 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::OutboundUiMessages;
 use crate::camera::MainCamera;
 use crate::edit_mode::EditModeState;
+use crate::frontend_input::FrontendInputBlockState;
 use crate::paint_mode::StrokeIdGenerator;
 use crate::pixel_coverage::{PixelCoverageState, estimate_pixel_coverage_cpu};
 use crate::render_camera::{ActiveRenderCamera, RenderCamera};
@@ -335,8 +336,13 @@ fn handle_sculpt_mode_hotkey(
     key_input: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditModeState>,
     selected_meshes: Query<Entity, (With<Selected>, With<Mesh3d>)>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut events: MessageWriter<SculptEvent>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     // Check for Ctrl modifier
     let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
@@ -373,7 +379,12 @@ fn handle_brush_adjustment(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut sculpt_state: ResMut<SculptState>,
     mut sculpting_data: ResMut<SculptingData>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_keyboard() || input_blocks.blocks_pointer() {
+        return;
+    }
+
     // Only active in sculpt mode
     if !sculpt_state.active {
         return;
@@ -518,7 +529,13 @@ fn handle_sculpt_input(
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut sculpt_events: MessageWriter<SculptEvent>,
     time: Res<Time>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_pointer() {
+        cursor_events.clear();
+        return;
+    }
+
     // Only process if sculpt mode is active
     if !sculpt_state.active {
         return;

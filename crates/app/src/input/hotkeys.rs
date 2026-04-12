@@ -6,6 +6,7 @@
 //! - Shift+A: Open add object menu
 
 use bevy::prelude::*;
+use pentimento_scene::FrontendInputBlockState;
 
 use super::MouseState;
 #[cfg(feature = "cef")]
@@ -43,8 +44,13 @@ pub fn handle_devtools_hotkey(
 /// Handle Ctrl+Z for paint undo
 pub fn handle_paint_undo_hotkey(
     key_input: Res<ButtonInput<KeyCode>>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     let z_pressed = key_input.just_pressed(KeyCode::KeyZ);
@@ -63,8 +69,13 @@ pub fn handle_paint_undo_hotkey(
 pub fn handle_add_menu_hotkey(
     key_input: Res<ButtonInput<KeyCode>>,
     mouse_state: Res<MouseState>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut outbound: Option<ResMut<pentimento_scene::OutboundUiMessages>>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     let a_pressed = key_input.just_pressed(KeyCode::KeyA);

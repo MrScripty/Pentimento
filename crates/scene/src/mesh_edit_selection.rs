@@ -10,6 +10,7 @@ use pentimento_ipc::{BevyToUi, EditMode, MeshSelectionMode};
 use crate::OutboundUiMessages;
 use crate::camera::MainCamera;
 use crate::edit_mode::EditModeState;
+use crate::frontend_input::FrontendInputBlockState;
 use crate::mesh_edit_mode::{EditableMesh, MeshEditState};
 
 /// Result of a sub-object raycast
@@ -48,10 +49,15 @@ fn handle_sub_object_click(
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     edit_mode: Res<EditModeState>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut mesh_edit_state: ResMut<MeshEditState>,
     editable_query: Query<(&EditableMesh, &GlobalTransform)>,
     mut outbound: ResMut<OutboundUiMessages>,
 ) {
+    if input_blocks.blocks_pointer() {
+        return;
+    }
+
     // Only handle in mesh edit mode
     if edit_mode.mode != EditMode::MeshEdit {
         return;

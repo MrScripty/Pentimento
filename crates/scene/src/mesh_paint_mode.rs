@@ -21,6 +21,7 @@ use painting::projection::build_tangent_space;
 use painting::types::{MeshHit, MeshStorageMode};
 
 use crate::camera::MainCamera;
+use crate::frontend_input::FrontendInputBlockState;
 use crate::paint_mode::{PaintMode, StrokeIdGenerator};
 
 /// Component marking a mesh as paintable
@@ -122,11 +123,17 @@ fn handle_mesh_paint_input(
     mesh_query: Query<(Entity, &PaintableMesh, &Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
     paint_mode: Res<PaintMode>,
+    input_blocks: Res<FrontendInputBlockState>,
     mut mesh_paint_state: ResMut<MeshPaintState>,
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut mesh_paint_events: MessageWriter<MeshPaintEvent>,
     time: Res<Time>,
 ) {
+    if input_blocks.blocks_pointer() {
+        cursor_events.clear();
+        return;
+    }
+
     // Only process if paint mode is active
     if !paint_mode.active {
         return;

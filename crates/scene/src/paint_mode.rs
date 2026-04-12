@@ -14,6 +14,7 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 
 use crate::camera::MainCamera;
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
+use crate::frontend_input::FrontendInputBlockState;
 
 /// Resource tracking paint tool state
 #[derive(Resource, Default)]
@@ -110,7 +111,12 @@ fn handle_paint_mode_toggle(
     mut paint_mode: ResMut<PaintMode>,
     mut paint_events: MessageWriter<PaintEvent>,
     mut outbound: ResMut<crate::OutboundUiMessages>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_keyboard() {
+        return;
+    }
+
     // Shift+Tab to toggle paint mode
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
@@ -161,7 +167,13 @@ fn handle_paint_input(
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut paint_events: MessageWriter<PaintEvent>,
     time: Res<Time>,
+    input_blocks: Res<FrontendInputBlockState>,
 ) {
+    if input_blocks.blocks_pointer() {
+        cursor_events.clear();
+        return;
+    }
+
     // Only process if paint mode is active and a plane is selected
     if !paint_mode.active {
         return;
