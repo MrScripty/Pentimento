@@ -274,6 +274,7 @@ fn draw_add_object_menu(
     );
 
     let mut open = runtime.add_object_menu_open;
+    let mut should_close_menu = false;
     egui::Window::new("Add Object")
         .default_pos(position)
         .default_size(Vec2::new(180.0, 220.0))
@@ -281,7 +282,7 @@ fn draw_add_object_menu(
         .resizable(false)
         .open(&mut open)
         .show(ctx, |ui| {
-            let mut should_close_menu = primitive_buttons(ui, commands);
+            should_close_menu |= primitive_buttons(ui, commands);
 
             ui.separator();
 
@@ -294,13 +295,9 @@ fn draw_add_object_menu(
                 ));
                 should_close_menu = true;
             }
-
-            if should_close_menu {
-                runtime.add_object_menu_open = false;
-            }
         });
 
-    runtime.add_object_menu_open = open;
+    runtime.add_object_menu_open = open && !should_close_menu;
 }
 
 fn draw_paint_toolbar(
