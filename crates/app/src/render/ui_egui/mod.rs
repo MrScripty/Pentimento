@@ -6,7 +6,7 @@ mod resources;
 
 use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
-use bevy_egui::{EguiPlugin, EguiPostUpdateSet};
+use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass};
 use pentimento_scene::FrontendInputBlockState;
 
 use ipc_handler::sync_bevy_messages;
@@ -22,7 +22,7 @@ impl Plugin for EguiRenderPlugin {
         app.add_plugins(EguiPlugin::default())
             .init_resource::<EguiFrontendState>()
             .add_systems(
-                Update,
+                EguiPrimaryContextPass,
                 (
                     sync_bevy_messages,
                     render_egui_ui,
