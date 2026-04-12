@@ -63,8 +63,8 @@ fn main() {
 
     println!("Creating offscreen webview (800x600)...");
 
-    let mut webview = OffscreenWebview::new(TEST_HTML, (800, 600))
-        .expect("Failed to create webview");
+    let mut webview =
+        OffscreenWebview::new(TEST_HTML, (800, 600)).expect("Failed to create webview");
 
     println!("Webview created. Pumping GTK events to allow content to load...");
 
@@ -94,7 +94,11 @@ fn main() {
 
             // Check if the image has any non-transparent pixels
             let non_transparent = image.pixels().filter(|p| p.0[3] > 0).count();
-            println!("Non-transparent pixels: {} / {}", non_transparent, image.width() * image.height());
+            println!(
+                "Non-transparent pixels: {} / {}",
+                non_transparent,
+                image.width() * image.height()
+            );
 
             return;
         }
