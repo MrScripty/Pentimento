@@ -20,6 +20,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::config::{CompositeMode, PentimentoConfig};
+use crate::embedded_ui::UiAssets;
 use bevy::asset::RenderAssetUsages;
 use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
@@ -27,17 +29,12 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use bevy::window::RawHandleWrapper;
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
 use pentimento_ipc::UiToBevy;
-use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, OutboundUiMessages, SceneAmbientOcclusion,
-    SceneLighting,
-};
-
-use crate::config::{CompositeMode, PentimentoConfig};
-use crate::embedded_ui::UiAssets;
+use pentimento_scene::OutboundUiMessages;
 
 // Keep submodules for mode-specific initialization helpers
 #[cfg(feature = "dioxus")]
 mod ui_blend_material;
+mod ui_commands;
 #[cfg(feature = "dioxus")]
 mod ui_dioxus;
 #[cfg(feature = "egui")]
@@ -552,57 +549,7 @@ fn handle_frontend_ipc_messages(world: &mut World) {
         msgs
     };
 
-    // Process messages
-    for msg in messages {
-        match msg {
-            UiToBevy::AddObject(request) => {
-                if let Some(mut events) =
-                    world.get_resource_mut::<bevy::ecs::message::Messages<AddObjectEvent>>()
-                {
-                    events.write(AddObjectEvent(request));
-                    info!("Dispatched AddObjectEvent from UI");
-                }
-            }
-            UiToBevy::AddPaintCanvas(request) => {
-                if let Some(mut events) =
-                    world.get_resource_mut::<bevy::ecs::message::Messages<CanvasPlaneEvent>>()
-                {
-                    events.write(CanvasPlaneEvent::CreateInFrontOfCamera {
-                        width: request.width.unwrap_or(1024),
-                        height: request.height.unwrap_or(1024),
-                    });
-                    info!("Dispatched CanvasPlaneEvent::CreateInFrontOfCamera from UI");
-                }
-            }
-            UiToBevy::UiDirty => {
-                // Already handled by dirty flag in webview
-            }
-            UiToBevy::UpdateLighting(settings) => {
-                if let Some(mut lighting) = world.get_resource_mut::<SceneLighting>() {
-                    lighting.settings = settings;
-                    info!("Updated lighting settings from UI");
-                }
-            }
-            UiToBevy::UpdateAmbientOcclusion(settings) => {
-                if let Some(mut ao_resource) = world.get_resource_mut::<SceneAmbientOcclusion>() {
-                    ao_resource.update(settings);
-                    info!("Updated ambient occlusion settings from UI");
-                }
-            }
-            UiToBevy::SetDepthView { enabled } => {
-                if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
-                    settings.enabled = enabled;
-                    info!(
-                        "Depth view mode: {}",
-                        if enabled { "enabled" } else { "disabled" }
-                    );
-                }
-            }
-            _ => {
-                debug!("Unhandled frontend IPC message: {:?}", msg);
-            }
-        }
-    }
+    ui_commands::dispatch_ui_commands(world, messages);
 }
 
 // ============================================================================

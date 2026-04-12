@@ -7,9 +7,11 @@ mod resources;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 
-use ipc_handler::{dispatch_ui_commands, sync_bevy_messages};
+use ipc_handler::sync_bevy_messages;
 use render::render_egui_ui;
 use resources::EguiFrontendState;
+
+use crate::render::ui_commands::dispatch_ui_commands;
 
 pub struct EguiRenderPlugin;
 
