@@ -178,7 +178,7 @@ implementations.
 - Architecture review against `PLAN-STANDARDS.md`, `CODING-STANDARDS.md`, and
   `ARCHITECTURE-PATTERNS.md`.
 
-**Status:** Not started
+**Status:** Completed
 
 ### Milestone 2: Shared Native UI Core Extraction
 
@@ -202,7 +202,7 @@ egui does not become a second copy of Dioxus.
 - Decomposition review for any module approaching file-size or responsibility
   thresholds.
 
-**Status:** Not started
+**Status:** Completed
 
 ### Milestone 3: Egui UI Crate Implementation
 
@@ -224,7 +224,7 @@ the current Dioxus frontend.
 - Unit tests for any pure helpers, reducers, or widget-state adapters.
 - Manual parity check against the Dioxus frontend for the implemented widgets.
 
-**Status:** Not started
+**Status:** Completed
 
 ### Milestone 4: Bevy Integration and Input Arbitration
 
@@ -250,7 +250,7 @@ details into generic render, input, scene, or IPC layers.
 - Acceptance check that UI interactions do not leak through to viewport actions
   while egui is actively consuming input.
 
-**Status:** Not started
+**Status:** Completed
 
 ### Milestone 5: Tooling, Documentation, and Launcher Integration
 
@@ -273,7 +273,7 @@ documentation and tooling.
 - If egui is active: `./launcher.sh --build --frontend egui` and
   `./launcher.sh --run --frontend egui`
 
-**Status:** Not started
+**Status:** Completed
 
 ### Milestone 6: Acceptance, Parity Review, and Promotion Decision
 
@@ -294,13 +294,17 @@ introducing contract drift or support ambiguity.
   controls, paint controls, depth-view toggling, and hotkeys.
 - Contract acceptance coverage if any `crates/ipc` messages changed.
 
-**Status:** Not started
+**Status:** In progress
 
 ## Execution Notes
 
 Update during implementation:
 - 2026-04-12: Initial plan created from current repo architecture, standards,
   and official egui/Bevy integration references.
+- 2026-04-12: Landed the egui frontend spike, shared native snapshot core,
+  shared native command dispatch, and explicit egui input arbitration.
+- 2026-04-12: Wired `launcher.sh`, README coverage, rustfmt scope, and source
+  directory README verification for the experimental egui path.
 
 ## Commit Cadence Notes
 
@@ -339,19 +343,24 @@ Update during implementation:
 
 ### Completed
 
-- None as of 2026-04-12.
-- Reason: this document is a pre-implementation plan, not an execution log.
-- Revisit trigger: implementation work starts and milestone status needs to be
-  updated.
+- Milestones 1 through 5 landed on 2026-04-12.
+- The egui path now builds through `launcher.sh`, shares native snapshot and
+  command infrastructure with Dioxus, and participates in the canonical local
+  verification suite as an experimental frontend.
+- Revisit trigger: manual parity smoke results justify promoting egui from
+  experimental to active.
 
 ### Deviations
 
-- None as of 2026-04-12.
+- Promotion to an active supported frontend is deferred.
+- Reason: the implementation now compiles and routes through the launcher, but
+  the final parity and smoke decision in Milestone 6 still depends on manual
+  runtime validation.
 
 ### Follow-Ups
 
-- Convert milestone status and execution notes from planning state to execution
-  state when implementation begins.
+- Run the manual parity checklist in Milestone 6 and record whether egui should
+  remain experimental or be promoted to an active supported frontend.
 
 ### Verification Summary
 

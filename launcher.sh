@@ -20,12 +20,12 @@ Pentimento launcher for active frontend workflows.
 Usage:
   ./launcher.sh --help
   ./launcher.sh --install
-  ./launcher.sh --build [--frontend <cef|dioxus|electron>]
-  ./launcher.sh --build-release [--frontend <cef|dioxus|electron>]
-  ./launcher.sh --run [--frontend <cef|dioxus|electron>] [-- <args>]
-  ./launcher.sh --run-release [--frontend <cef|dioxus|electron>] [-- <args>]
+  ./launcher.sh --build [--frontend <cef|dioxus|egui|electron>]
+  ./launcher.sh --build-release [--frontend <cef|dioxus|egui|electron>]
+  ./launcher.sh --run [--frontend <cef|dioxus|egui|electron>] [-- <args>]
+  ./launcher.sh --run-release [--frontend <cef|dioxus|egui|electron>] [-- <args>]
   ./launcher.sh --test
-  ./launcher.sh --release-smoke [--frontend <cef|dioxus|electron>]
+  ./launcher.sh --release-smoke [--frontend <cef|dioxus|egui|electron>]
 
 Actions:
   --install        Install repo-managed dependencies without touching lockfiles
@@ -38,7 +38,7 @@ Actions:
   --help           Show this help text and exit
 
 Options:
-  --frontend <name>  Select the active frontend: cef, dioxus, or electron
+  --frontend <name>  Select the frontend: cef, dioxus, egui, or electron
                      Default: cef
 
 Managed state:
@@ -51,8 +51,10 @@ Managed state:
 Examples:
   ./launcher.sh --install
   ./launcher.sh --build --frontend cef
+  ./launcher.sh --build --frontend egui
   ./launcher.sh --build-release --frontend electron
   ./launcher.sh --run --frontend dioxus
+  ./launcher.sh --run --frontend egui
   ./launcher.sh --run-release --frontend cef -- --scene docs/example.scene
   ./launcher.sh --test
   ./launcher.sh --release-smoke --frontend electron
@@ -140,10 +142,10 @@ if [[ -z "$ACTION" ]]; then
 fi
 
 case "$FRONTEND" in
-    cef|dioxus|electron)
+    cef|dioxus|egui|electron)
         ;;
     *)
-        fail_usage "--frontend must be one of: cef, dioxus, electron"
+        fail_usage "--frontend must be one of: cef, dioxus, egui, electron"
         ;;
 esac
 
@@ -286,6 +288,9 @@ native_feature_args() {
         dioxus)
             printf '%s\n' "--features" "dioxus"
             ;;
+        egui)
+            printf '%s\n' "--features" "egui"
+            ;;
         *)
             return 1
             ;;
@@ -370,6 +375,9 @@ build_frontend() {
             build_ui
             build_native_app "$profile"
             ;;
+        egui)
+            build_native_app "$profile"
+            ;;
         electron)
             build_wasm_bundle "$profile"
             build_ui
@@ -403,7 +411,7 @@ electron_binary_path() {
 
 require_release_artifacts() {
     case "$FRONTEND" in
-        cef|dioxus)
+        cef|dioxus|egui)
             local native_binary
             native_binary="$(native_binary_path "release")"
             if [[ ! -x "$native_binary" ]]; then
@@ -474,13 +482,17 @@ run_verification_suite() {
         ./scripts/check-source-readmes.sh --all
         ./scripts/rustfmt-active.sh --check
         npm run verify
+        cargo check -p pentimento --features egui
         cargo check -p pentimento --features dioxus
         cargo check -p pentimento --features cef
         cargo check --target wasm32-unknown-unknown -p pentimento-wasm
+        cargo rustc -p pentimento-frontend-core --lib -- -D warnings
         cargo rustc -p pentimento-scene --lib --features 'wireframe selection mesh_painting mesh_editing sculpting atmosphere' -- -D warnings
         cargo rustc -p pentimento-webview --lib --features dioxus -- -D warnings
         cargo rustc -p pentimento-webview --lib --features cef -- -D warnings
+        cargo rustc -p pentimento-egui-ui --lib -- -D warnings
         cargo rustc -p pentimento-dioxus-ui --lib -- -D warnings
+        cargo rustc -p pentimento --bin pentimento --features egui -- -D warnings
         cargo rustc -p pentimento --bin pentimento --features dioxus -- -D warnings
         cargo rustc -p pentimento --bin pentimento --features cef -- -D warnings
         cargo rustc -p pentimento-wasm --lib --target wasm32-unknown-unknown -- -D warnings
@@ -494,7 +506,7 @@ run_release_smoke() {
     setup_managed_state_env "release-smoke-${FRONTEND}"
 
     case "$FRONTEND" in
-        cef|dioxus)
+        cef|dioxus|egui)
             export PENTIMENTO_COMPOSITE="$FRONTEND"
             if [[ "$FRONTEND" == "cef" ]]; then
                 setup_cef_runtime_env "release"
@@ -535,21 +547,27 @@ case "$ACTION" in
         ;;
     build)
         require_dependency 1 "cargo" check_cargo "Install Rust and Cargo first."
-        require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+        if [[ "$FRONTEND" != "egui" ]]; then
+            require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+        fi
         build_frontend "debug"
         ;;
     build-release)
         require_dependency 1 "cargo" check_cargo "Install Rust and Cargo first."
-        require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+        if [[ "$FRONTEND" != "egui" ]]; then
+            require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+        fi
         build_frontend "release"
         ;;
     run)
         require_dependency 3 "cargo" check_cargo "Install Rust and Cargo first."
-        require_dependency 3 "npm" check_npm "Install Node.js 22+ and npm first."
+        if [[ "$FRONTEND" != "egui" ]]; then
+            require_dependency 3 "npm" check_npm "Install Node.js 22+ and npm first."
+        fi
         build_frontend "debug"
         setup_managed_state_env "run-${FRONTEND}"
         case "$FRONTEND" in
-            cef|dioxus)
+            cef|dioxus|egui)
                 run_native_binary "debug"
                 ;;
             electron)
@@ -559,11 +577,13 @@ case "$ACTION" in
         ;;
     run-release)
         require_dependency 3 "cargo" check_cargo "Install Rust and Cargo first."
-        require_dependency 3 "npm" check_npm "Install Node.js 22+ and npm first."
+        if [[ "$FRONTEND" == "electron" ]]; then
+            require_dependency 3 "npm" check_npm "Install Node.js 22+ and npm first."
+        fi
         require_release_artifacts
         setup_managed_state_env "run-release-${FRONTEND}"
         case "$FRONTEND" in
-            cef|dioxus)
+            cef|dioxus|egui)
                 run_native_binary "release"
                 ;;
             electron)

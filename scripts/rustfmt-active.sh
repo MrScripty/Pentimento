@@ -23,6 +23,8 @@ ACTIVE_DIRS=(
     "${PROJECT_ROOT}/crates/app-wasm/src"
     "${PROJECT_ROOT}/crates/cef-helper/src"
     "${PROJECT_ROOT}/crates/dioxus-ui/src"
+    "${PROJECT_ROOT}/crates/egui-ui/src"
+    "${PROJECT_ROOT}/crates/frontend-core/src"
     "${PROJECT_ROOT}/crates/ipc/src"
     "${PROJECT_ROOT}/crates/painting/src"
     "${PROJECT_ROOT}/crates/scene/src"
