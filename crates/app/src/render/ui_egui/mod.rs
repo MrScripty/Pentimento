@@ -4,7 +4,9 @@ mod ipc_handler;
 mod render;
 mod resources;
 
+use bevy::camera::{CameraOutputMode, visibility::RenderLayers};
 use bevy::prelude::*;
+use bevy::render::render_resource::BlendState;
 use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{
     EguiGlobalSettings, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, PrimaryEguiContext,
@@ -50,9 +52,14 @@ fn setup_egui_overlay_camera(mut commands: Commands) {
     commands.spawn((
         PrimaryEguiContext,
         Camera2d,
+        RenderLayers::none(),
         Camera {
             order: 100,
-            clear_color: bevy::camera::ClearColorConfig::None,
+            output_mode: CameraOutputMode::Write {
+                blend_state: Some(BlendState::ALPHA_BLENDING),
+                clear_color: bevy::camera::ClearColorConfig::None,
+            },
+            clear_color: bevy::camera::ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
     ));
