@@ -1,0 +1,48 @@
+//! egui frontend integration for Pentimento.
+
+mod ipc_handler;
+mod render;
+mod resources;
+
+use bevy::prelude::*;
+use bevy_egui::EguiPlugin;
+
+use ipc_handler::{dispatch_ui_commands, sync_bevy_messages};
+use render::render_egui_ui;
+use resources::EguiFrontendState;
+
+pub struct EguiRenderPlugin;
+
+impl Plugin for EguiRenderPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(EguiPlugin::default())
+            .init_resource::<EguiFrontendState>()
+            .add_systems(
+                Update,
+                (
+                    sync_bevy_messages,
+                    render_egui_ui,
+                    drain_pending_egui_commands,
+                )
+                    .chain(),
+            );
+
+        info!("Render plugin initialized with EGUI mode (experimental native UI)");
+    }
+}
+
+fn drain_pending_egui_commands(world: &mut World) {
+    let commands = {
+        let Some(mut frontend) = world.get_resource_mut::<EguiFrontendState>() else {
+            return;
+        };
+
+        if frontend.pending_commands.is_empty() {
+            return;
+        }
+
+        std::mem::take(&mut frontend.pending_commands)
+    };
+
+    dispatch_ui_commands(world, commands);
+}

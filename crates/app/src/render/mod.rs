@@ -14,6 +14,7 @@
 //! - **Overlay**: Transparent child window composited by desktop compositor
 //! - **Cef**: CEF (Chromium) offscreen rendering with framebuffer capture
 //! - **Dioxus**: Native Rust UI with Vello GPU renderer (zero-copy, uses separate plugin)
+//! - **Egui**: Native Rust UI integrated directly into Bevy via `bevy_egui`
 //! - **Tauri**: Bevy WASM in Tauri webview (requires separate build)
 
 use std::sync::Arc;
@@ -39,6 +40,8 @@ use crate::embedded_ui::UiAssets;
 mod ui_blend_material;
 #[cfg(feature = "dioxus")]
 mod ui_dioxus;
+#[cfg(feature = "egui")]
+mod ui_egui;
 
 #[cfg(feature = "dioxus")]
 pub use ui_dioxus::DioxusRendererResource;
@@ -189,6 +192,10 @@ pub fn create_frontend(
             ))
         }
 
+        CompositeMode::Egui => Err(FrontendError::Backend(
+            "egui mode uses EguiRenderPlugin, not the capture pipeline".into(),
+        )),
+
         CompositeMode::Tauri => {
             // Tauri mode is handled differently - Bevy runs as WASM in Tauri's webview
             Err(FrontendError::Backend(
@@ -208,7 +215,10 @@ pub fn setup_frontend(world: &mut World) {
     let mode = config.composite_mode;
 
     // Dioxus and Tauri modes use separate plugins
-    if matches!(mode, CompositeMode::Dioxus | CompositeMode::Tauri) {
+    if matches!(
+        mode,
+        CompositeMode::Dioxus | CompositeMode::Egui | CompositeMode::Tauri
+    ) {
         return;
     }
 
@@ -657,6 +667,19 @@ impl Plugin for RenderPlugin {
                     "Dioxus mode requires the 'dioxus' feature. Build with: cargo build --features dioxus"
                 );
                 panic!("Dioxus mode not available - rebuild with --features dioxus");
+            }
+
+            #[cfg(feature = "egui")]
+            CompositeMode::Egui => {
+                app.add_plugins(ui_egui::EguiRenderPlugin);
+            }
+
+            #[cfg(not(feature = "egui"))]
+            CompositeMode::Egui => {
+                error!(
+                    "egui mode requires the 'egui' feature. Build with: cargo build --features egui"
+                );
+                panic!("egui mode not available - rebuild with --features egui");
             }
 
             CompositeMode::Tauri => {

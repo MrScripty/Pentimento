@@ -63,6 +63,10 @@ impl<'w, 's> FrontendBackend<'w, 's> {
                 // Blitz expects logical (CSS) pixels, not physical pixels
                 (x, y)
             }
+            CompositeMode::Egui => {
+                // egui is integrated directly into Bevy and uses window logical pixels
+                (x, y)
+            }
             CompositeMode::Capture | CompositeMode::Overlay => {
                 // WebKit-based backends use physical resolution
                 (x * scale_factor, y * scale_factor)
@@ -103,6 +107,7 @@ impl<'w, 's> FrontendBackend<'w, 's> {
             }
             #[cfg(not(feature = "dioxus"))]
             CompositeMode::Dioxus => {}
+            CompositeMode::Egui => {}
             CompositeMode::Tauri => {
                 // Tauri mode handles input in the browser
             }
@@ -139,6 +144,7 @@ impl<'w, 's> FrontendBackend<'w, 's> {
             }
             #[cfg(not(feature = "dioxus"))]
             CompositeMode::Dioxus => {}
+            CompositeMode::Egui => {}
             CompositeMode::Tauri => {
                 // Tauri mode handles input in the browser
             }

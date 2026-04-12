@@ -21,6 +21,9 @@ pub enum CompositeMode {
     /// Native Dioxus UI with Blitz WGPU renderer
     /// Fast startup, low memory, pure Rust alternative to CEF
     Dioxus,
+    /// Native egui UI integrated directly into Bevy
+    /// Experimental parity path for the Rust-native frontend surface
+    Egui,
 }
 
 impl CompositeMode {
@@ -31,6 +34,7 @@ impl CompositeMode {
             Ok("cef") => Self::Cef,
             Ok("tauri") => Self::Tauri,
             Ok("dioxus") => Self::Dioxus,
+            Ok("egui") => Self::Egui,
             Ok("capture") | _ => Self::Capture,
         }
     }

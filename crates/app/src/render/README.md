@@ -1,6 +1,8 @@
 # Frontend Render Architecture
 
-This module manages UI rendering across different frontend technologies.
+This module manages UI rendering across different frontend technologies,
+including experimental native egui integration alongside the established
+capture-based and Dioxus paths.
 
 ## Two Rendering Models
 
@@ -46,6 +48,24 @@ Dioxus uses a separate `DioxusRendererResource` because:
 - No framebuffer capture needed
 - Different event model (channel-based)
 - Uses Bevy's render graph for GPU integration
+
+### Model 3: Bevy-Integrated Native UI (egui)
+
+```
+egui widget tree
+     |
+     v
+bevy_egui integration
+     |
+     v
+Direct Bevy UI rendering
+```
+
+egui uses a separate `ui_egui/` adapter because:
+
+- It is not a webview backend
+- It does not share Dioxus's Vello/Blitz render path
+- It still needs explicit IPC snapshot bridging and command dispatch
 
 ## Why Two Models?
 

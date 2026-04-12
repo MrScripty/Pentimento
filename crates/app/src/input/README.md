@@ -1,6 +1,7 @@
 # Input Handling Architecture
 
-This module forwards Bevy input events to frontend backends (WebKit, CEF, Dioxus).
+This module forwards Bevy input events to frontend backends (WebKit, CEF,
+Dioxus) and accounts for the experimental egui path.
 
 ## FrontendBackend SystemParam
 
@@ -18,6 +19,13 @@ It handles two different frontend architectures:
 - Uses separate `DioxusRendererResource`
 - Events forwarded via mpsc channel to BlitzDocument
 - Uses Vello for direct GPU rendering (no capture)
+
+### Bevy-Integrated Frontend (egui)
+
+- Uses `bevy_egui` directly inside the Bevy app
+- Does not use `FrontendResource` or the Dioxus renderer resource
+- Reuses hotkey state and mouse tracking but does not forward input through a
+  separate backend bridge
 
 ## Resource Access Rules
 
