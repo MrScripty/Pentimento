@@ -190,13 +190,14 @@ install_root_node_modules() {
 }
 
 check_electron_node_modules() {
-    [[ -x "${PROJECT_ROOT}/src-electron/node_modules/.bin/electron" ]]
+    node "${PROJECT_ROOT}/src-electron/check-install.cjs"
 }
 
 install_electron_node_modules() {
     (
-        cd "${PROJECT_ROOT}/src-electron"
-        npm ci
+        cd "${PROJECT_ROOT}/src-electron" &&
+        npm ci &&
+        ./node_modules/.bin/install-electron
     )
 }
 
