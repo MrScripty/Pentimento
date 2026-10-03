@@ -102,7 +102,7 @@ impl SculptDab {
 
         let phi = phi_idx / 16.0 * std::f32::consts::PI;
         // Undo the +PI offset in encode_normal; keep the existing bin edges.
-        let theta = theta_idx / 16.0 * std::f32::consts::TAU;
+        let theta = theta_idx / 16.0 * std::f32::consts::TAU - std::f32::consts::PI;
 
         Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
     }
