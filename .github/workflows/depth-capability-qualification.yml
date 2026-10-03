@@ -1,0 +1,94 @@
+name: Temporary depth capability qualification
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/depth-capability-qualification.yml'
+permissions:
+  contents: read
+concurrency:
+  group: depth-capability-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+env:
+  SOURCE_SHA: '2022d754b393fd1a7ce08205bee955d45bf272d8'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
+jobs:
+  focused-rust-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Record exact source and toolchain
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source.txt
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          sha256sum package-lock.json src-electron/package-lock.json > evidence/npm-locks.sha256
+      - name: Install Linux frontend prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev libudev-dev \
+            libwayland-dev libwebkit2gtk-4.1-dev libxkbcommon-dev pkg-config
+      - name: Resolve and retain one lock for this exact source
+        run: |
+          set -euo pipefail
+          test ! -e Cargo.lock
+          cargo generate-lockfile 2>&1 | tee evidence/resolution.log
+          cp Cargo.lock evidence/Cargo.lock
+          sha256sum Cargo.lock > evidence/cargo-lock.sha256
+      - name: Build genuine UI assets and check serialization
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee evidence/npm-ci.log
+          npm run build 2>&1 | tee evidence/ui-build.log
+          test -s dist/ui/index.html
+          cargo run --locked --quiet -p pentimento-ipc --example contract_samples > evidence/contract-samples.json
+          CARGO_NET_OFFLINE=true node --test tests/contracts/ipc-contract.test.mjs 2>&1 | tee evidence/serialization.log
+      - name: Test depth capability and native UI behavior
+        run: |
+          set -euo pipefail
+          cargo test --locked -p pentimento-scene --lib capability_tests 2>&1 | tee evidence/scene-tests.log
+          cargo test --locked -p pentimento-frontend-core --lib depth_tests 2>&1 | tee evidence/core-tests.log
+          cargo test --locked -p pentimento-dioxus-ui --lib depth_view 2>&1 | tee evidence/dioxus-tests.log
+          cargo test --locked -p pentimento-egui-ui --lib depth_view 2>&1 | tee evidence/egui-tests.log
+          python3 - <<'PY'
+          import pathlib, re
+          expected = {'scene': 4, 'core': 1, 'dioxus': 3, 'egui': 1}
+          for name, count in expected.items():
+              log = pathlib.Path(f'evidence/{name}-tests.log').read_text()
+              passed = re.findall(r'test result: ok\. (\d+) passed;', log)
+              if not passed or sum(map(int, passed)) != count:
+                  raise SystemExit(f'{name}: expected {count} executed passing tests, got {passed}')
+          PY
+      - name: Check source and lock immutability
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          sha256sum --check evidence/npm-locks.sha256
+          sha256sum --check evidence/cargo-lock.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: depth-capability-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
