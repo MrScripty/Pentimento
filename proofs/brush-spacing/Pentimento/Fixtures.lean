@@ -26,7 +26,9 @@ theorem rational_split : run (5 / 2) [1 / 2, 3 / 4, 7 / 4] (0, 0) = (1, 1 / 2) :
 
 theorem rational_unsplit : run (5 / 2) [3] (0, 0) = (1, 1 / 2) := by norm_num [run, step, ← Int.floor_toNat]
 
-theorem multiple_crossings : step 10 37 (0, 4) = (4, 1) := by norm_num [run, step, ← Int.floor_toNat]
+theorem multiple_crossings : step 10 37 (0, 4) = (4, 1) := by
+  norm_num [step, ← Int.floor_toNat]
+  norm_num [Int.toNat]
 
 theorem zero_segment : step 10 0 (7, 4) = (7, 4) := by norm_num [run, step, ← Int.floor_toNat]
 
