@@ -51,11 +51,19 @@ for root in (pathlib.Path('.'), pathlib.Path('src-electron')):
     for name, package in lock['packages'].items():
         if not name:
             continue
-        url = urllib.parse.urlparse(package.get('resolved', ''))
-        assert url.scheme == 'https' and url.hostname == 'registry.npmjs.org', (name, url.geturl())
-        assert package.get('integrity', '').startswith('sha512-'), name
         assert not package.get('link'), name
-        packages.append({'path': name, **{key: package[key] for key in ('version', 'resolved', 'integrity', 'dev', 'peer', 'peerDependencies', 'peerDependenciesMeta', 'engines', 'hasInstallScript') if key in package}})
+        source = package
+        if not package.get('resolved'):
+            # Bundled children are authenticated by their containing tarball.
+            assert package.get('inBundle') is True, name
+            parent_path, child_name = name.rsplit('/node_modules/', 1)
+            source = lock['packages'][parent_path]
+            assert child_name in source.get('bundleDependencies', []), name
+            package = {**package, 'verifiedBundleParent': parent_path}
+        url = urllib.parse.urlparse(source.get('resolved', ''))
+        assert url.scheme == 'https' and url.hostname == 'registry.npmjs.org', (name, url.geturl())
+        assert source.get('integrity', '').startswith('sha512-'), name
+        packages.append({'path': name, **{key: package[key] for key in ('version', 'resolved', 'integrity', 'dev', 'peer', 'peerDependencies', 'peerDependenciesMeta', 'engines', 'hasInstallScript', 'inBundle', 'verifiedBundleParent') if key in package}})
     out[str(root)] = packages
 pathlib.Path('lockfile-evidence/resolved-inventory.json').write_text(json.dumps(out, indent=2) + '\n')
 PY
