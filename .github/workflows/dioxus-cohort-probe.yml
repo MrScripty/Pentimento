@@ -1,0 +1,178 @@
+name: Dioxus dependency cohort probe
+
+on:
+  pull_request:
+    paths:
+      - 'crates/dioxus-ui/Cargo.toml'
+      - 'docs/dioxus-dependency-compatibility.md'
+      - '.github/workflows/dioxus-cohort-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dioxus-cohort-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Match the exact compiler observed in PR6; do not follow stable mid-probe.
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  CARGO_HOME: ${{ runner.temp }}/cohort-cargo
+  CARGO_TARGET_DIR: ${{ runner.temp }}/cohort-target
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_TERM_COLOR: never
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      lock-sha256: ${{ steps.resolve.outputs.lock-sha256 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - name: Generate Pentimento lock and graph evidence
+        id: resolve
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          exec > >(tee evidence/resolution.log) 2>&1
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          printf '%s\n' "$CANDIDATE_SHA" > evidence/source-sha.txt
+          printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/run.txt
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          find . -name Cargo.toml -not -path './.git/*' -print0 | sort -z | xargs -0 sha256sum > evidence/manifests.sha256
+          # Never seed this probe with an upstream or pre-existing lock.
+          test ! -e Cargo.lock
+          cargo generate-lockfile
+          sha256sum Cargo.lock > evidence/Cargo.lock.sha256
+          cp Cargo.lock evidence/Cargo.lock
+          echo "lock-sha256=$(sha256sum Cargo.lock | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          cargo metadata --locked --format-version 1 > evidence/metadata-default.json
+          cargo metadata --locked --format-version 1 --features pentimento-dioxus-ui/hot-reload > evidence/metadata-hot-reload.json
+          cargo tree --locked -p pentimento-dioxus-ui -e normal,build > evidence/tree-default.txt
+          cargo tree --locked -p pentimento-dioxus-ui --features hot-reload -e normal,build > evidence/tree-hot-reload.txt
+          cargo tree --locked -p pentimento --features dioxus -e normal,build > evidence/tree-app-dioxus.txt
+          cargo tree --locked --duplicates > evidence/tree-duplicates.txt
+          sha256sum --check evidence/Cargo.lock.sha256
+          sha256sum --check evidence/manifests.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dioxus-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  focused:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Omitting run-id deliberately restricts download to this workflow run.
+      - uses: actions/download-artifact@v4
+        with:
+          name: dioxus-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: resolution
+      - name: Verify same-run source, toolchain and lock provenance
+        env:
+          EXPECTED_LOCK_SHA256: ${{ needs.resolve.outputs.lock-sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(cat resolution/source-sha.txt)" = "$CANDIDATE_SHA"
+          test "$(cat resolution/run.txt)" = "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT"
+          test "$(sha256sum resolution/Cargo.lock | cut -d ' ' -f 1)" = "$EXPECTED_LOCK_SHA256"
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          cmp resolution/rustc.txt evidence/rustc.txt
+          cmp resolution/cargo.txt evidence/cargo.txt
+          sha256sum --check resolution/manifests.sha256
+          test ! -e Cargo.lock
+          cp resolution/Cargo.lock Cargo.lock
+          sha256sum --check resolution/Cargo.lock.sha256
+          cp resolution/{source-sha.txt,run.txt,Cargo.lock.sha256} evidence/
+      - name: Install Linux frontend prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev libudev-dev \
+            libwayland-dev libwebkit2gtk-4.1-dev libxkbcommon-dev pkg-config
+      - name: Build actual canonical UI assets before RustEmbed consumers
+        run: |
+          set -euo pipefail
+          sha256sum package-lock.json > evidence/npm-lock.sha256
+          npm ci 2>&1 | tee evidence/npm-ci.log
+          # This is the same npm script used by launcher.sh build_ui.
+          npm run build 2>&1 | tee evidence/ui-build.log
+          test -s dist/ui/index.html
+          sha256sum --check evidence/npm-lock.sha256
+          node --version > evidence/node.txt
+          npm --version > evidence/npm.txt
+      - name: Check default and hot-reload UI, then test the library
+        run: |
+          set -euo pipefail
+          cargo check --locked -p pentimento-dioxus-ui --lib 2>&1 | tee evidence/check-ui.log
+          cargo check --locked -p pentimento-dioxus-ui --lib --features hot-reload 2>&1 | tee evidence/check-hot-reload.log
+          cargo test --locked -p pentimento-dioxus-ui --lib 2>&1 | tee evidence/test-ui.log
+          python3 - <<'PY'
+          import pathlib, re
+          log = pathlib.Path('evidence/test-ui.log').read_text()
+          counts = re.findall(r'test result: ok\. (\d+) passed;', log)
+          if not counts:
+              raise SystemExit('No successful library test summary found')
+          total = sum(map(int, counts))
+          receipt = f'Library tests passed: {total}\n' if total else 'NO TESTS EXECUTED: successful command reported zero library tests. This is not behavioral qualification.\n'
+          pathlib.Path('evidence/test-receipt.txt').write_text(receipt)
+          print(receipt)
+          PY
+      - name: Check app and warning-free renderer boundaries
+        run: |
+          set -euo pipefail
+          cargo check --locked -p pentimento --features dioxus 2>&1 | tee evidence/check-app.log
+          cargo rustc --locked -p pentimento-dioxus-ui --lib -- -D warnings 2>&1 | tee evidence/warnings-ui.log
+          cargo rustc --locked -p pentimento-webview --lib --features dioxus -- -D warnings 2>&1 | tee evidence/warnings-webview.log
+          cargo rustc --locked -p pentimento --bin pentimento --features dioxus -- -D warnings 2>&1 | tee evidence/warnings-app.log
+          sha256sum --check resolution/Cargo.lock.sha256
+      - name: Verify retained lock after all attempted checks
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f Cargo.lock && -f resolution/Cargo.lock.sha256 ]]; then
+            sha256sum --check resolution/Cargo.lock.sha256 | tee evidence/final-lock-check.txt
+          else
+            echo 'Lock was not materialized; qualification incomplete.'
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dioxus-focused-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
