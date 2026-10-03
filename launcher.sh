@@ -484,6 +484,12 @@ run_verification_suite() {
         cargo test -p sculpting --lib
         npm run verify
         build_ui
+        # Exercise depth capability/state regressions on every canonical source head.
+        # Run complete library suites so renamed test modules cannot silently filter to zero.
+        cargo test --locked -p pentimento-scene --lib
+        cargo test --locked -p pentimento-frontend-core --lib
+        cargo test --locked -p pentimento-dioxus-ui --lib
+        cargo test --locked -p pentimento-egui-ui --lib
         cargo check -p pentimento --features egui
         cargo check -p pentimento --features dioxus
         cargo check -p pentimento --features cef
