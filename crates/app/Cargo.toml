@@ -46,7 +46,8 @@ default = ["wayland", "wireframe", "selection", "mesh_painting", "mesh_editing",
 sculpting = ["pentimento-scene/sculpting"]
 wayland = []
 x11 = []
-cef = ["pentimento-webview/cef"]
+# The shared UI command dispatcher uses painting directly in every active frontend.
+cef = ["pentimento-webview/cef", "dep:painting"]
 dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui", "dep:pollster", "dep:painting"]
 egui = ["dep:bevy_egui", "dep:pentimento-egui-ui", "dep:painting"]
 local-diffusion = ["pentimento-diffusion/local"]
