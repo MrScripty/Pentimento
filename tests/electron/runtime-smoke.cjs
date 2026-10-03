@@ -6,6 +6,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
 const { inspectScene, measureScene } = require('./frame-evidence.cjs');
+const { createSandboxObserver } = require('./sandbox-observer.cjs');
 const root = path.resolve(__dirname, '../..');
 const preflight = process.argv.includes('--preflight');
 const phase = preflight ? 'environment' : 'production';
@@ -24,6 +25,7 @@ async function prepareShutdown() {
     }
 }
 let lastCanvasCapture;
+let productionObserver;
 function fail(error) {
     result.errors.push(String(error?.stack || error));
     try {
@@ -33,6 +35,8 @@ function fail(error) {
     } catch (captureError) {
         result.errors.push(`Could not preserve last canvas: ${captureError}`);
     }
+    try { productionObserver?.cleanup(); }
+    catch (cleanupError) { result.errors.push(`Observer cleanup failed: ${cleanupError}`); }
     save();
     console.error(error);
     app.exit(1);
@@ -49,6 +53,8 @@ for (const flag of ['no-sandbox', 'disable-setuid-sandbox', 'disable-web-securit
 app.on('will-quit', () => {
     clearTimeout(timeout);
     result.willQuit = true;
+    try { productionObserver?.cleanup(); }
+    catch (error) { return fail(error); }
     save();
 });
 
@@ -78,6 +84,8 @@ if (preflight) {
     }
     app.on('browser-window-created', (_event, win) => {
         const contents = win.webContents;
+        try { productionObserver.bind(contents); }
+        catch (error) { return fail(error); }
         contents.on('did-fail-load', (_event, code, description, url, mainFrame) => {
             if (mainFrame) fail(new Error(`production load failed ${code}: ${description} (${url})`));
         });
@@ -109,7 +117,9 @@ if (preflight) {
                 assert.equal(preferences.contextIsolation, true);
                 assert.equal(preferences.sandbox, true);
                 result.preferences = { nodeIntegration: preferences.nodeIntegration, contextIsolation: preferences.contextIsolation, sandbox: preferences.sandbox, preload: preferences.preload };
-                result.sandbox = await contents.executeJavaScriptInIsolatedWorld(999, [{ code: '({sandboxed: process.sandboxed, contextIsolated: process.contextIsolated})' }]);
+                // Observe documented process flags from an additional restricted session preload.
+                // This is actual renderer instrumentation, not an independent kernel attestation.
+                result.sandbox = await productionObserver.observation;
                 assert.equal(result.sandbox.sandboxed, true);
                 assert.equal(result.sandbox.contextIsolated, true);
                 result.renderer = await contents.executeJavaScript(`(() => {
@@ -178,10 +188,12 @@ if (preflight) {
     });
     // Prove the canonical production layout is self-contained once installed.
     app.whenReady().then(() => {
+        productionObserver = createSandboxObserver({ ipcMain, session: session.defaultSession,
+            expectedUrl: pathToFileURL(expectedDocument).href, onFailure: fail });
         session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
             result.network.push(details.url);
             callback({ cancel: true });
         });
-    });
-    require(path.join(root, 'src-electron/dist/main.js'));
+        require(path.join(root, 'src-electron/dist/main.js'));
+    }).catch(fail);
 }
