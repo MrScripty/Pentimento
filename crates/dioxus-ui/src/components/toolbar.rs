@@ -142,6 +142,18 @@ const TOOLBAR_CSS: &str = r#"
     font-size: 16px;
 }
 
+.tool-button:disabled,
+.tool-button-selected:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.depth-view-status {
+    max-width: 220px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
 /* .icon class removed - icons styled directly on .tool-button */
 
 .stats {
@@ -238,6 +250,12 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
     let mut open_menu = props.open_menu;
     let mut selected_tool = use_signal(|| "select".to_string());
     let shared_state = props.shared_state.clone();
+    let depth_view_reason = shared_state.depth_view_reason.clone().or_else(|| {
+        (!shared_state.depth_view_available).then(|| "Depth view is unavailable.".to_string())
+    });
+    let depth_view_title = depth_view_reason
+        .clone()
+        .unwrap_or_else(|| "Depth View".to_string());
 
     let bridge = props.bridge.clone();
     let bridge_for_reset = bridge.clone();
@@ -520,27 +538,26 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
             }
 
             div { class: "toolbar-right",
-                // Depth view toggle
-                if shared_state.depth_view_enabled {
-                    button {
-                        class: "tool-button-selected",
-                        title: "Depth View (active)",
-                        onclick: {
-                            let bridge = bridge.clone();
-                            move |_| bridge.set_depth_view(false)
-                        },
-                        "D"
-                    }
-                } else {
-                    button {
-                        class: "tool-button",
-                        title: "Depth View",
-                        onclick: {
-                            let bridge = bridge.clone();
-                            move |_| bridge.set_depth_view(true)
-                        },
-                        "D"
-                    }
+                // State changes only after a backend acknowledgement.
+                button {
+                    class: if shared_state.depth_view_enabled { "tool-button-selected" } else { "tool-button" },
+                    title: depth_view_title,
+                    disabled: !shared_state.depth_view_available,
+                    aria_label: "Toggle depth view",
+                    aria_pressed: shared_state.depth_view_enabled,
+                    aria_describedby: "depth-view-status",
+                    onclick: {
+                        let bridge = bridge.clone();
+                        move |_| bridge.set_depth_view(!shared_state.depth_view_enabled)
+                    },
+                    "D"
+                }
+                span {
+                    id: "depth-view-status",
+                    class: "depth-view-status",
+                    role: "status",
+                    hidden: depth_view_reason.is_none(),
+                    {depth_view_reason.unwrap_or_default()}
                 }
                 button {
                     class: "nav-button",

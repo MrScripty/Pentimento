@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 class FakeWindow extends EventTarget {
     __ELECTRON__ = true;
     __PENTIMENTO_RECEIVE__?: (msg: string) => void;
+    __PENTIMENTO_IPC__?: { postMessage: (msg: string) => void };
     listenerCounts = new Map<string, Set<EventListenerOrEventListenerObject>>();
 
     override addEventListener(
@@ -183,3 +184,37 @@ test('bridge.dispose restores the previous native receiver', async () => {
     assert.equal(events.length, 0);
     assert.equal(fakeWindow.__PENTIMENTO_RECEIVE__, previousReceiver);
 });
+
+for (const mode of ['wasm', 'native'] as const) {
+    test(`${mode} bridge queries depth state and delivers authoritative replies`, async () => {
+        const { fakeWindow, events } = setupDom(mode);
+        if (mode === 'native') {
+            fakeWindow.__PENTIMENTO_IPC__ = { postMessage: (message) => events.push(message) };
+        }
+        const { bridge } = await importBridgeModule();
+        const received: unknown[] = [];
+        const unsubscribe = bridge.subscribe((message: unknown) => received.push(message));
+        bridge.getDepthViewState();
+        bridge.setDepthView(true);
+        assert.deepEqual(events.map((message) => JSON.parse(message)), [
+            { type: 'GetDepthViewState' },
+            { type: 'SetDepthView', data: { enabled: true } },
+        ]);
+        assert.deepEqual(received, [], 'commands must not synthesize an enabled reply');
+
+        const messages = [
+            { type: 'DepthViewRejected', data: { reason: 'OpenGL/WebGL is unsupported.' } },
+            { type: 'DepthViewState', data: { available: false, enabled: false, reason: 'OpenGL/WebGL is unsupported.' } },
+        ];
+        for (const message of messages) {
+            if (mode === 'native') {
+                fakeWindow.__PENTIMENTO_RECEIVE__!(JSON.stringify(message));
+            } else {
+                fakeWindow.dispatchEvent(new CustomEvent('pentimento:bevy-to-ui', { detail: JSON.stringify(message) }));
+            }
+        }
+        assert.deepEqual(received, messages);
+        unsubscribe();
+        bridge.dispose();
+    });
+}
