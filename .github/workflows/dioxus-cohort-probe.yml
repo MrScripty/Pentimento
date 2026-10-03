@@ -182,3 +182,76 @@ jobs:
           path: evidence/
           if-no-files-found: error
           retention-days: 14
+  audit:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Set isolated Cargo paths
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/audit-cargo" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/audit-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: dioxus-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: resolution
+      - name: Verify reviewed lock and install pinned scanner
+        env:
+          EXPECTED_LOCK_SHA256: ${{ needs.resolve.outputs.lock-sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(cat resolution/source-sha.txt)" = "$CANDIDATE_SHA"
+          test "$(cat resolution/run.txt)" = "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT"
+          actual=$(sha256sum resolution/Cargo.lock | cut -d ' ' -f 1)
+          test "$actual" = "$EXPECTED_LOCK_SHA256"
+          # Security review is for the exact already-reviewed cohort, not a fresh drift.
+          test "$actual" = 98f1accafe28379d9c7395877af426cc05bb89e2419378a0408293819e93be2f
+          cp resolution/{source-sha.txt,run.txt,Cargo.lock,Cargo.lock.sha256} evidence/
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          cargo install cargo-audit --version '=0.22.2' --locked 2>&1 | tee evidence/scanner-install.log
+          "$CARGO_HOME/bin/cargo-audit" audit --version > evidence/scanner-version.txt
+      - name: Audit advisories, unmaintained, unsound and yanked packages
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE"
+          db="$RUNNER_TEMP/advisory-db"
+          git init "$db"
+          git -C "$db" remote add origin https://github.com/RustSec/advisory-db.git
+          git -C "$db" fetch --depth=1 origin ef6173cbc5c50ec8166f9a5b28f07834144373ee
+          git -C "$db" checkout --detach FETCH_HEAD
+          git -C "$db" rev-parse HEAD > evidence/advisory-db-sha.txt
+          git -C "$db" show -s --format=%cI HEAD > evidence/advisory-db-date.txt
+          date -u +%FT%TZ > evidence/audit-time.txt
+          # Run outside the project to avoid repository Cargo/audit configuration.
+          mkdir -p "$RUNNER_TEMP/audit-empty"
+          cd "$RUNNER_TEMP/audit-empty"
+          set +e
+          "$CARGO_HOME/bin/cargo-audit" audit --file "$root/resolution/Cargo.lock" \
+            --db "$db" --no-fetch --deny warnings --json \
+            > "$root/evidence/audit.json" 2> "$root/evidence/audit.stderr"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$root/evidence/audit-exit-code.txt"
+          cd "$root/resolution"
+          sha256sum --check Cargo.lock.sha256
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dioxus-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
