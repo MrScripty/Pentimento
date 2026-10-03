@@ -72,6 +72,7 @@ Node.js 22+ is required for the Svelte and Electron tooling.
 
 - active source-directory README coverage
 - active frontend Rust formatting
+- sculpting library unit tests, including the v1 normal codec and brush packets
 - Svelte accessibility linting
 - TypeScript typechecking for the browser and Electron shells
 - Rust-to-JavaScript IPC acceptance coverage

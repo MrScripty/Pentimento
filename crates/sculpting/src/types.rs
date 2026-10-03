@@ -91,13 +91,17 @@ impl SculptDab {
         ((clamped - 0.5) / 1.5 * 255.0) as u8
     }
 
-    /// Decode normal hint to unit vector (quantized to 256 directions).
+    /// Decode normal hint to a unit vector on the 16-by-16 spherical grid.
+    ///
+    /// This inverts the encoder's azimuth offset. Existing v1 bytes are unchanged,
+    /// but their decoded direction differs from the former offset-free decoder.
     pub fn decode_normal(&self) -> Vec3 {
         // Simple sphere mapping: hint encodes phi (0-15) and theta (0-15)
         let phi_idx = (self.normal_hint >> 4) as f32;
         let theta_idx = (self.normal_hint & 0x0F) as f32;
 
         let phi = phi_idx / 16.0 * std::f32::consts::PI;
+        // Undo the +PI offset in encode_normal; keep the existing bin edges.
         let theta = theta_idx / 16.0 * std::f32::consts::TAU;
 
         Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
@@ -252,4 +256,149 @@ pub enum TessellationAction {
     Collapse,
     /// No action needed
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::{PI, TAU};
+
+    // Floor quantization contributes at most one polar bin plus one azimuth
+    // bin along a spherical path. This conservative bound includes the clamped
+    // south pole and +PI seam; it is not a nearest-neighbor error claim.
+    const MAX_NORMAL_ERROR: f32 = PI / 16.0 + TAU / 16.0 + 1e-5;
+
+    fn dab_with_normal_hint(normal_hint: u8) -> SculptDab {
+        SculptDab {
+            dx: 0,
+            dy: 0,
+            dz: 0,
+            pressure: 255,
+            radius_scale: 85,
+            normal_hint,
+            _padding: [0, 0],
+        }
+    }
+
+    fn angular_error(normal: Vec3, decoded: Vec3) -> f32 {
+        normal.normalize().dot(decoded).clamp(-1.0, 1.0).acos()
+    }
+
+    #[test]
+    fn normal_hint_encoder_preserves_golden_bytes_and_dab_layout() {
+        // Literal v1 bytes protect the existing encoder independently of decode.
+        let cases = [
+            (Vec3::new(1.0, 0.0, 0.0), 0x88),
+            (Vec3::new(0.0, 1.0, 0.0), 0x8c),
+            (Vec3::new(-1.0, 0.0, 0.0), 0x8f),
+            (Vec3::new(0.0, -1.0, 0.0), 0x84),
+            (Vec3::new(0.0, 0.0, 1.0), 0x08),
+            (Vec3::new(0.0, 0.0, -1.0), 0xf8),
+            (Vec3::new(1.0, 2.0, 3.0), 0x3a),
+            (Vec3::new(-2.0, 1.0, -3.0), 0xce),
+            (Vec3::new(-1.0, -2.0, 3.0), 0x32),
+            (Vec3::new(2.0, -1.0, -3.0), 0xc6),
+        ];
+        assert_eq!(std::mem::size_of::<SculptDab>(), 8);
+        for (normal, expected) in cases {
+            let encoded = SculptDab::encode_normal(normal);
+            assert_eq!(encoded, expected, "normal {normal:?}");
+            let dab = SculptDab {
+                dx: -1,
+                dy: 2,
+                dz: -3,
+                pressure: 127,
+                radius_scale: SculptDab::encode_radius_scale(1.0),
+                normal_hint: encoded,
+                _padding: [0, 0],
+            };
+            assert_eq!(
+                bytemuck::bytes_of(&dab),
+                &[255, 2, 253, 127, 85, expected, 0, 0]
+            );
+            assert_eq!(dab.radius_multiplier(), 1.0);
+        }
+    }
+
+    #[test]
+    fn normal_hint_roundtrips_cardinal_and_mixed_directions() {
+        for normal in [
+            Vec3::X,
+            Vec3::Y,
+            Vec3::NEG_X,
+            Vec3::NEG_Y,
+            Vec3::Z,
+            Vec3::NEG_Z,
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(-2.0, 1.0, -3.0),
+            Vec3::new(-1.0, -2.0, 3.0),
+            Vec3::new(2.0, -1.0, -3.0),
+        ] {
+            let hint = SculptDab::encode_normal(normal);
+            let decoded = dab_with_normal_hint(hint).decode_normal();
+            let error = angular_error(normal, decoded);
+            assert!(
+                error <= MAX_NORMAL_ERROR,
+                "normal {normal:?}, hint {hint:#04x}, error {error}"
+            );
+        }
+        // The equatorial zero-azimuth bin must point along +X, not -X.
+        assert!(dab_with_normal_hint(0x88).decode_normal().distance(Vec3::X) < 1e-6);
+    }
+
+    #[test]
+    fn normal_hint_seam_keeps_both_sides_near_negative_x() {
+        // Signed zero selects the two atan2 endpoints. +PI remains clamped to
+        // bin 15 while -PI selects bin 0; preserving those bytes is intentional.
+        for (normal, expected_hint) in [
+            (Vec3::new(-1.0, 0.0, 0.0), 0x8f),
+            (Vec3::new(-1.0, -0.0, 0.0), 0x80),
+            (Vec3::new(-1.0, 1e-4, 0.0), 0x8f),
+            (Vec3::new(-1.0, -1e-4, 0.0), 0x80),
+        ] {
+            let hint = SculptDab::encode_normal(normal);
+            assert_eq!(hint, expected_hint);
+            let decoded = dab_with_normal_hint(hint).decode_normal();
+            assert!(angular_error(normal, decoded) <= TAU / 16.0 + 1e-5);
+        }
+    }
+
+    #[test]
+    fn normal_hint_poles_preserve_existing_polar_quantization() {
+        let north = dab_with_normal_hint(SculptDab::encode_normal(Vec3::Z)).decode_normal();
+        let south = dab_with_normal_hint(SculptDab::encode_normal(Vec3::NEG_Z)).decode_normal();
+        assert!(north.distance(Vec3::Z) < 1e-6);
+        // The stored polar index is capped at 15, so south is one bin short of PI.
+        assert!((angular_error(Vec3::NEG_Z, south) - PI / 16.0).abs() < 1e-5);
+        assert!(south.x > 0.0);
+    }
+
+    #[test]
+    fn normal_hint_all_bytes_decode_to_finite_unit_vectors() {
+        for hint in u8::MIN..=u8::MAX {
+            let decoded = dab_with_normal_hint(hint).decode_normal();
+            assert!(decoded.is_finite(), "hint {hint:#04x}");
+            assert!((decoded.length() - 1.0).abs() < 1e-6, "hint {hint:#04x}");
+        }
+    }
+
+    #[test]
+    fn normal_hint_roundtrip_stays_within_conservative_angular_bound() {
+        // Deterministic samples across all octants and bin boundaries, including
+        // both seam endpoints and poles. This does not qualify invalid normals.
+        for latitude in 0..=128 {
+            let phi = latitude as f32 / 128.0 * PI;
+            for longitude in 0..=256 {
+                let theta = longitude as f32 / 256.0 * TAU - PI;
+                let normal = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
+                let hint = SculptDab::encode_normal(normal);
+                let decoded = dab_with_normal_hint(hint).decode_normal();
+                let error = angular_error(normal, decoded);
+                assert!(
+                    error <= MAX_NORMAL_ERROR,
+                    "normal {normal:?}, hint {hint:#04x}, error {error}"
+                );
+            }
+        }
+    }
 }
