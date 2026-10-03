@@ -119,7 +119,10 @@ declaration. Only `propext`, `Classical.choice`, and `Quot.sound` are allowed.
 Custom axioms, unfinished proof axioms and native-evaluation axioms fail closed.
 Negative controls deliberately introduce each forbidden category and require
 an explicit audit rejection. There is no `native_decide` in the proof modules.
-Rational fixtures use ordinary `decide`, whose resulting proof is kernel-checked.
+Rational fixtures use `norm_num`, whose resulting proof is kernel-checked.
+The first hosted build compiled FixedSpacing but exposed reducibility limits
+in the initial `decide` fixture proofs; those now use proof-producing arithmetic
+normalization, without adding native-evaluation axioms.
 
 Local preparation checks that DID run:
 
