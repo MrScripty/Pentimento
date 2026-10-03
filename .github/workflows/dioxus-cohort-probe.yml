@@ -26,9 +26,6 @@ env:
 jobs:
   resolve:
     runs-on: ubuntu-24.04
-    env:
-      CARGO_HOME: ${{ runner.temp }}/cohort-cargo
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cohort-target
     timeout-minutes: 25
     outputs:
       lock-sha256: ${{ steps.resolve.outputs.lock-sha256 }}
@@ -36,6 +33,10 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Set isolated Cargo paths on the runner
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/cohort-cargo" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cohort-target" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
@@ -80,14 +81,15 @@ jobs:
   focused:
     needs: resolve
     runs-on: ubuntu-24.04
-    env:
-      CARGO_HOME: ${{ runner.temp }}/cohort-cargo
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cohort-target
     timeout-minutes: 60
     defaults:
       run:
         shell: bash
     steps:
+      - name: Set isolated Cargo paths on the runner
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/cohort-cargo" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cohort-target" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.CANDIDATE_SHA }}
