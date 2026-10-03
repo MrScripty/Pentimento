@@ -221,6 +221,12 @@ jobs:
           cp resolution/{source-sha.txt,run.txt,Cargo.lock,Cargo.lock.sha256} evidence/
           rustc -Vv > evidence/rustc.txt
           cargo -V > evidence/cargo.txt
+          # --no-fetch also prevents cargo-audit from filling absent index entries.
+          # Resolve the unchanged project lock in this same Cargo home first.
+          test ! -e Cargo.lock
+          cp resolution/Cargo.lock Cargo.lock
+          cargo metadata --locked --format-version 1 --features pentimento-dioxus-ui/hot-reload > evidence/audit-metadata.json
+          sha256sum --check resolution/Cargo.lock.sha256
           cargo install cargo-audit --version '=0.22.2' --locked 2>&1 | tee evidence/scanner-install.log
           "$CARGO_HOME/bin/cargo-audit" audit --version > evidence/scanner-version.txt
       - name: Audit advisories, unmaintained, unsound and yanked packages
@@ -247,6 +253,10 @@ jobs:
           printf '%s\n' "$status" > "$root/evidence/audit-exit-code.txt"
           cd "$root/resolution"
           sha256sum --check Cargo.lock.sha256
+          if grep -Eq "couldn.t (check|open|update)" "$root/evidence/audit.stderr"; then
+            echo "Incomplete registry/advisory coverage; audit is not conclusive." > "$root/evidence/coverage-error.txt"
+            exit 2
+          fi
           exit "$status"
       - uses: actions/upload-artifact@v4
         if: always()
