@@ -37,7 +37,9 @@ jobs:
           "$RUNNER_TEMP/elan-init" -y --no-modify-path --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: Verify pins and source policy
-        run: python3 scripts/check_sources.py
+        run: |
+          python3 scripts/check_sources.py
+          python3 scripts/test_source_inventory.py
       - name: Fetch pinned mathematical library cache
         run: |
           set -euo pipefail

@@ -114,8 +114,19 @@ python3 scripts/test_axiom_audit.py
 python3 scripts/check_fixtures.py
 ```
 
-`AxiomAudit.lean` examines kernel dependencies of every public `Pentimento.*`
-declaration. Only `propext`, `Classical.choice`, and `Quot.sound` are allowed.
+`AxiomAudit.lean` examines transitive kernel dependencies of every public
+`Pentimento.*` theorem, every public axiom declaration, and all seven explicitly
+inventoried source definitions. The source check requires an exact match to the reviewed declaration inventory;
+the audit also checks that every expected definition and theorem is present.
+The source gate enforces a narrow reviewed Lean grammar and exact file list,
+including the root import module. Explicit reviewed SHA-256 source digests
+additionally reject all source changes, even declaration syntax the scanner does
+not recognize; changes require source-and-audit review and an explicit digest
+update. CI never regenerates this allowlist. Negative tests cover indented, attributed,
+noncomputable, opaque and root-file declarations.
+Compiler-generated runtime specialization auxiliaries are not proof declarations
+and are not audit roots; their placeholder axioms are never allowlisted. If any
+such axiom becomes a theorem dependency, the same audit rejects it. Only `propext`, `Classical.choice`, and `Quot.sound` are allowed.
 Custom axioms, unfinished proof axioms and native-evaluation axioms fail closed.
 Negative controls deliberately introduce each forbidden category and require
 an explicit audit rejection. There is no `native_decide` in the proof modules.

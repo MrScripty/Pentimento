@@ -13,7 +13,7 @@ attacks = {
 }
 for label, declaration in attacks.items():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".lean", dir=".") as f:
-        f.write("import Mathlib\nimport Lean.Util.CollectAxioms\n" + declaration + command)
+        f.write("import Pentimento\nimport Mathlib\nimport Lean.Util.CollectAxioms\n" + declaration + command)
         f.flush()
         result = subprocess.run(["lake", "env", "lean", f.name], text=True, capture_output=True)
     output = result.stdout + result.stderr
