@@ -1,0 +1,57 @@
+name: Lean brush spacing
+
+on:
+  pull_request:
+    paths:
+      - 'proofs/brush-spacing/**'
+      - '.github/workflows/lean-brush-spacing.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'proofs/brush-spacing/**'
+      - '.github/workflows/lean-brush-spacing.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-phase-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: proofs/brush-spacing
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install official pinned elan and Lean (hosted runner only)
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/leanprover/elan/releases/download/v4.1.2/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o "$RUNNER_TEMP/elan.tar.gz"
+          tar -xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/elan-init" -y --no-modify-path --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Verify pins and source policy
+        run: python3 scripts/check_sources.py
+      - name: Fetch pinned mathematical library cache
+        run: |
+          set -euo pipefail
+          lake exe cache get
+          git diff --exit-code -- lake-manifest.json lean-toolchain lakefile.toml
+          test "$(git -C .lake/packages/mathlib rev-parse HEAD)" = c44e0c8ee63ca166450922a373c7409c5d26b00b
+          lean --version
+      - name: Kernel-check theorems and rational fixtures
+        run: lake build
+      - name: Inspect transitive kernel axioms
+        run: |
+          set -euo pipefail
+          lake env lean AxiomAudit.lean 2>&1 | tee axiom-audit.log
+      - name: Verify audit rejects disallowed assumptions
+        run: python3 scripts/test_axiom_audit.py
+      - name: Execute independent exact-rational regression oracle
+        run: python3 scripts/check_fixtures.py
