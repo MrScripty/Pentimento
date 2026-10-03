@@ -9,7 +9,7 @@ concurrency:
   group: depth-capability-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 env:
-  SOURCE_SHA: '2022d754b393fd1a7ce08205bee955d45bf272d8'
+  SOURCE_SHA: '415a3fc1e78583060062ee1e805edb1dd0850eb9'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
   CARGO_INCREMENTAL: '0'
