@@ -6,6 +6,7 @@ pub type EguiUiSnapshot = NativeUiState;
 /// UI-local state owned by the egui presentation layer.
 #[derive(Debug, Clone)]
 pub struct EguiUiRuntime {
+    pub(crate) depth_view_state_requested: bool,
     pub add_object_menu_open: bool,
     pub time_of_day: f32,
     pub cloudiness: f32,
@@ -24,6 +25,7 @@ pub struct EguiUiRuntime {
 impl Default for EguiUiRuntime {
     fn default() -> Self {
         Self {
+            depth_view_state_requested: false,
             add_object_menu_open: false,
             time_of_day: 12.0,
             cloudiness: 0.0,

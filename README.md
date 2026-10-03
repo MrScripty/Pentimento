@@ -72,7 +72,16 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli
 ```
 
-Node.js 22+ is required for the Svelte and Electron tooling.
+Node.js 22.12+ is required for the Svelte and Electron 44 tooling.
+The canonical `--install` explicitly runs the installed `install-electron`
+command after `npm ci`, so the runtime binary is acquired during bootstrap,
+not on first launch. Readiness checks inspect the lockfile version, installed
+package, binary version marker, and executable without importing Electron.
+The Electron runtime CI separately builds genuine production UI/WASM, checks the
+ordinary Linux sandbox and preload isolation, and records canvas-only scene
+captures for visual review. Its test-only Linux supervisor records descendant
+PID/start-time identities before shutdown and verifies observed process exits;
+a `will-quit` event alone is not considered completed shutdown.
 
 ## Verification
 

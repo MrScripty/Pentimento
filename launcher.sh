@@ -190,13 +190,14 @@ install_root_node_modules() {
 }
 
 check_electron_node_modules() {
-    [[ -x "${PROJECT_ROOT}/src-electron/node_modules/.bin/electron" ]]
+    node "${PROJECT_ROOT}/src-electron/check-install.cjs"
 }
 
 install_electron_node_modules() {
     (
-        cd "${PROJECT_ROOT}/src-electron"
-        npm ci
+        cd "${PROJECT_ROOT}/src-electron" &&
+        npm ci &&
+        ./node_modules/.bin/install-electron
     )
 }
 
@@ -484,6 +485,12 @@ run_verification_suite() {
         cargo test --locked -p sculpting --lib
         npm run verify
         build_ui
+        # Exercise depth capability/state regressions on every canonical source head.
+        # Run complete library suites so renamed test modules cannot silently filter to zero.
+        cargo test --locked -p pentimento-scene --lib
+        cargo test --locked -p pentimento-frontend-core --lib
+        cargo test --locked -p pentimento-dioxus-ui --lib
+        cargo test --locked -p pentimento-egui-ui --lib
         cargo check --locked -p pentimento --features egui
         cargo check --locked -p pentimento --features dioxus
         cargo check --locked -p pentimento --features cef
