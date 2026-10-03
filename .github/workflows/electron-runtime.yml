@@ -44,12 +44,12 @@ jobs:
           npm audit --json > electron-runtime-evidence/root-audit.json
           npm --prefix src-electron audit --json > electron-runtime-evidence/electron-audit.json
       - name: Check ordinary Linux renderer sandbox
-        run: env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py environment ./src-electron/node_modules/electron/dist/electron tests/electron/runtime-smoke.cjs --preflight
+        run: env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py environment ./src-electron/node_modules/electron/dist/electron --use-gl=angle --use-angle=swiftshader tests/electron/runtime-smoke.cjs --preflight
       - name: Build genuine production UI and Bevy WASM
         run: ./launcher.sh --build --frontend electron
       - name: Qualify production rendering and shutdown
         run: |
-          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py production ./src-electron/node_modules/electron/dist/electron tests/electron/runtime-smoke.cjs
+          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py production ./src-electron/node_modules/electron/dist/electron --use-gl=angle --use-angle=swiftshader tests/electron/runtime-smoke.cjs
           sha256sum --check "$RUNNER_TEMP/electron-locks.sha256"
       - name: Preserve runtime qualification evidence
         if: always()
