@@ -1,11 +1,16 @@
 # Fixed-spacing phase accounting: first Lean milestone
 
-**Status: source candidate, not yet Lean-compiled or kernel-verified.** This
-isolated package is a specification for review, not a correctness claim about
-Pentimento's Rust implementation. The current preparation environment has no
-Lean/lake and less than 1 GB free disk. No local toolchain, dependency cache,
-or heavy build was installed. Hosted verification must pass before describing
-these theorems as checked.
+**Status: exact-real proof milestone verified on hosted CI.**
+[Run 37125580657](https://github.com/MrScripty/Pentimento/actions/runs/37125580657)
+passed at commit `483af7ece3b0adb747045f5c7dbb7e95db6cbc32`: Lean build,
+47-declaration transitive axiom audit, three forbidden-axiom negative controls,
+five source-inventory negative controls, and the independent rational oracle.
+See `verification.json` for the exact receipt. This is a specification result,
+not a correctness claim about Pentimento's Rust implementation.
+
+Preparation used a source-only environment with no Lean/lake and less than
+1 GB free disk. No local toolchain, dependency cache or heavy build was installed;
+all Lean verification ran on the hosted runner.
 
 ## Mathematical contract
 
@@ -95,7 +100,7 @@ Pins, verified against the official repositories:
   that release's official manifest; it is source-prepared, not Lake-generated
 - hosted bootstrap: official elan v4.1.2; checkout action pinned to full commit
 
-The proposed `.github/workflows/lean-brush-spacing.yml` is a separate read-only
+The `.github/workflows/lean-brush-spacing.yml` is a separate read-only
 job on Ubuntu 24.04, limited to changes in this proof package/workflow, with a
 30-minute cap. It downloads the toolchain and mathlib only on the hosted runner,
 checks that resolving dependencies did not mutate the manifest, builds the
@@ -143,6 +148,9 @@ Local preparation checks that DID run:
 - both old-loop divergence models
 - Python syntax checks and `git diff --check`
 
-NOT run locally: Lean elaboration, kernel build, axiom audit and its negative
-controls, hosted Actions, Rust tests. The Python oracle is supporting evidence,
-not a substitute for Lean checking, and it does not prove Rust refinement.
+Lean elaboration, kernel build, axiom audit and negative controls ran successfully
+on hosted CI, not locally. Rust tests were not run for this proof-only change.
+The inherited active-frontends workflow still fails at its npm lockfile setup
+on this baseline; this separate job does not establish whole-repository health.
+The Python oracle is supporting evidence, not a substitute for Lean checking,
+and neither it nor these proofs establishes Rust refinement.
