@@ -46,7 +46,10 @@ jobs:
           sha256sum --check "$RUNNER_TEMP/npm-lockfiles.sha256"
 
       - name: Verify active frontends
-        run: ./launcher.sh --test
+        run: |
+          sha256sum Cargo.lock > "$RUNNER_TEMP/cargo-lock.sha256"
+          ./launcher.sh --test
+          sha256sum --check "$RUNNER_TEMP/cargo-lock.sha256"
 
   sculpting:
     runs-on: ubuntu-24.04
@@ -64,7 +67,7 @@ jobs:
         run: rustfmt --edition 2024 --check crates/sculpting/src/types.rs crates/sculpting/src/brush.rs
 
       - name: Test sculpting library
-        run: cargo test -p sculpting --lib
+        run: cargo test --locked -p sculpting --lib
 
       - name: Lint sculpting library
-        run: cargo clippy -p sculpting --lib --tests
+        run: cargo clippy --locked -p sculpting --lib --tests

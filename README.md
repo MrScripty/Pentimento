@@ -76,7 +76,13 @@ Node.js 22+ is required for the Svelte and Electron tooling.
 
 ## Verification
 
-`./launcher.sh --test` is the canonical local verification command. It currently enforces:
+`./launcher.sh --test` is the canonical local verification command. Canonical launcher
+builds/checks and CI checks use the committed root `Cargo.lock` with `--locked`; dependency
+changes require explicit lock review. See [dependency lock provenance and known
+audit findings](docs/cargo-lock-baseline.md). This reproducibility baseline is
+not security clearance or a runtime support guarantee.
+
+The verification suite currently enforces:
 
 - active source-directory README coverage
 - active frontend Rust formatting

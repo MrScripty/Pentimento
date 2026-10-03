@@ -1,5 +1,8 @@
 # Dioxus renderer dependency compatibility
 
+For the generated lock, hosted checks and unresolved security findings, see
+[the committed lock baseline](cargo-lock-baseline.md).
+
 ## Candidate scope
 
 Keep `blitz-dom`, `blitz-paint`, `blitz-traits`, and `dioxus-native-dom`
@@ -76,6 +79,6 @@ Before declaring this repair complete:
    findings rather than treating compilation or a clean audit as proof of
    support or absence of vulnerabilities.
 
-No hosted resolution, build, security audit, or runtime qualification is implied
-by this document. Preserve failed logs as evidence and stop for review before
-broadening the dependency or caller changes.
+The linked baseline records hosted resolution, focused compilation and audit
+results. These do not imply runtime qualification. Preserve failed logs as
+evidence and stop for review before broadening dependency or caller changes.
