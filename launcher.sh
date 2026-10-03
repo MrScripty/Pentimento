@@ -483,6 +483,7 @@ run_verification_suite() {
         ./scripts/rustfmt-active.sh --check
         cargo test -p sculpting --lib
         npm run verify
+        build_ui
         cargo check -p pentimento --features egui
         cargo check -p pentimento --features dioxus
         cargo check -p pentimento --features cef
