@@ -16,6 +16,9 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            src-electron/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -36,7 +39,10 @@ jobs:
         run: cargo install wasm-bindgen-cli
 
       - name: Install repo dependencies
-        run: ./launcher.sh --install
+        run: |
+          sha256sum package-lock.json src-electron/package-lock.json > "$RUNNER_TEMP/npm-lockfiles.sha256"
+          ./launcher.sh --install
+          sha256sum --check "$RUNNER_TEMP/npm-lockfiles.sha256"
 
       - name: Verify active frontends
         run: ./launcher.sh --test
