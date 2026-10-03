@@ -557,7 +557,7 @@ pub fn Toolbar(props: ToolbarProps) -> Element {
                     class: "depth-view-status",
                     role: "status",
                     hidden: depth_view_reason.is_none(),
-                    {depth_view_reason.unwrap_or_default()}
+                    {depth_view_reason.clone().unwrap_or_default()}
                 }
                 button {
                     class: "nav-button",
