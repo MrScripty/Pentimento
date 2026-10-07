@@ -30,8 +30,9 @@ jobs:
       # Official CEF documentation links this recognized binary distributor.
       # cef-dll-sys selects and verifies the archive matching its binding version.
       CEF_DOWNLOAD_URL: https://cef-builds.spotifycdn.com
-      PENTIMENTO_EVIDENCE_DIR: ${{ runner.temp }}/pentimento-cef-evidence
     steps:
+      - name: Prepare runner-local evidence path
+        run: echo "PENTIMENTO_EVIDENCE_DIR=$RUNNER_TEMP/pentimento-cef-evidence" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
