@@ -59,3 +59,6 @@ bridge.subscribe((message) => console.log(message.type));
 - `types.ts` defines the stable field names the browser UI expects from Rust.
 - `bridge.ts` emits JSON that matches `UiToBevy`.
 - Contract changes require updates in `crates/ipc/examples/contract_samples.rs` and `tests/contracts/ipc-contract.test.mjs`.
+
+## Brush control boundary
+`brush-values.ts` converts sRGB color inputs to/from linear IPC colors. `layout.ts` publishes interactive rectangles and keyboard focus with teardown, so native hit-testing blocks viewport strokes during widget drags. Brush state lives in the renderer, not browser storage.

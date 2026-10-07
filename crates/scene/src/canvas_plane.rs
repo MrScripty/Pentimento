@@ -143,9 +143,24 @@ fn handle_canvas_plane_events(
     camera_query: Query<&GlobalTransform, With<MainCamera>>,
     mut orbit_camera_query: Query<&mut OrbitCamera>,
     mut paint_mode: ResMut<PaintMode>,
+    edit_mode: Res<crate::edit_mode::EditModeState>,
     mut outbound: ResMut<OutboundUiMessages>,
 ) {
     for event in events.read() {
+        // Do not create a second active brush owner or replace the sculpt UI.
+        // The user must explicitly commit/leave sculpt before entering paint.
+        if edit_mode.mode == EditMode::Sculpt
+            && matches!(
+                event,
+                CanvasPlaneEvent::CreateInFrontOfCamera { .. } | CanvasPlaneEvent::ToggleCameraLock
+            )
+        {
+            outbound.send(BevyToUi::Error {
+                code: "sculpt_session_active".into(),
+                message: "Exit sculpt mode with Ctrl+Tab before entering canvas paint mode.".into(),
+            });
+            continue;
+        }
         match event {
             CanvasPlaneEvent::Create {
                 position,
@@ -376,7 +391,11 @@ fn handle_camera_lock_input(
     // (mesh_edit_mode.rs handles Tab for entering/exiting mesh edit mode)
     if key_input.just_pressed(KeyCode::Tab)
         && active_plane.entity.is_some()
-        && edit_mode.mode != EditMode::MeshEdit
+        && !key_input.pressed(KeyCode::ControlLeft)
+        && !key_input.pressed(KeyCode::ControlRight)
+        && !key_input.pressed(KeyCode::ShiftLeft)
+        && !key_input.pressed(KeyCode::ShiftRight)
+        && !matches!(edit_mode.mode, EditMode::MeshEdit | EditMode::Sculpt)
     {
         events.write(CanvasPlaneEvent::ToggleCameraLock);
     }
@@ -439,6 +458,82 @@ fn sync_active_plane_with_selection(
             active_plane.entity = None;
             active_plane.camera_locked = false;
             info!("Canvas plane deselected, cleared active plane");
+        }
+    }
+}
+
+#[cfg(test)]
+mod brush_mode_shortcut_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn canvas_paint_entry_does_not_replace_sculpt_owner() {
+        for event in [
+            CanvasPlaneEvent::CreateInFrontOfCamera {
+                width: 32,
+                height: 32,
+            },
+            CanvasPlaneEvent::ToggleCameraLock,
+        ] {
+            let mut world = World::new();
+            world.init_resource::<Assets<Mesh>>();
+            world.init_resource::<Assets<StandardMaterial>>();
+            world.init_resource::<Messages<CanvasPlaneEvent>>();
+            world.init_resource::<CanvasPlaneIdGenerator>();
+            world.init_resource::<PaintMode>();
+            world.init_resource::<OutboundUiMessages>();
+            let entity = world.spawn_empty().id();
+            world.insert_resource(ActiveCanvasPlane {
+                entity: Some(entity),
+                camera_locked: false,
+            });
+            world.insert_resource(crate::EditModeState {
+                mode: EditMode::Sculpt,
+                target_entity: Some(entity),
+            });
+            world.write_message(event);
+            world.run_system_once(handle_canvas_plane_events).unwrap();
+            assert!(!world.resource::<PaintMode>().active);
+            assert_eq!(world.resource::<ActiveCanvasPlane>().entity, Some(entity));
+            assert!(!world.resource::<ActiveCanvasPlane>().camera_locked);
+            assert_eq!(world.resource::<CanvasPlaneIdGenerator>().next_id, 0);
+            assert_eq!(
+                world.resource::<crate::EditModeState>().mode,
+                EditMode::Sculpt
+            );
+            assert_eq!(world.query::<&CanvasPlane>().iter(&world).count(), 0);
+            assert!(matches!(
+                world.resource::<OutboundUiMessages>().messages.as_slice(),
+                [BevyToUi::Error { code, .. }] if code == "sculpt_session_active"
+            ));
+        }
+    }
+
+    #[test]
+    fn modified_tab_does_not_also_toggle_canvas_lock() {
+        for modifier in [Some(KeyCode::ControlLeft), Some(KeyCode::ShiftLeft), None] {
+            let mut world = World::new();
+            world.init_resource::<ButtonInput<KeyCode>>();
+            world.init_resource::<Messages<CanvasPlaneEvent>>();
+            world.init_resource::<crate::EditModeState>();
+            world.init_resource::<FrontendInputBlockState>();
+            world.insert_resource(ActiveCanvasPlane {
+                entity: Some(Entity::PLACEHOLDER),
+                camera_locked: false,
+            });
+            world
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Tab);
+            if let Some(key) = modifier {
+                world.resource_mut::<ButtonInput<KeyCode>>().press(key);
+            }
+            world.run_system_once(handle_camera_lock_input).unwrap();
+            let events: Vec<_> = world
+                .resource_mut::<Messages<CanvasPlaneEvent>>()
+                .drain()
+                .collect();
+            assert_eq!(events.len(), usize::from(modifier.is_none()));
         }
     }
 }

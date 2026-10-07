@@ -16,6 +16,7 @@ use bevy::pbr::{Atmosphere, AtmosphereSettings};
 
 mod add_object;
 mod ambient_occlusion;
+mod brush_ui;
 mod camera;
 mod canvas_plane;
 mod depth_view;
@@ -54,6 +55,7 @@ mod wireframe;
 
 pub use add_object::{AddObjectEvent, AddObjectPlugin};
 pub use ambient_occlusion::{AmbientOcclusionPlugin, SceneAmbientOcclusion};
+pub use brush_ui::dispatch_brush_ui_command;
 pub use camera::{CameraControllerPlugin, MainCamera, OrbitCamera};
 pub use canvas_plane::{
     ActiveCanvasPlane, CanvasMaterialUpdated, CanvasPlane, CanvasPlaneEvent,
@@ -63,7 +65,7 @@ pub use depth_view::{
     DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings,
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
-pub use frontend_input::FrontendInputBlockState;
+pub use frontend_input::{FrontendInputBlockState, FrontendUiLayout};
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]
 pub use gizmo_raycast::{GizmoGeometry, GizmoHandle};
@@ -126,6 +128,8 @@ impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OutboundUiMessages>();
         app.init_resource::<FrontendInputBlockState>();
+        app.init_resource::<FrontendUiLayout>();
+        app.add_systems(PostUpdate, brush_ui::sync_brush_ui_state);
 
         app.add_plugins(CameraControllerPlugin);
         app.add_plugins(LightingPlugin);

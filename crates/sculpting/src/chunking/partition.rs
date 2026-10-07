@@ -230,6 +230,7 @@ fn build_chunk_mesh(
         };
 
         let original_verts = source.get_face_vertices(original_face_id);
+        let source_corners = source.get_face_half_edges(original_face_id);
         if original_verts.len() < 3 {
             continue;
         }
@@ -260,6 +261,7 @@ fn build_chunk_mesh(
             half_edges.push(HalfEdge {
                 id: he_id,
                 origin,
+                corner_uv: source.corner_uv(source_corners[i]),
                 twin: None,
                 next: HalfEdgeId(base_he_idx + next_idx as u32),
                 prev: HalfEdgeId(base_he_idx + prev_idx as u32),

@@ -72,11 +72,16 @@ Node.js 22+ is required for the Svelte and Electron tooling.
 
 - active source-directory README coverage
 - active frontend Rust formatting
+- CPU sculpt topology, UV-seam, tessellation, and render-asset synchronization tests
+- combined projection, brush-control, and sculpt mode-transition engine tests
 - Svelte accessibility linting
 - TypeScript typechecking for the browser and Electron shells
 - Rust-to-JavaScript IPC acceptance coverage
 - warning-free cargo checks for the CEF, Dioxus, egui, WASM, and shared native
   UI crates
+
+For the focused integration gate and required rendered CEF acceptance, see
+[paint/sculpt qualification](docs/paint-sculpt-qualification.md).
 
 ## Project Structure
 

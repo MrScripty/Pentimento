@@ -80,139 +80,135 @@ impl HalfEdgeMesh {
     // Topology Queries
     // ========================================================================
 
-    /// Get all faces adjacent to a vertex
-    pub fn get_vertex_faces(&self, vertex_id: VertexId) -> Vec<FaceId> {
-        // Maximum faces per vertex - prevents excessive iteration on complex topology
-        const MAX_VERTEX_FACES: usize = 100;
-
-        let mut faces = Vec::new();
-        let vertex = match self.vertex(vertex_id) {
-            Some(v) => v,
-            None => return faces,
+    /// Traverse both sides of a vertex fan. A boundary can occur on either
+    /// side of the arbitrary outgoing seed; it must not truncate the other side.
+    pub(crate) fn vertex_half_edges(&self, vertex_id: VertexId) -> Vec<HalfEdgeId> {
+        let Some(start) = self.vertex(vertex_id).and_then(|v| v.outgoing_half_edge) else {
+            return Vec::new();
         };
-
-        let start_he = match vertex.outgoing_half_edge {
-            Some(he) => he,
-            None => return faces,
-        };
-
-        // Walk around the vertex using twin/prev
-        let mut current = start_he;
+        let mut pending = vec![start];
         let mut visited = HashSet::new();
-        let mut iterations = 0;
-
-        loop {
-            iterations += 1;
-            if iterations > MAX_VERTEX_FACES {
-                tracing::warn!(
-                    "Vertex {:?} face query exceeded {} iterations",
-                    vertex_id,
-                    MAX_VERTEX_FACES
-                );
-                break;
+        let mut result = Vec::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
             }
-
-            if visited.contains(&current) {
-                break;
+            let Some(edge) = self.half_edge(id) else {
+                continue;
+            };
+            if edge.origin != vertex_id || edge.face.is_none() {
+                continue;
             }
-            visited.insert(current);
-
-            if let Some(he) = self.half_edge(current) {
-                if let Some(face_id) = he.face {
-                    if !faces.contains(&face_id) {
-                        faces.push(face_id);
-                    }
-                }
-
-                // Move to next outgoing half-edge from this vertex
-                // Go to prev, then to twin
-                let prev = self.half_edge(he.prev);
-                if let Some(prev_he) = prev {
-                    if let Some(twin) = prev_he.twin {
-                        current = twin;
-                    } else {
-                        break; // Boundary
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
+            result.push(id);
+            if let Some(other) = self.half_edge(edge.prev).and_then(|prev| prev.twin) {
+                pending.push(other);
             }
-
-            if current == start_he {
-                break;
+            if let Some(other) = edge
+                .twin
+                .and_then(|twin| self.half_edge(twin))
+                .map(|twin| twin.next)
+            {
+                pending.push(other);
             }
         }
-
-        faces
+        result
     }
 
-    /// Get all vertices adjacent to a vertex (connected by an edge)
+    /// Get all faces in the vertex's connected fan, including both boundary sides.
+    pub fn get_vertex_faces(&self, vertex_id: VertexId) -> Vec<FaceId> {
+        self.vertex_half_edges(vertex_id)
+            .iter()
+            .filter_map(|&id| self.half_edge(id)?.face)
+            .collect()
+    }
+
+    /// Get all neighbors in the vertex's connected fan, including the incoming
+    /// boundary neighbor which has no outgoing half-edge from this vertex.
     pub fn get_adjacent_vertices(&self, vertex_id: VertexId) -> Vec<VertexId> {
-        // Maximum edges per vertex - prevents excessive iteration on complex topology
-        const MAX_VERTEX_EDGES: usize = 100;
-
         let mut neighbors = Vec::new();
-        let vertex = match self.vertex(vertex_id) {
-            Some(v) => v,
-            None => return neighbors,
-        };
-
-        let start_he = match vertex.outgoing_half_edge {
-            Some(he) => he,
-            None => return neighbors,
-        };
-
-        let mut current = start_he;
-        let mut visited = HashSet::new();
-        let mut iterations = 0;
-
-        loop {
-            iterations += 1;
-            if iterations > MAX_VERTEX_EDGES {
-                tracing::warn!(
-                    "Vertex {:?} adjacency query exceeded {} iterations",
-                    vertex_id,
-                    MAX_VERTEX_EDGES
-                );
-                break;
-            }
-
-            if visited.contains(&current) {
-                break;
-            }
-            visited.insert(current);
-
-            if let Some(he) = self.half_edge(current) {
-                // The destination vertex is the origin of the next half-edge
-                if let Some(next_he) = self.half_edge(he.next) {
-                    if !neighbors.contains(&next_he.origin) {
-                        neighbors.push(next_he.origin);
-                    }
+        let mut seen = HashSet::new();
+        for id in self.vertex_half_edges(vertex_id) {
+            let edge = &self.half_edges[id.0 as usize];
+            for adjacent in [edge.next, edge.prev] {
+                if let Some(other) = self.half_edge(adjacent)
+                    && seen.insert(other.origin)
+                {
+                    neighbors.push(other.origin);
                 }
-
-                // Move around the vertex
-                let prev = self.half_edge(he.prev);
-                if let Some(prev_he) = prev {
-                    if let Some(twin) = prev_he.twin {
-                        current = twin;
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-
-            if current == start_he {
-                break;
             }
         }
-
         neighbors
+    }
+
+    /// UV for a face corner. Legacy/raw meshes may store only per-vertex UVs.
+    pub fn corner_uv(&self, edge: HalfEdgeId) -> Option<bevy::prelude::Vec2> {
+        let edge = self.half_edge(edge)?;
+        edge.corner_uv.or_else(|| self.vertex(edge.origin)?.uv)
+    }
+
+    /// Whether a paired edge joins different UV charts.
+    pub fn is_uv_seam_edge(&self, id: HalfEdgeId) -> bool {
+        let Some(edge) = self.half_edge(id) else {
+            return true;
+        };
+        let Some(twin) = edge.twin.and_then(|id| self.half_edge(id)) else {
+            return false;
+        };
+        self.corner_uv(id) != self.corner_uv(twin.next)
+            || self.corner_uv(edge.next) != self.corner_uv(twin.id)
+    }
+
+    pub fn is_uv_seam_vertex(&self, vertex: VertexId) -> bool {
+        self.vertex_half_edges(vertex).iter().any(|&id| {
+            self.is_uv_seam_edge(id)
+                || self
+                    .half_edge(id)
+                    .is_some_and(|edge| self.is_uv_seam_edge(edge.prev))
+        })
+    }
+
+    /// Full simplicial link condition for a triangle edge. Shared link edges
+    /// matter as well as neighbor counts (a tetrahedron is the minimal example).
+    pub fn satisfies_collapse_link(&self, id: HalfEdgeId) -> bool {
+        let Some(edge) = self.half_edge(id).filter(|edge| edge.face.is_some()) else {
+            return false;
+        };
+        let Some(dest) = self.get_half_edge_dest(id) else {
+            return false;
+        };
+        let origin = edge.origin;
+        if origin == dest {
+            return false;
+        }
+        let mut edge_link = HashSet::new();
+        let mut link_vertices = [HashSet::new(), HashSet::new()];
+        let mut link_edges = [HashSet::new(), HashSet::new()];
+        for (i, vertex) in [origin, dest].into_iter().enumerate() {
+            for face in self.get_vertex_faces(vertex) {
+                let vertices = self.get_face_vertices(face);
+                if vertices.len() != 3 {
+                    return false;
+                }
+                let opposite: Vec<_> = vertices.into_iter().filter(|&v| v != vertex).collect();
+                if opposite.len() != 2 {
+                    return false;
+                }
+                link_vertices[i].extend(opposite.iter().copied());
+                let (a, b) = (opposite[0], opposite[1]);
+                link_edges[i].insert(if a.0 < b.0 { (a, b) } else { (b, a) });
+                if opposite.contains(&origin) || opposite.contains(&dest) {
+                    edge_link.extend(opposite.into_iter().filter(|&v| v != origin && v != dest));
+                }
+            }
+        }
+        let common: HashSet<_> = link_vertices[0]
+            .intersection(&link_vertices[1])
+            .copied()
+            .collect();
+        let expected = if edge.twin.is_some() { 2 } else { 1 };
+        edge_link.len() == expected
+            && common == edge_link
+            && link_edges[0].is_disjoint(&link_edges[1])
     }
 
     /// Get the vertices of a face in order

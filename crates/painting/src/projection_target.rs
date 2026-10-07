@@ -3,7 +3,7 @@
 //! This module provides:
 //! - [`ProjectionTargetStorage`] trait for different storage backends
 //! - [`UvAtlasTarget`] for meshes with UV coordinates
-//! - Placeholder for PTex targets (implemented by another agent)
+//! - An explicitly unsupported PTex compatibility placeholder
 
 use glam::Vec2;
 
@@ -102,6 +102,40 @@ impl UvAtlasTarget {
         }
     }
 
+    /// Replace a composited projection without repeatedly blending the same source.
+    /// Only changed pixels are dirtied, including pixels erased back to transparent.
+    pub fn replace_pixels(&mut self, pixels: &[[f32; 4]]) -> bool {
+        if pixels.len() != self.surface.surface().pixel_count() {
+            return false;
+        }
+        for (index, &pixel) in pixels.iter().enumerate() {
+            let x = index as u32 % self.resolution.0;
+            let y = index as u32 / self.resolution.0;
+            if self.surface.surface().get_pixel(x, y) != Some(pixel) {
+                self.surface.surface_mut().set_pixel(x, y, pixel);
+                self.surface.mark_dirty(x, y);
+            }
+        }
+        true
+    }
+
+    /// UVs address top-to-bottom image rows, matching Bevy's UV0 sampler.
+    /// Clamp the inclusive upper edge to the last texel; never wrap invalid UVs.
+    fn uv_pixel(&self, uv: Vec2) -> Option<(u32, u32)> {
+        if !uv.is_finite()
+            || uv.min_element() < 0.0
+            || uv.max_element() > 1.0
+            || self.resolution.0 == 0
+            || self.resolution.1 == 0
+        {
+            return None;
+        }
+        Some((
+            ((uv.x * self.resolution.0 as f32) as u32).min(self.resolution.0 - 1),
+            ((uv.y * self.resolution.1 as f32) as u32).min(self.resolution.1 - 1),
+        ))
+    }
+
     /// Get the underlying surface for direct access.
     pub fn surface(&self) -> &TiledSurface {
         &self.surface
@@ -121,8 +155,8 @@ impl ProjectionTargetStorage for UvAtlasTarget {
     }
 
     fn hit_to_tex_coord(&self, hit: &MeshHit) -> Option<Vec2> {
-        // For UV atlas, use the interpolated UV from the mesh
-        hit.uv
+        let uv = hit.uv?;
+        self.uv_pixel(uv).map(|_| uv)
     }
 
     fn apply_projected_pixel(
@@ -132,13 +166,9 @@ impl ProjectionTargetStorage for UvAtlasTarget {
         opacity: f32,
         blend_mode: BlendMode,
     ) {
-        // Convert UV (0-1) to pixel coordinates
-        let px = (tex_coord.x * self.resolution.0 as f32) as u32;
-        let py = (tex_coord.y * self.resolution.1 as f32) as u32;
-
-        if px >= self.resolution.0 || py >= self.resolution.1 {
+        let Some((px, py)) = self.uv_pixel(tex_coord) else {
             return;
-        }
+        };
 
         match blend_mode {
             BlendMode::Normal => {
@@ -163,7 +193,10 @@ impl ProjectionTargetStorage for UvAtlasTarget {
         hardness: f32,
         blend_mode: BlendMode,
     ) {
-        // Convert UV (0-1) to pixel coordinates
+        if self.uv_pixel(tex_coord).is_none() || !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
+        // UV0 and image rows share the same orientation.
         let center_x = tex_coord.x * self.resolution.0 as f32;
         let center_y = tex_coord.y * self.resolution.1 as f32;
 
@@ -241,9 +274,9 @@ fn linear_to_srgb_u8(linear: f32) -> u8 {
 
 /// Placeholder PTex target stub.
 ///
-/// This is a placeholder for the PTex implementation being done by another agent.
-/// It provides the interface but panics if used, as the actual implementation
-/// should come from the PTex system.
+/// PTex projection is unsupported: this API lacks the face identity needed to
+/// address per-face storage. It deliberately rejects hits instead of pretending
+/// to provide a writable target. Scene projection only enables UV atlas targets.
 pub struct PtexTargetStub {
     face_resolution: u32,
 }
@@ -262,13 +295,8 @@ impl ProjectionTargetStorage for PtexTargetStub {
         }
     }
 
-    fn hit_to_tex_coord(&self, hit: &MeshHit) -> Option<Vec2> {
-        // For PTex, convert barycentric to face-local coordinates
-        // The actual mapping depends on the PTex implementation
-        Some(crate::projection::barycentric_to_ptex_coords(
-            hit.barycentric,
-            self.face_resolution,
-        ))
+    fn hit_to_tex_coord(&self, _hit: &MeshHit) -> Option<Vec2> {
+        None
     }
 
     fn apply_projected_pixel(
@@ -413,6 +441,63 @@ mod tests {
         let coord = tex_coord.unwrap();
         assert!((coord.x - 0.5).abs() < 0.01);
         assert!((coord.y - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn uv_edges_orientation_and_invalid_values() {
+        let mut target = UvAtlasTarget::new(3, 2);
+        target.apply_projected_pixel(Vec2::ZERO, [1.0, 0.0, 0.0, 1.0], 1.0, BlendMode::Normal);
+        target.apply_projected_pixel(Vec2::ONE, [0.0, 0.0, 1.0, 1.0], 1.0, BlendMode::Normal);
+        assert_eq!(
+            target.surface().surface().get_pixel(0, 0),
+            Some([1.0, 0.0, 0.0, 1.0])
+        );
+        assert_eq!(
+            target.surface().surface().get_pixel(2, 1),
+            Some([0.0, 0.0, 1.0, 1.0])
+        );
+        target.take_dirty_regions();
+        for uv in [
+            Vec2::new(-0.1, 0.0),
+            Vec2::new(0.0, 1.1),
+            Vec2::splat(f32::NAN),
+        ] {
+            target.apply_projected_pixel(uv, [1.0; 4], 1.0, BlendMode::Normal);
+        }
+        assert!(!target.has_dirty_regions());
+    }
+
+    #[test]
+    fn replacement_is_idempotent_and_dirty_edge_regions_are_tightly_packed() {
+        let mut target = UvAtlasTarget::new(130, 129);
+        let mut pixels = vec![[0.0; 4]; 130 * 129];
+        pixels[128 * 130 + 129] = [1.0, 0.0, 0.0, 0.5];
+        assert!(target.replace_pixels(&pixels));
+        let regions = target.take_dirty_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].offset, (128, 128));
+        assert_eq!(regions[0].size, (2, 1));
+        assert_eq!(regions[0].data.len(), 8);
+        assert_eq!(&regions[0].data[4..], &[254, 0, 0, 127]);
+        assert!(target.replace_pixels(&pixels));
+        assert!(!target.has_dirty_regions());
+        pixels[128 * 130 + 129] = [0.0; 4];
+        target.replace_pixels(&pixels);
+        assert_eq!(target.take_dirty_regions()[0].data, vec![0; 8]);
+    }
+
+    #[test]
+    fn ptex_placeholder_rejects_hits() {
+        let hit = MeshHit {
+            world_pos: Vec3::ZERO,
+            face_id: 0,
+            barycentric: Vec3::X,
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            bitangent: Vec3::Z,
+            uv: Some(Vec2::ZERO),
+        };
+        assert!(PtexTargetStub::new(32).hit_to_tex_coord(&hit).is_none());
     }
 
     use glam::Vec3;

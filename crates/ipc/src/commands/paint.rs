@@ -21,6 +21,8 @@ pub enum PaintCommand {
     SetBrushOpacity { opacity: f32 },
     /// Set brush hardness (0.0-1.0)
     SetBrushHardness { hardness: f32 },
+    /// Set round-tip dab spacing as a fraction of diameter (0.01-1.0).
+    SetBrushSpacing { spacing: f32 },
     /// Set blend mode (Normal or Erase)
     SetBlendMode { mode: BlendMode },
     /// Select a brush preset by ID
@@ -69,4 +71,24 @@ pub struct AddPaintCanvasRequest {
     pub width: Option<u32>,
     /// Canvas height in pixels (defaults to 1024)
     pub height: Option<u32>,
+}
+
+/// Backend-owned brush settings. Size is the full-pressure diameter in canvas pixels.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PaintBrushSettings {
+    pub preset_id: u32,
+    pub customized: bool,
+    pub color: [f32; 4],
+    pub size: f32,
+    pub opacity: f32,
+    pub hardness: f32,
+    pub spacing: f32,
+    pub blend_mode: BlendMode,
+}
+
+/// Supported preset metadata; frontends must not invent unsupported tip types.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PaintBrushPresetInfo {
+    pub id: u32,
+    pub name: String,
 }

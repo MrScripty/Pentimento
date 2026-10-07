@@ -13,6 +13,24 @@ impl HalfEdgeMesh {
     ///
     /// The mesh must have position attributes and triangle indices.
     pub fn from_bevy_mesh(mesh: &Mesh) -> Result<Self, HalfEdgeError> {
+        Self::import_bevy_mesh(mesh, false)
+    }
+
+    /// Import a sculpt surface, explicitly joining position-quantized seam vertices.
+    ///
+    /// Uses the legacy 1e-6 object-space quantization. UVs remain on face corners.
+    /// A weld which collapses a triangle or produces a non-manifold surface fails;
+    /// callers may retry the connectivity-preserving importer on the original mesh.
+    pub fn from_bevy_mesh_welded(mesh: &Mesh) -> Result<Self, HalfEdgeError> {
+        Self::import_bevy_mesh(mesh, true)
+    }
+
+    fn import_bevy_mesh(mesh: &Mesh, weld: bool) -> Result<Self, HalfEdgeError> {
+        if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
+            return Err(HalfEdgeError::InvalidTopology(
+                "Expected triangle list".into(),
+            ));
+        }
         // Extract positions
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -47,64 +65,49 @@ impl HalfEdgeMesh {
             ));
         }
 
-        // === Vertex Welding ===
-        // Bevy's UV sphere (and other primitives) duplicate vertices at UV seams
-        // for correct UV mapping. Without welding, these create boundary edges
-        // (half-edges with twin=None) in the half-edge mesh. Boundary edges break
-        // the ring walk in `is_ring_boundary_vertex`, causing it to miss boundary
-        // vertices, which allows unsafe edge collapses that create non-manifold
-        // geometry and visible mesh tearing.
-        //
-        // Welding merges positionally-identical vertices so the mesh becomes a
-        // proper closed manifold where all ring walks complete full loops.
-        let quantize = |p: &[f32; 3]| -> [i64; 3] {
-            [
-                (p[0] * 1_000_000.0) as i64,
-                (p[1] * 1_000_000.0) as i64,
-                (p[2] * 1_000_000.0) as i64,
-            ]
-        };
-
-        let mut position_to_canonical: HashMap<[i64; 3], usize> = HashMap::new();
-        let mut canonical_map: Vec<usize> = Vec::with_capacity(positions.len());
-
-        for (i, pos) in positions.iter().enumerate() {
-            let key = quantize(pos);
-            let canonical = *position_to_canonical.entry(key).or_insert(i);
-            canonical_map.push(canonical);
+        // Validate before any attribute or index access. Import must never panic or
+        // silently remove artist geometry to repair malformed input.
+        if normals.len() != positions.len()
+            || uvs.as_ref().is_some_and(|uv| uv.len() != positions.len())
+            || positions.iter().flatten().any(|x| !x.is_finite())
+            || normals.iter().flatten().any(|x| !x.is_finite())
+            || uvs
+                .as_ref()
+                .is_some_and(|uv| uv.iter().flatten().any(|x| !x.is_finite()))
+        {
+            return Err(HalfEdgeError::InvalidTopology(
+                "Invalid vertex attributes".into(),
+            ));
         }
-
-        let welded_count = canonical_map
+        if indices.iter().any(|&i| i as usize >= positions.len()) {
+            return Err(HalfEdgeError::InvalidTopology(
+                "Index outside position array".into(),
+            ));
+        }
+        let source_indices = indices;
+        let mut positions_to_canonical = HashMap::new();
+        let canonical_map: Vec<u32> = positions
             .iter()
             .enumerate()
-            .filter(|(i, c)| **c != *i)
-            .count();
-        if welded_count > 0 {
-            tracing::debug!(
-                "from_bevy_mesh: welded {} duplicate vertices ({} unique of {} total)",
-                welded_count,
-                position_to_canonical.len(),
-                positions.len()
-            );
-        }
-
-        let indices: Vec<u32> = indices
-            .iter()
-            .map(|&i| canonical_map[i as usize] as u32)
-            .collect();
-
-        // Remove degenerate triangles (two or more identical vertices after welding)
-        let indices: Vec<u32> = indices
-            .chunks(3)
-            .filter(|tri| {
-                tri.len() == 3 && tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2]
+            .map(|(i, pos)| {
+                if weld {
+                    let key = pos.map(|x| (x * 1_000_000.0) as i64);
+                    *positions_to_canonical.entry(key).or_insert(i as u32)
+                } else {
+                    i as u32
+                }
             })
-            .flat_map(|tri| tri.iter().copied())
             .collect();
-
-        if indices.len() % 3 != 0 {
+        let indices: Vec<u32> = source_indices
+            .iter()
+            .map(|&i| canonical_map[i as usize])
+            .collect();
+        if indices
+            .chunks_exact(3)
+            .any(|tri| tri[0] == tri[1] || tri[1] == tri[2] || tri[2] == tri[0])
+        {
             return Err(HalfEdgeError::InvalidTopology(
-                "Index count not divisible by 3 after welding".to_string(),
+                "Triangle has repeated vertices (possibly after welding)".into(),
             ));
         }
 
@@ -148,6 +151,9 @@ impl HalfEdgeMesh {
             half_edges.push(HalfEdge {
                 id: he0_id,
                 origin: v0,
+                corner_uv: uvs
+                    .as_ref()
+                    .map(|uv| Vec2::from_array(uv[source_indices[tri_idx * 3] as usize])),
                 twin: None,
                 next: he1_id,
                 prev: he2_id,
@@ -158,6 +164,9 @@ impl HalfEdgeMesh {
             half_edges.push(HalfEdge {
                 id: he1_id,
                 origin: v1,
+                corner_uv: uvs
+                    .as_ref()
+                    .map(|uv| Vec2::from_array(uv[source_indices[tri_idx * 3 + 1] as usize])),
                 twin: None,
                 next: he2_id,
                 prev: he0_id,
@@ -168,6 +177,9 @@ impl HalfEdgeMesh {
             half_edges.push(HalfEdge {
                 id: he2_id,
                 origin: v2,
+                corner_uv: uvs
+                    .as_ref()
+                    .map(|uv| Vec2::from_array(uv[source_indices[tri_idx * 3 + 2] as usize])),
                 twin: None,
                 next: he0_id,
                 prev: he1_id,
@@ -189,6 +201,9 @@ impl HalfEdgeMesh {
             for (he_id, (origin, dest)) in
                 [(he0_id, (v0, v1)), (he1_id, (v1, v2)), (he2_id, (v2, v0))]
             {
+                if edge_map.contains_key(&(origin, dest)) {
+                    return Err(HalfEdgeError::NonManifoldEdge);
+                }
                 // Check if the opposite half-edge exists
                 if let Some(&twin_id) = edge_map.get(&(dest, origin)) {
                     // Link twins
@@ -202,7 +217,13 @@ impl HalfEdgeMesh {
             let p0 = vertices[i0].position;
             let p1 = vertices[i1].position;
             let p2 = vertices[i2].position;
-            let normal = (p1 - p0).cross(p2 - p0).normalize_or_zero();
+            let area_normal = (p1 - p0).cross(p2 - p0);
+            let normal = area_normal.normalize_or_zero();
+            if !area_normal.is_finite() || normal == Vec3::ZERO {
+                return Err(HalfEdgeError::InvalidTopology(
+                    "Degenerate or non-finite triangle geometry".into(),
+                ));
+            }
 
             faces.push(Face {
                 id: face_id,
@@ -211,12 +232,16 @@ impl HalfEdgeMesh {
             });
         }
 
-        Ok(Self {
+        let result = Self {
             vertices,
             half_edges,
             faces,
             edge_map,
-        })
+        };
+        result
+            .check_manifold()
+            .map_err(|error| HalfEdgeError::InvalidTopology(error.to_string()))?;
+        Ok(result)
     }
 
     /// Create a HalfEdgeMesh from raw components.
@@ -239,6 +264,13 @@ impl HalfEdgeMesh {
 
     /// Convert back to a Bevy mesh
     pub fn to_bevy_mesh(&self) -> Mesh {
+        self.to_bevy_mesh_with_vertex_map().0
+    }
+
+    /// Export face corners plus the topological vertex for every emitted render
+    /// vertex. Position-only updates must patch all copies at a UV seam.
+    pub fn to_bevy_mesh_with_vertex_map(&self) -> (Mesh, Vec<VertexId>) {
+        let mut render_to_vertex = Vec::new();
         let mut positions: Vec<[f32; 3]> = Vec::new();
         let mut normals: Vec<[f32; 3]> = Vec::new();
         let mut uvs: Vec<[f32; 2]> = Vec::new();
@@ -255,11 +287,13 @@ impl HalfEdgeMesh {
 
             // Triangulate the face (fan triangulation for convex faces)
             let base_idx = positions.len() as u32;
-            for vid in &face_verts {
-                let v = &self.vertices[vid.0 as usize];
+            for he_id in self.get_face_half_edges(face.id) {
+                let corner = &self.half_edges[he_id.0 as usize];
+                let v = &self.vertices[corner.origin.0 as usize];
+                render_to_vertex.push(v.id);
                 positions.push(v.position.to_array());
                 normals.push(v.normal.to_array());
-                uvs.push(v.uv.unwrap_or(Vec2::ZERO).to_array());
+                uvs.push(corner.corner_uv.or(v.uv).unwrap_or(Vec2::ZERO).to_array());
             }
 
             // Fan triangulation
@@ -278,6 +312,6 @@ impl HalfEdgeMesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         mesh.insert_indices(Indices::U32(indices));
-        mesh
+        (mesh, render_to_vertex)
     }
 }

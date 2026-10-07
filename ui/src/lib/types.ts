@@ -32,12 +32,15 @@ export type BevyToUi =
     | { type: 'MeshEditModeChanged'; data: { active: boolean; selection_mode: MeshSelectionMode; tool: MeshEditTool } }
     | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
     | { type: 'CloseMenus' }
-    | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } };
+    | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
+    | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean } }
+    | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } };
 
 // Messages from UI to Bevy
 export type UiToBevy =
     | { type: 'UiDirty' }
     | { type: 'LayoutUpdate'; data: LayoutInfo }
+    | { type: 'SetUiInputCapture'; data: { keyboard: boolean } }
     | { type: 'CameraCommand'; data: CameraCommand }
     | { type: 'ObjectCommand'; data: ObjectCommand }
     | { type: 'MaterialCommand'; data: MaterialCommand }
@@ -51,6 +54,8 @@ export type UiToBevy =
     | { type: 'GizmoCommand'; data: GizmoCommand }
     | { type: 'AddPaintCanvas'; data: { width: number | null; height: number | null } }
     | { type: 'PaintCommand'; data: PaintCommand }
+    | { type: 'SculptCommand'; data: SculptCommand }
+    | { type: 'RequestBrushState' }
     | { type: 'MeshEditCommand'; data: MeshEditCommand }
     | { type: 'SetDepthView'; data: { enabled: boolean } };
 
@@ -242,11 +247,12 @@ export type PaintCommand =
     | { SetBrushSize: { size: number } }
     | { SetBrushOpacity: { opacity: number } }
     | { SetBrushHardness: { hardness: number } }
+    | { SetBrushSpacing: { spacing: number } }
     | { SetBlendMode: { mode: 'Normal' | 'Erase' } }
     | { SelectBrushPreset: { preset_id: number } }
-    | { Undo: null }
+    | 'Undo'
     | { SetLiveProjection: { enabled: boolean } }
-    | { ProjectToScene: null }
+    | 'ProjectToScene'
     | { AddLayer: { name: string } }
     | { RemoveLayer: { layer_id: number } }
     | { SetActiveLayer: { layer_id: number } }
@@ -261,3 +267,31 @@ export type MeshEditCommand =
     | { SelectAll: null }
     | { DeselectAll: null }
     | { InvertSelection: null };
+
+
+export interface PaintBrushSettings {
+    preset_id: number;
+    customized: boolean;
+    color: [number, number, number, number];
+    size: number;
+    opacity: number;
+    hardness: number;
+    spacing: number;
+    blend_mode: 'Normal' | 'Erase';
+}
+export interface PaintBrushPresetInfo { id: number; name: string }
+export type SculptTool = 'Push' | 'Pull' | 'Grab' | 'Smooth' | 'Flatten' | 'Inflate' | 'Pinch' | 'Crease';
+export type SculptFalloff = 'Linear' | 'Smooth' | 'Sharp' | 'Constant' | 'Sphere';
+export interface SculptBrushSettings {
+    tool: SculptTool;
+    radius: number;
+    strength: number;
+    hardness: number;
+    falloff: SculptFalloff;
+}
+export type SculptCommand =
+    | { SetTool: { tool: SculptTool } }
+    | { SetRadius: { radius: number } }
+    | { SetStrength: { strength: number } }
+    | { SetHardness: { hardness: number } }
+    | { SetFalloff: { falloff: SculptFalloff } };

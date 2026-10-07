@@ -1,0 +1,60 @@
+# Brush panels and input contract
+
+## Supported surface
+
+The default `./launcher.sh --frontend cef` Svelte frontend now has dedicated
+projection-paint and sculpt panels. Shared scene command handling is reusable by
+the native Dioxus/egui and WASM hosts; this change does not claim panel parity
+across those other frontends. Electron's existing partial command dispatcher is
+not upgraded here.
+
+- Paint: the six engine presets, round brush/eraser, radius in canvas pixels,
+  opacity, hardness (edge falloff), dab spacing, and sRGB color input converted to
+  the engine's linear RGB. No unsupported textured/elliptical tips are advertised.
+- Paint settings/undo are backend-owned. Radius changes both pressure limits so
+  actual dabs change size. The UI displays the real full-pressure radius rather
+  than the previously misleading base-size field. Customized presets are labeled.
+- Canvas undo affects the active canvas. Live/apply buttons emit the actual
+  projection events; UV rendering correctness depends on the projection-engine
+  implementation. There is no PTex promise.
+- Sculpt: Push, Pull, Grab, Smooth, Flatten, Inflate, Pinch and Crease, with mesh-local
+  radius, strength, hardness and five supported falloff curves. Tool-specific
+  engine behavior is retained; customization survives tool and mode changes.
+- A backend snapshot updates the panel after hotkeys, reload and mode changes.
+- Browser rectangles block viewport pointer input; dragging a widget remains
+  captured until release. Widget focus blocks viewport keyboard shortcuts.
+- Canvas view retains its orbit lock but allows Shift+middle-drag pan and scroll
+  zoom. Plain Tab no longer also handles Ctrl+Tab / Shift+Tab mode shortcuts.
+
+## Limitations and next requirement
+
+Sculpt strokes modify geometry immediately. The sculpt engine does not have
+working per-stroke undo/redo or transactional stroke cancellation; the panel says
+so and has no misleading Undo button. Implement real sculpt history next, using
+one transaction from `StrokeStart` through `StrokeEnd`, restoring geometry,
+topology, UV corner attributes, chunk mappings and GPU buffers atomically.
+`StrokeCancel`, mode exit, input interruption and history eviction need explicit
+behavior and tests. Do not use a paint-canvas undo action as a substitute.
+
+The sculpt engine measures radius in mesh-local units. Nonuniform object scale
+can also make the existing world-space brush gizmo differ from the deformation
+footprint; scaled-transform sculpt interaction is not qualified by this change.
+
+## Validation
+
+- `npm run lint:a11y`, `npm run build`, `npm test`.
+- `cargo test -p pentimento-scene --features sculpting brush_control` and
+  `cargo test -p pentimento-scene --features sculpting brush_ui` exercise the real
+  command dispatcher, paint pixels/dab count and sculpt vertex displacement.
+- `cargo test -p sculpting grab_respects_strength` checks Grab's strength control.
+- `npm run dev -- --host 127.0.0.1 --port 5187`, then `npm run test:ui:browser` runs
+  the rendered Svelte/IPC interaction harness using an installed Chromium. Set
+  `CHROMIUM_PATH` or `PENTIMENTO_UI_URL` when needed. Screenshots are JPEG quality
+  85 under `PENTIMENTO_EVIDENCE_DIR` (default `/tmp/pentimento-brush-evidence`),
+  never in Git. The harness is not a 3D renderer; engine tests are separate.
+
+Manual renderer acceptance still requires a supported native CEF run: create a
+canvas; paint small/large and soft/hard strokes; erase/undo; apply/live-project to
+a UV mesh; select a mesh and Ctrl+Tab into sculpt; compare tools and falloff;
+change F/Shift+F values; exit/re-enter; drag every slider across the viewport and
+release over/outside the panel without producing an unintended stroke.

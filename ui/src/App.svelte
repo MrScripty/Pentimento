@@ -2,7 +2,7 @@
     import Toolbar from '$lib/components/Toolbar.svelte';
     import SidePanel from '$lib/components/SidePanel.svelte';
     import AddObjectMenu from '$lib/components/AddObjectMenu.svelte';
-    import PaintToolbar from '$lib/components/PaintToolbar.svelte';
+    import BrushPanels from '$lib/components/BrushPanels.svelte';
     import { bridge } from '$lib/bridge';
     import { onMount } from 'svelte';
 
@@ -10,6 +10,8 @@
         fps: 0,
         frameTime: 0,
     });
+
+    let errorMessage = $state('');
 
     // Edit mode state
     let editMode = $state<'None' | 'Paint' | 'MeshEdit' | 'Sculpt'>('None');
@@ -44,6 +46,9 @@
                         frameTime: msg.data.frame_time_ms,
                     };
                     break;
+                case 'Error':
+                    errorMessage = msg.data.message;
+                    break;
                 case 'EditModeChanged':
                     editMode = msg.data.mode;
                     break;
@@ -58,16 +63,25 @@
 
 <div class="app">
     <Toolbar {renderStats} />
-    <SidePanel />
+    <div hidden={editMode === 'Paint' || editMode === 'Sculpt'}><SidePanel /></div>
     <AddObjectMenu
         show={showAddMenu}
         position={addMenuPosition}
         onClose={() => (showAddMenu = false)}
     />
-    <PaintToolbar visible={editMode === 'Paint'} />
+    <BrushPanels mode={editMode} />
+    {#if errorMessage}
+        <div class="global-error panel interactive" data-ui-region="global-error" role="alert">
+            <span>{errorMessage}</span>
+            <button type="button" aria-label="Dismiss error" onclick={() => (errorMessage = '')}>Dismiss</button>
+        </div>
+    {/if}
 </div>
 
 <style>
+    .global-error { position: fixed; bottom: 18px; left: 18px; z-index: 300; display: flex; align-items: center; gap: 16px; max-width: min(580px, calc(100vw - 36px)); padding: 14px 16px; border: 1px solid #bd8767; border-radius: 8px; background: #2f2423; color: #ffe1c7; font: 13px/1.5 system-ui, sans-serif; }
+    .global-error button { flex-shrink: 0; color: inherit; background: #48312b; border: 1px solid #bd8767; border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+    .global-error button:focus-visible { outline: 2px solid #9abaff; outline-offset: 2px; }
     .app {
         width: 100vw;
         height: 100vh;

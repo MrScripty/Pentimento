@@ -3,10 +3,12 @@
 mod gizmo;
 mod mesh_edit;
 mod paint;
+mod sculpt;
 
 pub use gizmo::*;
 pub use mesh_edit::*;
 pub use paint::*;
+pub use sculpt::*;
 
 use crate::types::Transform3D;
 use serde::{Deserialize, Serialize};

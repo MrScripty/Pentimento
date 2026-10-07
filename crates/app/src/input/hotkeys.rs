@@ -46,6 +46,9 @@ pub fn handle_paint_undo_hotkey(
     key_input: Res<ButtonInput<KeyCode>>,
     input_blocks: Res<FrontendInputBlockState>,
     mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
+    paint_mode: Res<pentimento_scene::PaintMode>,
+    active_canvas: Res<pentimento_scene::ActiveCanvasPlane>,
+    canvases: Query<&pentimento_scene::CanvasPlane>,
 ) {
     if input_blocks.blocks_keyboard() {
         return;
@@ -56,10 +59,15 @@ pub fn handle_paint_undo_hotkey(
     let z_pressed = key_input.just_pressed(KeyCode::KeyZ);
 
     // Ctrl+Z (without shift) for undo
-    if ctrl && !shift && z_pressed {
+    if ctrl && !shift && z_pressed && paint_mode.active {
         if let Some(ref mut painting) = painting_res {
-            if painting.undo_any() {
-                info!("Paint undo (Ctrl+Z)");
+            if let Some(canvas) = active_canvas
+                .entity
+                .and_then(|entity| canvases.get(entity).ok())
+            {
+                if painting.undo(canvas.plane_id) {
+                    info!("Paint undo (Ctrl+Z)");
+                }
             }
         }
     }

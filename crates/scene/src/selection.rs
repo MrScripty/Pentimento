@@ -48,6 +48,7 @@ fn handle_click_selection(
     selected_query: Query<(Entity, &Selectable), With<Selected>>,
     all_selectable: Query<(Entity, &Selectable)>,
     paint_mode: Res<PaintMode>,
+    edit_mode: Res<crate::EditModeState>,
     input_blocks: Res<FrontendInputBlockState>,
 ) {
     if input_blocks.blocks_pointer() {
@@ -55,8 +56,10 @@ fn handle_click_selection(
         return;
     }
 
-    // Don't process selection clicks when in paint mode
-    if paint_mode.active {
+    // A brush owns its target until explicit exit. Discard these clicks rather
+    // than replaying them as selection changes once the brush mode ends.
+    if paint_mode.active || edit_mode.mode == pentimento_ipc::EditMode::Sculpt {
+        click_events.clear();
         return;
     }
     let shift_held =
@@ -106,5 +109,84 @@ fn handle_click_selection(
                 selection.selected_ids.clear();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::picking::{
+        backend::HitData,
+        pointer::{Location, PointerId},
+    };
+
+    #[test]
+    fn sculpt_keeps_selection_and_does_not_replay_blocked_click_after_exit() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<SelectionState>()
+            .init_resource::<PaintMode>()
+            .init_resource::<FrontendInputBlockState>()
+            .insert_resource(crate::EditModeState {
+                mode: pentimento_ipc::EditMode::Sculpt,
+                target_entity: None,
+            })
+            .add_message::<Pointer<Click>>()
+            .add_systems(Update, handle_click_selection);
+        let selected = app
+            .world_mut()
+            .spawn((
+                Selected,
+                Selectable {
+                    id: "sphere".into(),
+                },
+            ))
+            .id();
+        let empty = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<SelectionState>()
+            .selected_ids
+            .push("sphere".into());
+        app.world_mut()
+            .resource_mut::<crate::EditModeState>()
+            .target_entity = Some(selected);
+        let click = Pointer {
+            entity: empty,
+            pointer_id: PointerId::Mouse,
+            pointer_location: Location {
+                target: NormalizedRenderTarget::None {
+                    width: 100,
+                    height: 100,
+                },
+                position: Vec2::splat(10.0),
+            },
+            event: Click {
+                button: PointerButton::Primary,
+                hit: HitData::new(empty, 1.0, None, None),
+                duration: std::time::Duration::from_millis(50),
+            },
+        };
+        app.world_mut().write_message(click.clone());
+        app.update();
+        assert!(app.world().get::<Selected>(selected).is_some());
+        assert_eq!(
+            app.world().resource::<SelectionState>().selected_ids,
+            ["sphere"]
+        );
+        app.world_mut().resource_mut::<crate::EditModeState>().mode =
+            pentimento_ipc::EditMode::None;
+        app.update();
+        assert!(app.world().get::<Selected>(selected).is_some());
+        // A fresh ordinary-mode click is still allowed to deselect.
+        app.world_mut().write_message(click);
+        app.update();
+        assert!(app.world().get::<Selected>(selected).is_none());
+        assert!(
+            app.world()
+                .resource::<SelectionState>()
+                .selected_ids
+                .is_empty()
+        );
     }
 }

@@ -63,6 +63,24 @@ function assertBevyToUiMessage(message) {
       assert.ok(Array.isArray(message.data.layers));
       message.data.layers.forEach(assertLayerInfo);
       return;
+    case 'PaintBrushStateChanged':
+      assertTuple(message.data.settings.color, 4, 'paint color');
+      for (const field of ['size', 'opacity', 'hardness', 'spacing', 'preset_id']) assert.equal(typeof message.data.settings[field], 'number');
+      assert.match(message.data.settings.blend_mode, /^(Normal|Erase)$/);
+      assert.equal(typeof message.data.settings.customized, 'boolean');
+      assert.ok(Array.isArray(message.data.presets));
+      assert.equal(typeof message.data.can_undo, 'boolean');
+      return;
+    case 'SculptBrushStateChanged':
+      if (message.data.settings !== null) {
+        assert.match(message.data.settings.tool, /^(Push|Pull|Grab|Smooth|Flatten|Inflate|Pinch|Crease)$/);
+        assert.match(message.data.settings.falloff, /^(Linear|Smooth|Sharp|Constant|Sphere)$/);
+        for (const field of ['radius', 'strength', 'hardness']) assert.equal(typeof message.data.settings[field], 'number');
+      }
+      return;
+    case 'ProjectionModeChanged':
+      assert.equal(typeof message.data.live_projection, 'boolean');
+      return;
     case 'CloseMenus':
       assert.equal(message.data, undefined);
       return;
@@ -96,7 +114,18 @@ function assertUiToBevyMessage(message) {
       assert.ok(message.data.height === null || typeof message.data.height === 'number');
       return;
     case 'PaintCommand':
+      if (typeof message.data === 'string') assert.ok(['Undo', 'ProjectToScene'].includes(message.data));
+      else assert.equal(typeof message.data, 'object');
+      return;
+    case 'SculptCommand':
       assert.equal(typeof message.data, 'object');
+      assert.ok(['SetTool', 'SetRadius', 'SetStrength', 'SetHardness', 'SetFalloff'].includes(Object.keys(message.data)[0]));
+      return;
+    case 'RequestBrushState':
+      assert.equal(message.data, undefined);
+      return;
+    case 'SetUiInputCapture':
+      assert.equal(typeof message.data.keyboard, 'boolean');
       return;
     case 'GizmoCommand':
       assert.equal(typeof message.data, 'object');
@@ -128,6 +157,9 @@ test('rust ipc samples cover the active frontend contract surface', () => {
   assert.ok(outboundTypes.has('UpdateLighting'));
   assert.ok(outboundTypes.has('SetDepthView'));
   assert.ok(outboundTypes.has('PaintCommand'));
+  assert.ok(outboundTypes.has('SculptCommand'));
+  assert.ok(inboundTypes.has('PaintBrushStateChanged'));
+  assert.ok(inboundTypes.has('SculptBrushStateChanged'));
 });
 
 test('rust ipc samples satisfy the JavaScript consumer expectations', () => {

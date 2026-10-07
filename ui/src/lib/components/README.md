@@ -9,7 +9,11 @@ This directory holds the active Svelte components that make up Pentimento's brow
 | `Toolbar.svelte` | Top-level scene controls, menus, and view toggles. |
 | `SidePanel.svelte` | Material, lighting, and ambient-occlusion controls. |
 | `AddObjectMenu.svelte` | Keyboard-accessible add-object dialog used by the active viewport workflows. |
-| `PaintToolbar.svelte` | Minimal paint-mode shortcut surface. |
+| `BrushPanels.svelte` | Persistent backend brush subscriptions and mode-specific panel composition. |
+| `PaintBrushPanel.svelte` | Round brush/eraser, presets, tip parameters, canvas undo and UV projection actions. |
+| `SculptBrushPanel.svelte` | Supported deformation tools, radius, strength, hardness and falloff. |
+| `BrushControl.svelte` | Accessible bounded slider plus exact numeric input. |
+| `PaintToolbar.svelte` | Legacy shortcut component, no longer mounted by the active Svelte app. |
 
 ## Problem
 The browser UI needs modular components for scene controls without letting each component own its own transport or host-detection logic.
@@ -57,3 +61,5 @@ Keep components thin and bridge-driven: interaction state stays local, while bac
 - None identified as of 2026-03-08.
 - Reason: components consume bridge contracts but do not produce independently persisted structured artifacts.
 - Revisit trigger: a component starts generating saved layouts, presets, or other machine-consumed data.
+
+Brush controls never reset backend settings on mount. `RequestBrushState` restores current values after reload; authoritative snapshots also reflect keyboard adjustments. See [brush panels](../../../../docs/brush_panels.md) for support scope and testing.

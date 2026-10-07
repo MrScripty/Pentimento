@@ -251,12 +251,18 @@ pub struct StrokeState {
     pub mesh_id: u32,
     /// Starting timestamp
     pub start_time_ms: u64,
-    /// Last dab position (for spacing calculation)
+    /// Last emitted dab position (independent of input sampling).
     pub last_dab_position: Vec3,
-    /// Distance accumulated since last dab (for spacing)
+    /// Previous input position, independent of the last emitted dab.
+    pub last_input_position: Vec3,
+    /// Arc length accumulated since the last dab, across input segments.
     pub distance_since_dab: f32,
-    /// Base position for delta compression (current packet)
+    /// Immutable, fixed-point-representable origin of the current packet.
     pub base_position: Vec3,
+    /// Exact integer coordinates written to the current packet header.
+    pub base_coordinates: [i32; 3],
+    /// Previous decoded position, used to prevent cumulative quantization drift.
+    pub encoded_position: Vec3,
     /// Current packet dabs
     pub current_dabs: Vec<SculptDab>,
     /// Completed packets
@@ -266,13 +272,20 @@ pub struct StrokeState {
 impl StrokeState {
     /// Create a new stroke state.
     pub fn new(stroke_id: u64, mesh_id: u32, start_position: Vec3, timestamp_ms: u64) -> Self {
+        let base_coordinates = start_position
+            .to_array()
+            .map(|x| (x * 1000.0).round() as i32);
+        let base_position = Vec3::from_array(base_coordinates.map(|x| x as f32)) / 1000.0;
         Self {
             stroke_id,
             mesh_id,
             start_time_ms: timestamp_ms,
             last_dab_position: start_position,
+            last_input_position: start_position,
             distance_since_dab: 0.0,
-            base_position: start_position,
+            base_position,
+            base_coordinates,
+            encoded_position: base_position,
             current_dabs: Vec::new(),
             completed_packets: Vec::new(),
         }
@@ -338,6 +351,9 @@ impl SculptBrushEngine {
     ///
     /// Returns dabs generated from this input (may be empty if spacing not met).
     pub fn update_stroke(&mut self, input: BrushInput) -> Vec<DabResult> {
+        if !input.position.is_finite() || !input.normal.is_finite() || !input.pressure.is_finite() {
+            return Vec::new();
+        }
         // Take the stroke out to avoid borrow conflicts
         let Some(mut stroke) = self.active_stroke.take() else {
             return Vec::new();
@@ -352,36 +368,45 @@ impl SculptBrushEngine {
             let dab = self.create_dab(&mut stroke, input);
             results.push(dab);
             stroke.last_dab_position = input.position;
+            stroke.last_input_position = input.position;
+            stroke.distance_since_dab = 0.0;
             self.active_stroke = Some(stroke);
             return results;
         }
 
-        // Calculate distance from last dab
-        let distance = input.position.distance(stroke.last_dab_position);
-        stroke.distance_since_dab += distance;
-
-        // Emit dabs along the path if spacing is exceeded
-        if stroke.distance_since_dab >= spacing_distance {
-            let direction = (input.position - stroke.last_dab_position).normalize_or_zero();
-            let mut current_pos = stroke.last_dab_position;
-
-            while stroke.distance_since_dab >= spacing_distance {
-                current_pos += direction * spacing_distance;
-                stroke.distance_since_dab -= spacing_distance;
-
-                let dab_input = BrushInput {
-                    position: current_pos,
-                    normal: input.normal,
-                    pressure: input.pressure,
-                    timestamp_ms: input.timestamp_ms,
-                };
-
-                let dab = self.create_dab(&mut stroke, dab_input);
-                results.push(dab);
-            }
-
-            stroke.last_dab_position = current_pos;
+        // Consume each input segment once. Residual travel is an arc length,
+        // so a turn follows the new segment rather than a chord from the last dab.
+        let start = stroke.last_input_position;
+        let length = input.position.distance(start) as f64;
+        if !length.is_finite() || !spacing_distance.is_finite() {
+            self.active_stroke = Some(stroke);
+            return results;
         }
+        stroke.last_input_position = input.position;
+        let spacing = spacing_distance as f64;
+        let mut residual = stroke.distance_since_dab as f64;
+        let mut consumed = 0.0;
+        // Float input subdivision can differ by a few ULPs at a spacing boundary.
+        // Snap only to the current segment's endpoint, never beyond input.
+        let epsilon = spacing * f32::EPSILON as f64 * 4.0;
+        while residual + (length - consumed) + epsilon >= spacing {
+            let step = (spacing - residual).max(0.0);
+            consumed = (consumed + step).min(length);
+            let t = if length > 0.0 {
+                (consumed / length) as f32
+            } else {
+                1.0
+            };
+            let position = start.lerp(input.position, t);
+            let dab_input = BrushInput { position, ..input };
+            results.push(self.create_dab(&mut stroke, dab_input));
+            stroke.last_dab_position = position;
+            residual = 0.0;
+            if consumed >= length {
+                break;
+            }
+        }
+        stroke.distance_since_dab = (residual + length - consumed) as f32;
 
         // Put the stroke back
         self.active_stroke = Some(stroke);
@@ -408,31 +433,32 @@ impl SculptBrushEngine {
 
     /// Create a dab from input, handling delta compression.
     fn create_dab(&mut self, stroke: &mut StrokeState, input: BrushInput) -> DabResult {
-        // Calculate delta from base position
-        let delta = input.position - stroke.base_position;
-        let scaled_delta = delta * self.delta_scale;
-
-        // Check if delta exceeds i8 range
-        let needs_new_packet = scaled_delta.x.abs() > 127.0
-            || scaled_delta.y.abs() > 127.0
-            || scaled_delta.z.abs() > 127.0;
-
-        if needs_new_packet && !stroke.current_dabs.is_empty() {
-            // Finalize current packet
-            let packet = self.create_packet(stroke);
-            stroke.completed_packets.push(packet);
-            stroke.current_dabs.clear();
-            stroke.base_position = input.position;
+        // Deltas are relative to the previous *decoded* point. The packet's
+        // header origin stays fixed until that packet is finalized.
+        let mut scaled_delta =
+            ((input.position - stroke.encoded_position) * self.delta_scale).round();
+        let needs_new_packet = scaled_delta.abs().max_element() > 127.0;
+        if needs_new_packet {
+            if !stroke.current_dabs.is_empty() {
+                stroke.completed_packets.push(self.create_packet(stroke));
+                stroke.current_dabs.clear();
+            }
+            // This also handles an oversized first jump without emitting an
+            // empty packet or saturating the first dab's delta.
+            stroke.base_coordinates = input
+                .position
+                .to_array()
+                .map(|x| (x * 1000.0).round() as i32);
+            stroke.base_position =
+                Vec3::from_array(stroke.base_coordinates.map(|x| x as f32)) / 1000.0;
+            stroke.encoded_position = stroke.base_position;
+            scaled_delta = ((input.position - stroke.encoded_position) * self.delta_scale).round();
         }
 
-        // Create the dab
-        let delta = input.position - stroke.base_position;
-        let scaled_delta = delta * self.delta_scale;
-
         let dab = SculptDab {
-            dx: (scaled_delta.x as i8).clamp(-127, 127),
-            dy: (scaled_delta.y as i8).clamp(-127, 127),
-            dz: (scaled_delta.z as i8).clamp(-127, 127),
+            dx: scaled_delta.x as i8,
+            dy: scaled_delta.y as i8,
+            dz: scaled_delta.z as i8,
             pressure: (input.pressure * 255.0) as u8,
             radius_scale: SculptDab::encode_radius_scale(
                 self.preset.effective_radius(input.pressure) / self.preset.radius,
@@ -443,8 +469,8 @@ impl SculptBrushEngine {
 
         stroke.current_dabs.push(dab);
 
-        // Update base position for next dab (relative positioning)
-        stroke.base_position = input.position;
+        stroke.encoded_position +=
+            Vec3::new(dab.dx as f32, dab.dy as f32, dab.dz as f32) / self.delta_scale;
 
         DabResult {
             position: input.position,
@@ -457,9 +483,8 @@ impl SculptBrushEngine {
 
     /// Create a packet from current stroke state.
     fn create_packet(&self, stroke: &StrokeState) -> SculptStrokePacket {
-        // Use fixed-point for base position
-        let base_scale = 1000.0;
-
+        // The integer origin is authoritative: re-quantizing its decoded float
+        // is not idempotent at all representable coordinate magnitudes.
         SculptStrokePacket {
             header: SculptStrokeHeader {
                 version: 1,
@@ -470,9 +495,9 @@ impl SculptBrushEngine {
                 base_radius: (self.preset.radius * 1000.0) as u32,
                 strength: (self.preset.strength * 255.0) as u8,
                 flags: 0,
-                base_x: (stroke.base_position.x * base_scale) as i32,
-                base_y: (stroke.base_position.y * base_scale) as i32,
-                base_z: (stroke.base_position.z * base_scale) as i32,
+                base_x: stroke.base_coordinates[0],
+                base_y: stroke.base_coordinates[1],
+                base_z: stroke.base_coordinates[2],
             },
             dabs: stroke.current_dabs.clone(),
         }
@@ -635,5 +660,223 @@ mod tests {
         assert_eq!(dabs.len(), 1);
 
         engine.end_stroke();
+    }
+}
+
+#[cfg(test)]
+mod sampling_regression_tests {
+    use super::*;
+
+    fn input(position: Vec3) -> BrushInput {
+        BrushInput {
+            position,
+            normal: Vec3::Z,
+            pressure: 1.,
+            timestamp_ms: 1,
+        }
+    }
+
+    fn engine(spacing: f32) -> SculptBrushEngine {
+        SculptBrushEngine::new(BrushPreset {
+            radius: 1.,
+            spacing,
+            ..Default::default()
+        })
+    }
+
+    fn decode_positions(packets: &[SculptStrokePacket]) -> Vec<Vec3> {
+        packets
+            .iter()
+            .flat_map(|packet| {
+                let h = &packet.header;
+                let mut position =
+                    Vec3::new(h.base_x as f32, h.base_y as f32, h.base_z as f32) / 1000.;
+                packet.dabs.iter().map(move |dab| {
+                    position += Vec3::new(dab.dx as f32, dab.dy as f32, dab.dz as f32) / 100.;
+                    position
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn short_segments_never_emit_a_dab_ahead_of_input() {
+        let mut engine = engine(0.1);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        for x in [0.02, 0.04, 0.06, 0.08] {
+            assert!(
+                engine.update_stroke(input(Vec3::X * x)).is_empty(),
+                "sample {x}"
+            );
+        }
+        let dabs = engine.update_stroke(input(Vec3::X * 0.1));
+        assert_eq!(dabs.len(), 1);
+        assert!((dabs[0].position - Vec3::X * 0.1).length() < 1e-6);
+    }
+
+    #[test]
+    fn stationary_samples_do_not_recount_travel() {
+        let mut engine = engine(0.1);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        for _ in 0..20 {
+            assert!(engine.update_stroke(input(Vec3::X * 0.02)).is_empty());
+        }
+    }
+
+    #[test]
+    fn resampling_is_invariant_to_straight_segment_subdivision() {
+        fn sample(points: &[f32]) -> Vec<Vec3> {
+            let mut engine = engine(0.1);
+            engine.begin_stroke(1, input(Vec3::ZERO));
+            points
+                .iter()
+                .flat_map(|&x| engine.update_stroke(input(Vec3::X * x)))
+                .map(|dab| dab.position)
+                .collect()
+        }
+        let coarse = sample(&[1.]);
+        let fine = sample(&(1..=100).map(|i| i as f32 / 100.).collect::<Vec<_>>());
+        assert_eq!(coarse.len(), 10);
+        assert_eq!(fine.len(), coarse.len());
+        for (a, b) in coarse.iter().zip(fine) {
+            assert!(a.distance(b) < 1e-6);
+        }
+    }
+
+    #[test]
+    fn residual_travel_follows_the_actual_polyline_corner() {
+        let mut engine = engine(0.1);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        assert!(
+            engine
+                .update_stroke(input(Vec3::new(0.06, 0., 0.)))
+                .is_empty()
+        );
+        let dabs = engine.update_stroke(input(Vec3::new(0.06, 0.06, 0.)));
+        assert_eq!(dabs.len(), 1);
+        assert!(dabs[0].position.distance(Vec3::new(0.06, 0.04, 0.)) < 1e-6);
+    }
+
+    #[test]
+    fn packet_origin_precedes_its_deltas() {
+        let mut engine = engine(0.);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        engine.update_stroke(input(Vec3::X * 0.1));
+        engine.update_stroke(input(Vec3::X * 0.2));
+        let packets = engine.end_stroke().unwrap();
+        assert_eq!(packets[0].header.base_x, 0);
+        let positions = decode_positions(&packets);
+        assert!(positions[0].distance(Vec3::X * 0.1) < 1e-6);
+        assert!(positions[1].distance(Vec3::X * 0.2) < 1e-6);
+    }
+
+    #[test]
+    fn first_large_jump_starts_a_packet_without_saturating_the_delta() {
+        let mut engine = engine(0.);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        let live = engine.update_stroke(input(Vec3::new(10., -20., 30.)));
+        let packets = engine.end_stroke().unwrap();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].dabs.len(), 1);
+        assert!(decode_positions(&packets)[0].distance(live[0].position) < 0.009);
+    }
+
+    #[test]
+    fn packet_overflow_preserves_all_dab_positions_and_nonempty_packets() {
+        let mut engine = engine(0.);
+        engine.begin_stroke(1, input(Vec3::new(0.123, 0., 0.)));
+        let positions = [0.2, 0.4, 3.5, 3.7, -2., -2.2];
+        for &x in &positions {
+            engine.update_stroke(input(Vec3::X * x));
+        }
+        let packets = engine.end_stroke().unwrap();
+        assert_eq!(packets.len(), 3);
+        assert!(packets.iter().all(|packet| !packet.dabs.is_empty()));
+        let decoded = decode_positions(&packets);
+        assert_eq!(decoded.len(), positions.len());
+        for (actual, expected) in decoded.into_iter().zip(positions) {
+            assert!(actual.distance(Vec3::X * expected) <= 0.009);
+        }
+    }
+
+    #[test]
+    fn sub_quantum_motion_does_not_accumulate_replay_drift() {
+        let mut engine = engine(0.);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        let positions: Vec<_> = (1..=1000)
+            .map(|i| Vec3::new(i as f32 * 0.003, -i as f32 * 0.002, i as f32 * 0.001))
+            .collect();
+        for &position in &positions {
+            engine.update_stroke(input(position));
+        }
+        let decoded = decode_positions(&engine.end_stroke().unwrap());
+        assert_eq!(decoded.len(), positions.len());
+        for (actual, expected) in decoded.into_iter().zip(positions) {
+            assert!(
+                (actual - expected).abs().max_element() <= 0.0051,
+                "{actual:?} vs {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_and_cancelled_strokes_do_not_leak_packets() {
+        let mut engine = engine(0.);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        assert!(engine.end_stroke().unwrap().is_empty());
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        engine.update_stroke(input(Vec3::ONE));
+        engine.cancel_stroke();
+        assert!(engine.end_stroke().is_none());
+        engine.begin_stroke(1, input(Vec3::splat(4.)));
+        engine.update_stroke(input(Vec3::splat(4.1)));
+        let packets = engine.end_stroke().unwrap();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].dabs.len(), 1);
+        assert!(
+            (decode_positions(&packets)[0] - Vec3::splat(4.1))
+                .abs()
+                .max_element()
+                < 0.0051
+        );
+    }
+
+    #[test]
+    fn header_and_cursor_use_the_same_once_quantized_origin() {
+        let start = Vec3::X * f32::from_bits(0x46013296);
+        let target = Vec3::X * f32::from_bits(0x46013269);
+        let mut engine = engine(0.);
+        engine.begin_stroke(1, input(start));
+        engine.update_stroke(input(target));
+        let packets = engine.end_stroke().unwrap();
+        assert_eq!(packets[0].header.base_x, 8_268_647);
+        assert!((decode_positions(&packets)[0] - target).abs().max_element() <= 0.0051);
+        // The same rule applies after an overflow creates a fresh packet origin.
+        let mut engine = self::engine(0.);
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        engine.update_stroke(input(start));
+        engine.update_stroke(input(target));
+        let packets = engine.end_stroke().unwrap();
+        assert_eq!(packets[0].header.base_x, 8_268_647);
+        assert!((decode_positions(&packets)[1] - target).abs().max_element() <= 0.0051);
+    }
+
+    #[test]
+    fn reduced_spacing_consumes_old_residual_once_at_segment_start() {
+        let mut engine = engine(0.1);
+        engine.preset.pressure_affects_radius = true;
+        engine.begin_stroke(1, input(Vec3::ZERO));
+        assert!(engine.update_stroke(input(Vec3::X * 0.09)).is_empty());
+        let low_pressure = |x| BrushInput {
+            pressure: 0.,
+            ..input(Vec3::X * x)
+        };
+        let dabs = engine.update_stroke(low_pressure(0.09));
+        assert_eq!(dabs.len(), 1);
+        assert_eq!(dabs[0].position, Vec3::X * 0.09);
+        assert!(engine.update_stroke(low_pressure(0.11)).is_empty());
+        let dabs = engine.update_stroke(low_pressure(0.14));
+        assert_eq!(dabs.len(), 1);
+        assert!(dabs[0].position.distance(Vec3::X * 0.14) < 1e-6);
     }
 }

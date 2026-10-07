@@ -6,7 +6,7 @@
  * - WASM modes (Tauri/Electron): Uses CustomEvents for WASM <-> JS communication
  */
 
-import type { BevyToUi, UiToBevy, LayoutInfo } from './types';
+import type { BevyToUi, UiToBevy, LayoutInfo, PaintCommand, SculptCommand } from './types';
 
 // Declare the IPC interface injected by Rust (native modes)
 declare global {
@@ -63,6 +63,11 @@ class BevyBridge {
     private handlers: Set<MessageHandler> = new Set();
     private layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly wasmMode: boolean;
+    private disposed = false;
+    private readonly nativeReadyListener: EventListener | null = null;
+    // Only coalesced, idempotent bootstrap state is replayable. Never queue
+    // painting, geometry, undo, creation, or other mutation commands.
+    private readonly pendingNativeState = new Map<string, UiToBevy>();
     private readonly wasmMessageListener: EventListener | null = null;
     private readonly nativeMessageReceiver: ((msg: string) => void) | null = null;
     private readonly previousNativeMessageReceiver: ((msg: string) => void) | undefined;
@@ -103,6 +108,11 @@ class BevyBridge {
                 }
             };
             window.__PENTIMENTO_RECEIVE__ = this.nativeMessageReceiver;
+            this.nativeReadyListener = () => this.flushNativeBootstrap();
+            window.addEventListener('pentimento:ipc-ready', this.nativeReadyListener);
+            // CEF hears this console signal even before window.ipc exists and
+            // responds with the explicit ready event. It also works on reload.
+            console.log('__PENTIMENTO_UI_RECEIVER_READY__');
         }
     }
 
@@ -115,7 +125,17 @@ class BevyBridge {
         return () => this.handlers.delete(handler);
     }
 
+    private flushNativeBootstrap(): void {
+        if (this.disposed || window.__PENTIMENTO_RECEIVE__ !== this.nativeMessageReceiver) return;
+        const ipc = getNativeIpc();
+        if (!ipc) return;
+        const pending = [...this.pendingNativeState.values()];
+        this.pendingNativeState.clear();
+        for (const message of pending) ipc.postMessage(JSON.stringify(message));
+    }
+
     private send(msg: UiToBevy): void {
+        if (this.disposed) return;
         if (this.wasmMode) {
             // WASM mode (Tauri/Electron): Send via CustomEvent to Bevy WASM
             window.dispatchEvent(new CustomEvent('pentimento:ui-to-bevy', {
@@ -125,9 +145,13 @@ class BevyBridge {
             // Native modes: Use IPC injected by Rust
             const ipc = getNativeIpc();
             if (ipc) {
+                // A fresh direct state supersedes any older startup snapshot.
+                this.pendingNativeState.delete(msg.type);
                 ipc.postMessage(JSON.stringify(msg));
+            } else if (['RequestBrushState', 'LayoutUpdate', 'SetUiInputCapture', 'UiDirty'].includes(msg.type)) {
+                this.pendingNativeState.set(msg.type, msg);
             } else {
-                console.warn('IPC not available - running outside Pentimento?');
+                console.warn('IPC not available; mutation command was not queued.');
             }
         }
     }
@@ -153,6 +177,11 @@ class BevyBridge {
     }
 
     dispose(): void {
+        this.disposed = true;
+        this.pendingNativeState.clear();
+        if (this.nativeReadyListener) {
+            window.removeEventListener('pentimento:ipc-ready', this.nativeReadyListener);
+        }
         if (this.layoutDebounceTimer) {
             clearTimeout(this.layoutDebounceTimer);
             this.layoutDebounceTimer = null;
@@ -327,6 +356,22 @@ class BevyBridge {
                 name: request.name ?? null,
             }
         });
+    }
+
+    paintCommand(data: PaintCommand): void {
+        this.send({ type: 'PaintCommand', data });
+    }
+
+    sculptCommand(data: SculptCommand): void {
+        this.send({ type: 'SculptCommand', data });
+    }
+
+    setUiInputCapture(keyboard: boolean): void {
+        this.send({ type: 'SetUiInputCapture', data: { keyboard } });
+    }
+
+    requestBrushState(): void {
+        this.send({ type: 'RequestBrushState' });
     }
 
     // Depth view

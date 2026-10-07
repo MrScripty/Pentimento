@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::{
     AddPaintCanvasRequest, CameraCommand, EditMode, GizmoCommand, GizmoMode, LayerInfo,
-    MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand,
+    MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
+    PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, SculptBrushSettings, SculptCommand,
 };
 use crate::types::{
     AddObjectRequest, AmbientOcclusionSettings, AppSettings, DiffusionRequest, LayoutInfo,
@@ -82,6 +83,18 @@ pub enum BevyToUi {
     /// Projection mode changed
     ProjectionModeChanged { live_projection: bool },
 
+    /// Authoritative settings and supported paint presets.
+    PaintBrushStateChanged {
+        settings: PaintBrushSettings,
+        presets: Vec<PaintBrushPresetInfo>,
+        can_undo: bool,
+    },
+
+    /// None means sculpting is unavailable in this build.
+    SculptBrushStateChanged {
+        settings: Option<SculptBrushSettings>,
+    },
+
     /// Mesh edit mode state changed
     MeshEditModeChanged {
         /// Whether mesh edit mode is active
@@ -118,6 +131,9 @@ pub enum UiToBevy {
 
     /// UI layout changed (for input routing)
     LayoutUpdate(LayoutInfo),
+
+    /// Browser text/widget focus owns keyboard shortcuts.
+    SetUiInputCapture { keyboard: bool },
 
     /// Camera control commands
     CameraCommand(CameraCommand),
@@ -157,6 +173,12 @@ pub enum UiToBevy {
 
     /// Paint-specific commands (brush settings, undo, etc.)
     PaintCommand(PaintCommand),
+
+    /// Synchronize controls after UI mount/reload or mode change.
+    RequestBrushState,
+
+    /// Sculpt brush configuration.
+    SculptCommand(SculptCommand),
 
     /// Mesh edit mode commands
     MeshEditCommand(MeshEditCommand),

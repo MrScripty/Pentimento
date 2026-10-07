@@ -1,8 +1,9 @@
 use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, AppSettings, BevyToUi,
-    DiffusionRequest, EditMode, GizmoCommand, GizmoMode, LayerInfo, LightingSettings,
-    MeshEditCommand, MeshEditTool, MeshSelectionMode, PaintCommand, PrimitiveType, SceneInfo,
-    SceneObject, Transform3D, UiToBevy,
+    BlendMode, DiffusionRequest, EditMode, GizmoCommand, GizmoMode, LayerInfo, LightingSettings,
+    MeshEditCommand, MeshEditTool, MeshSelectionMode, PaintBrushPresetInfo, PaintBrushSettings,
+    PaintCommand, PrimitiveType, SceneInfo, SceneObject, SculptBrushSettings, SculptCommand,
+    SculptFalloff, SculptTool, Transform3D, UiToBevy,
 };
 use serde::Serialize;
 
@@ -61,6 +62,36 @@ fn main() {
                     },
                 ],
             },
+            BevyToUi::PaintBrushStateChanged {
+                settings: PaintBrushSettings {
+                    preset_id: 0,
+                    customized: true,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    size: 50.0,
+                    opacity: 1.0,
+                    hardness: 0.8,
+                    spacing: 0.25,
+                    blend_mode: BlendMode::Normal,
+                },
+                presets: vec![PaintBrushPresetInfo {
+                    id: 0,
+                    name: "Hard Round".into(),
+                }],
+                can_undo: true,
+            },
+            BevyToUi::SculptBrushStateChanged {
+                settings: Some(SculptBrushSettings {
+                    tool: SculptTool::Push,
+                    radius: 0.5,
+                    strength: 1.0,
+                    hardness: 0.5,
+                    falloff: SculptFalloff::Smooth,
+                }),
+            },
+            BevyToUi::SculptBrushStateChanged { settings: None },
+            BevyToUi::ProjectionModeChanged {
+                live_projection: true,
+            },
             BevyToUi::CloseMenus,
         ],
         ui_to_bevy: vec![
@@ -82,6 +113,20 @@ fn main() {
                 layer_id: 2,
                 opacity: 0.45,
             }),
+            UiToBevy::PaintCommand(PaintCommand::SetBrushSpacing { spacing: 0.2 }),
+            UiToBevy::PaintCommand(PaintCommand::Undo),
+            UiToBevy::PaintCommand(PaintCommand::ProjectToScene),
+            UiToBevy::SculptCommand(SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            }),
+            UiToBevy::SculptCommand(SculptCommand::SetRadius { radius: 0.8 }),
+            UiToBevy::SculptCommand(SculptCommand::SetStrength { strength: 0.25 }),
+            UiToBevy::SculptCommand(SculptCommand::SetHardness { hardness: 0.3 }),
+            UiToBevy::SculptCommand(SculptCommand::SetFalloff {
+                falloff: SculptFalloff::Sharp,
+            }),
+            UiToBevy::RequestBrushState,
+            UiToBevy::SetUiInputCapture { keyboard: true },
             UiToBevy::GizmoCommand(GizmoCommand::SetMode(GizmoMode::Translate)),
             UiToBevy::MeshEditCommand(MeshEditCommand::SetTool(MeshEditTool::Inset)),
             UiToBevy::StartDiffusion(DiffusionRequest {

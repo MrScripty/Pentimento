@@ -124,15 +124,15 @@ pub fn estimate_pixel_coverage_cpu(
         let s2x = (n2.x + 1.0) * 0.5 * width;
         let s2y = (1.0 - n2.y) * 0.5 * height;
 
-        // Signed area via cross product (positive = CCW = front-facing)
+        // Screen Y points downward, so an NDC CCW front face has negative area.
         let signed_area = 0.5 * ((s1x - s0x) * (s2y - s0y) - (s2x - s0x) * (s1y - s0y));
 
-        // Backface culling: skip negative area (clockwise winding = backfacing)
-        if signed_area <= 0.0 {
+        // Cull clockwise NDC winding and zero-area triangles.
+        if signed_area >= 0.0 {
             continue;
         }
 
-        total_screen_area += signed_area;
+        total_screen_area -= signed_area;
     }
 
     // Clamp to total resolution (can't cover more than the entire screen)
@@ -208,6 +208,56 @@ mod tests {
         assert!(
             coverage > 0,
             "Front-facing triangle should have positive coverage"
+        );
+    }
+
+    #[test]
+    fn test_ndc_counterclockwise_front_face_has_exact_area() {
+        let positions = [
+            Vec3::new(-0.5, -0.5, 0.5),
+            Vec3::new(0.5, -0.5, 0.5),
+            Vec3::new(0.0, 0.5, 0.5),
+        ];
+        // NDC-to-screen produces base=50px, height=50px, hence 1250px².
+        assert_eq!(
+            estimate_pixel_coverage_cpu(
+                &positions,
+                &[0, 1, 2],
+                &Mat4::IDENTITY,
+                &Mat4::IDENTITY,
+                UVec2::new(100, 100),
+            ),
+            1250
+        );
+        assert_eq!(
+            estimate_pixel_coverage_cpu(
+                &positions,
+                &[0, 2, 1],
+                &Mat4::IDENTITY,
+                &Mat4::IDENTITY,
+                UVec2::new(100, 100),
+            ),
+            0,
+            "Reversed winding is back-facing"
+        );
+    }
+
+    #[test]
+    fn test_degenerate_triangle_has_zero_area() {
+        let positions = [
+            Vec3::new(-0.5, 0.0, 0.5),
+            Vec3::new(0.0, 0.0, 0.5),
+            Vec3::new(0.5, 0.0, 0.5),
+        ];
+        assert_eq!(
+            estimate_pixel_coverage_cpu(
+                &positions,
+                &[0, 1, 2],
+                &Mat4::IDENTITY,
+                &Mat4::IDENTITY,
+                UVec2::new(100, 100),
+            ),
+            0
         );
     }
 }

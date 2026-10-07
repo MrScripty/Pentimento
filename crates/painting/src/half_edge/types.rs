@@ -20,6 +20,7 @@ pub struct Vertex {
     pub id: VertexId,
     pub position: Vec3,
     pub normal: Vec3,
+    /// Representative/fallback UV. Imported UV0 is authoritative on face corners.
     pub uv: Option<Vec2>,
     /// One outgoing half-edge from this vertex (arbitrary choice if multiple)
     pub outgoing_half_edge: Option<HalfEdgeId>,
@@ -36,6 +37,8 @@ pub struct HalfEdge {
     pub id: HalfEdgeId,
     /// The vertex this half-edge originates from
     pub origin: VertexId,
+    /// UV at this face corner; independent of the topological vertex at seams.
+    pub corner_uv: Option<Vec2>,
     /// The opposite half-edge (None for boundary edges)
     pub twin: Option<HalfEdgeId>,
     /// The next half-edge around the face (counter-clockwise)

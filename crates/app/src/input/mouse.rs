@@ -24,6 +24,9 @@ pub fn track_mouse_position(
     mut cursor_events: MessageReader<CursorMoved>,
     mut backend: FrontendBackend,
     windows: Query<&Window>,
+    buttons: Res<ButtonInput<bevy::input::mouse::MouseButton>>,
+    mut layout: ResMut<pentimento_scene::FrontendUiLayout>,
+    mut input_blocks: ResMut<pentimento_scene::FrontendInputBlockState>,
 ) {
     let Ok(window) = windows.single() else {
         cursor_events.clear();
@@ -46,6 +49,13 @@ pub fn track_mouse_position(
         mouse_state.webview_x = webview_x;
         mouse_state.webview_y = webview_y;
         had_cursor_event = true;
+    }
+
+    if layout.received {
+        let down = buttons.get_pressed().next().is_some();
+        let pressed = buttons.get_just_pressed().next().is_some();
+        input_blocks.block_pointer =
+            layout.update_pointer(mouse_state.webview_x, mouse_state.webview_y, down, pressed);
     }
 
     // Only send mouse move to webview if there was cursor movement AND throttle allows

@@ -12,13 +12,15 @@
         "typecheck": "npm run check && npm --prefix src-electron run typecheck",
         "lint": "./scripts/rustfmt-active.sh --check",
         "test": "node --test --experimental-strip-types tests/contracts/*.test.mjs tests/ui/*.test.ts",
-        "verify": "npm run lint && npm run lint:a11y && npm run typecheck && npm run test"
+        "verify": "npm run lint && npm run lint:a11y && npm run typecheck && npm run test",
+        "test:ui:browser": "node tests/ui/brush-panel-interactions.mjs"
     },
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.0",
         "@tailwindcss/vite": "^4.0.0",
         "@types/node": "^22.0.0",
         "autoprefixer": "^10.4.0",
+        "playwright-core": "^1.62.1",
         "postcss": "^8.4.0",
         "svelte": "^5.0.0",
         "svelte-check": "^4.0.0",

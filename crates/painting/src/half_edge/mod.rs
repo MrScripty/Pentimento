@@ -84,3 +84,6 @@ mod tests {
         assert_eq!(faces[0], FaceId(0));
     }
 }
+
+#[cfg(test)]
+mod regression_tests;

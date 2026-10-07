@@ -109,6 +109,7 @@ impl Plugin for PaintModePlugin {
 fn handle_paint_mode_toggle(
     key_input: Res<ButtonInput<KeyCode>>,
     mut paint_mode: ResMut<PaintMode>,
+    edit_mode: Res<crate::EditModeState>,
     mut paint_events: MessageWriter<PaintEvent>,
     mut outbound: ResMut<crate::OutboundUiMessages>,
     input_blocks: Res<FrontendInputBlockState>,
@@ -121,7 +122,13 @@ fn handle_paint_mode_toggle(
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
 
-    if shift && tab {
+    if shift
+        && tab
+        && !matches!(
+            edit_mode.mode,
+            pentimento_ipc::EditMode::Sculpt | pentimento_ipc::EditMode::MeshEdit
+        )
+    {
         paint_mode.active = !paint_mode.active;
         info!(
             "Paint mode {}",
@@ -170,6 +177,9 @@ fn handle_paint_input(
     input_blocks: Res<FrontendInputBlockState>,
 ) {
     if input_blocks.blocks_pointer() {
+        if paint_mode.current_stroke.take().is_some() {
+            paint_events.write(PaintEvent::StrokeEnd);
+        }
         cursor_events.clear();
         return;
     }
@@ -377,4 +387,46 @@ fn ray_plane_intersection(
     );
 
     Some((world_pos, uv))
+}
+
+#[cfg(test)]
+mod input_routing_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn entering_ui_ends_stroke_without_painting_across_the_panel() {
+        let mut world = World::new();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        world.init_resource::<Messages<CursorMoved>>();
+        world.init_resource::<Messages<PaintEvent>>();
+        world.init_resource::<ActiveCanvasPlane>();
+        world.init_resource::<StrokeIdGenerator>();
+        world.init_resource::<Time>();
+        world.insert_resource(FrontendInputBlockState {
+            block_pointer: true,
+            block_keyboard: false,
+        });
+        world.insert_resource(PaintMode {
+            active: true,
+            current_stroke: Some(StrokeState {
+                stroke_id: 1,
+                space_id: 1,
+                start_time: 0,
+                last_world_pos: None,
+                last_time: 0.0,
+            }),
+        });
+        world.run_system_once(handle_paint_input).unwrap();
+        assert!(world.resource::<PaintMode>().current_stroke.is_none());
+        let events: Vec<_> = world
+            .resource_mut::<Messages<PaintEvent>>()
+            .drain()
+            .collect();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], PaintEvent::StrokeEnd));
+    }
 }

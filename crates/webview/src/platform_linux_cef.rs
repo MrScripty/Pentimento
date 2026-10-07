@@ -177,7 +177,7 @@ wrap_display_handler! {
     impl DisplayHandler {
         fn on_console_message(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _level: LogSeverity,
             message: Option<&CefString>,
             _source: Option<&CefString>,
@@ -186,6 +186,16 @@ wrap_display_handler! {
             // Check if this is an IPC message
             if let Some(msg) = message {
                 let msg_str = msg.to_string();
+                if msg_str == "__PENTIMENTO_UI_RECEIVER_READY__" {
+                    // A new document or remounted UI has installed its receiver.
+                    // Re-bootstrap without replaying user mutation commands.
+                    if let Some(frame) = browser.and_then(|browser| browser.main_frame()) {
+                        let code: CefStringUtf16 = include_str!("cef_bootstrap.js").into();
+                        let url: CefStringUtf16 = "about:blank".into();
+                        frame.execute_java_script(Some(&code), Some(&url), 0);
+                    }
+                    return 1;
+                }
                 if let Some(json_str) = msg_str.strip_prefix(IPC_PREFIX) {
                     // Parse the JSON message and send to Bevy
                     match serde_json::from_str::<UiToBevy>(json_str) {
@@ -481,28 +491,9 @@ impl LinuxCefWebview {
 
     /// Inject the JavaScript IPC bridge that mimics wry's window.ipc.postMessage()
     fn inject_ipc_bridge(&self) {
-        let ipc_bridge_js = format!(
-            r#"
-            (function() {{
-                if (window.ipc) return; // Already injected
+        let ipc_bridge_js = include_str!("cef_bootstrap.js");
 
-                window.ipc = {{
-                    postMessage: function(message) {{
-                        // Send IPC messages via console.log with our special prefix
-                        console.log('{}' + message);
-                    }}
-                }};
-
-                // Also trigger initial UiDirty to signal that IPC is ready
-                window.ipc.postMessage(JSON.stringify({{ type: 'UiDirty' }}));
-
-                console.log('Pentimento IPC bridge initialized');
-            }})();
-            "#,
-            IPC_PREFIX
-        );
-
-        if let Err(e) = self.eval(&ipc_bridge_js) {
+        if let Err(e) = self.eval(ipc_bridge_js) {
             tracing::error!("Failed to inject IPC bridge: {}", e);
         } else {
             tracing::info!("CEF IPC bridge injected");

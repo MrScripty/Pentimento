@@ -127,7 +127,8 @@ fn handle_tab_key_for_mesh_edit(
         return;
     }
 
-    if !key_input.just_pressed(KeyCode::Tab) {
+    // Sculpt owns the target until its explicit Ctrl+Tab exit commits it.
+    if edit_mode.mode == EditMode::Sculpt || !key_input.just_pressed(KeyCode::Tab) {
         return;
     }
 
@@ -182,6 +183,14 @@ fn handle_mesh_edit_events(
     for event in events.read() {
         match event {
             MeshEditEvent::Enter { entity } => {
+                if edit_mode.mode == EditMode::Sculpt {
+                    outbound.send(BevyToUi::Error {
+                        code: "sculpt_session_active".into(),
+                        message: "Exit sculpt mode with Ctrl+Tab before entering mesh edit mode."
+                            .into(),
+                    });
+                    continue;
+                }
                 // Build EditableMesh if not already present
                 if editable_query.get(*entity).is_err() {
                     if let Ok(mesh3d) = mesh_query.get(*entity) {
@@ -367,5 +376,63 @@ fn handle_selection_mode_hotkeys(
     // A for toggle select all
     if key_input.just_pressed(KeyCode::KeyA) {
         events.write(MeshEditEvent::ToggleSelectAll);
+    }
+}
+
+#[cfg(test)]
+mod sculpt_ownership_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    #[cfg(feature = "selection")]
+    fn plain_tab_does_not_replace_sculpt_owner() {
+        let mut world = World::new();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<ActiveCanvasPlane>();
+        world.init_resource::<FrontendInputBlockState>();
+        world.init_resource::<MeshEditState>();
+        world.init_resource::<Messages<MeshEditEvent>>();
+        let entity = world.spawn((Selected, Mesh3d(Handle::default()))).id();
+        world.insert_resource(EditModeState {
+            mode: EditMode::Sculpt,
+            target_entity: Some(entity),
+        });
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+        world.run_system_once(handle_tab_key_for_mesh_edit).unwrap();
+        assert_eq!(world.resource::<Messages<MeshEditEvent>>().len(), 0);
+        assert_eq!(world.resource::<EditModeState>().mode, EditMode::Sculpt);
+        assert_eq!(
+            world.resource::<EditModeState>().target_entity,
+            Some(entity)
+        );
+    }
+
+    #[test]
+    fn direct_mesh_entry_cannot_replace_sculpt_owner() {
+        let mut world = World::new();
+        world.init_resource::<MeshEditState>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<OutboundUiMessages>();
+        world.init_resource::<Messages<MeshEditEvent>>();
+        let entity = world.spawn_empty().id();
+        world.insert_resource(EditModeState {
+            mode: EditMode::Sculpt,
+            target_entity: Some(entity),
+        });
+        world.write_message(MeshEditEvent::Enter { entity });
+        world.run_system_once(handle_mesh_edit_events).unwrap();
+        assert_eq!(world.resource::<EditModeState>().mode, EditMode::Sculpt);
+        assert_eq!(
+            world.resource::<EditModeState>().target_entity,
+            Some(entity)
+        );
+        assert!(world.resource::<MeshEditState>().target_entity.is_none());
+        assert!(matches!(
+            world.resource::<OutboundUiMessages>().messages.as_slice(),
+            [BevyToUi::Error { code, .. }] if code == "sculpt_session_active"
+        ));
     }
 }

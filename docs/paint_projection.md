@@ -1,266 +1,98 @@
-# Projection Painting Architecture
+# Canvas projection painting
 
-This document describes the projection painting system in Pentimento, which allows users to paint on a 2D canvas and have that paint projected onto 3D geometry in the scene.
+Projection painting transfers the active 2D canvas to UV-mapped scene meshes.
+The native scene plugin implements the same path for supported frontends.
 
-## Overview
+## User workflow
 
-Projection painting works by treating the 2D canvas as a "projector". When enabled, the system casts rays from the camera position through each painted pixel on the canvas and applies the paint color to any 3D mesh surfaces those rays intersect.
+1. Enter canvas paint mode, which creates a canvas and locks the camera.
+2. Paint on the canvas using the existing brush and layer tools.
+3. Use **Project to Scene** to refresh that canvas's projection once, or enable
+   **Live Projection** to refresh it when its composited pixels change.
+4. In live mode, canvas erase, stroke cancel, undo, layer opacity, and visibility
+   changes are reflected on the mesh. Each canvas retains its own projection
+   layer. Repeating Project does not repeatedly darken translucent paint.
 
-```
-Camera Position
-      |
-      |  (ray through canvas pixel)
-      v
-  +-------+
-  | Canvas|  (2D paint surface)
-  +-------+
-      |
-      v
-  /-------\
- /  Mesh   \  (3D geometry receives projected paint)
- \---------/
-```
+Projection layers are composited in canvas creation order. Refreshing a canvas
+replaces that canvas's previous projection, including when its projection view
+or a mesh moves. A canvas with a saved paint view keeps that view when the user
+unlocks the camera to inspect the scene. A different canvas adds a separate layer. ClearProjection removes all
+canvas projections from a mesh; ClearAllProjections removes them from every mesh.
+A clear remains clear until source pixels, geometry, or the projection view
+changes, or Project is explicitly used.
 
-## Two Projection Modes
+## Supported targets
 
-### Mode A: Paint-then-Project
-1. User creates a canvas plane (camera locks to fixed position)
-2. User paints on the canvas using standard 2D tools
-3. User clicks "Project to Scene" (P button)
-4. Canvas contents are projected onto all visible meshes in a single pass
+Triangle-list meshes with UV0 and a StandardMaterial are registered automatically
+at 512×512. An explicit ProjectionTarget::uv_atlas controls the atlas resolution.
+Indexed and non-indexed triangles are supported. Canvas planes are excluded.
+Hidden meshes are excluded; visible meshes without usable UVs still occlude
+projection onto meshes behind them. Material front/back/no-culling settings are
+respected for both receiving surfaces and occluders, using geometric winding
+after world transforms, including reflected objects and inverted camera culling.
+The lighting-only `double_sided` flag does not disable culling.
 
-### Mode B: Live Projection
-1. User creates a canvas plane (camera locks)
-2. User enables "Live Projection" toggle (L button)
-3. As user paints, strokes project to meshes in real-time
-4. Both the canvas and meshes show the paint result
+UV coordinates keep their existing meaning: v=0 addresses the top image row.
+Atlas texels do not wrap beyond 0–1. Existing mirrored/overlapping UV islands still
+share texture texels; projection does not rewrite mesh geometry or unwrap UVs.
+Nonuniform and reflected world transforms are supported. Surface normals use the
+inverse-transpose transform.
 
-## Architecture
+PTex projection is unsupported. The compatibility placeholder rejects hits,
+and the scene does not manufacture an approximate PTex atlas. Materials using
+UV1 or a nonidentity UV transform are also left unchanged with a diagnostic.
+Base textures must be CPU-readable RGBA8/BGRA8, in linear or sRGB format. If a
+base image is unavailable or unsupported, the original material is preserved,
+and pending paint is retained rather than silently destroying the texture.
 
-### Key Components
+## Data path
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         UI Layer                                 │
-│  ┌──────────────────┐  ┌──────────────────┐                     │
-│  │ paint_toolbar.rs │  │    bridge.rs     │                     │
-│  │ - L button       │──│ - set_live_proj  │                     │
-│  │ - P button       │  │ - project_scene  │                     │
-│  └──────────────────┘  └────────┬─────────┘                     │
-└─────────────────────────────────┼───────────────────────────────┘
-                                  │ IPC Messages
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Scene Layer                               │
-│  ┌────────────────────┐  ┌─────────────────────────────────┐    │
-│  │ projection_mode.rs │  │   projection_painting.rs        │    │
-│  │ - ProjectionMode   │  │   - ProjectionTargets           │    │
-│  │ - ProjectionTarget │  │   - MeshRaycastCache            │    │
-│  │ - ProjectionEvent  │  │   - project_canvas_to_scene()   │    │
-│  └────────────────────┘  └─────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Painting Layer                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │   raycast.rs    │  │  projection.rs  │  │projection_target│  │
-│  │ - Moller-       │  │ - canvas_uv_to  │  │ - UvAtlasTarget │  │
-│  │   Trumbore      │  │   _ray()        │  │ - PtexTargetStub│  │
-│  │ - MeshHit       │  │ - brush size    │  │                 │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-```
+The ProjectionPaintingPlugin runs in PostUpdate after transform and inherited
+visibility propagation and after the canvas pipeline's Update systems.
 
-### File Locations
+1. Extract/validate triangle geometry, preserving original vertices and UVs.
+2. Rasterize each target triangle in atlas space. For each covered texel, find
+   its world position, intersect the camera ray with the canvas plane, and find
+   the corresponding canvas pixel.
+3. Test the sample against the nearest scene triangle using a projection-local
+   bounding-volume tree. Occluded texels and geometry in front of the canvas
+   receive no projection.
+4. Cache this atlas-to-canvas mapping until geometry, transforms, visibility,
+   resolution, material culling, or projection view changes. Mesh asset modifications invalidate
+   cached geometry. Pixel edits reuse the mapping.
+5. Replace the active canvas's projection layer from the current composited
+   canvas. Source snapshots prevent unnecessary work or repeated alpha blending.
+6. Composite canvas projection layers, dirtying only changed atlas pixels.
+7. Composite dirty image rectangles over the original material in linear color
+   space, then encode sRGB RGBA8. Bevy owns Image extraction and GPU upload, so
+   creating a texture before its GPU asset is ready does not lose updates.
+8. Bind a private material copy only when paint exists. Unpainted texels preserve
+   the original color/texture; clearing all paint restores the original handle.
+   A mesh sharing its original material with another entity does not recolor it.
+   Image changes also invalidate the private material binding so it samples the
+   updated GPU texture view rather than a cached previous view.
 
-| File | Purpose |
-|------|---------|
-| `crates/scene/src/projection_mode.rs` | State management (resources, components, events) |
-| `crates/scene/src/projection_painting.rs` | Core projection systems and GPU texture management |
-| `crates/painting/src/raycast.rs` | Ray-triangle intersection (Moller-Trumbore algorithm) |
-| `crates/painting/src/projection.rs` | Math utilities for canvas-to-world projection |
-| `crates/painting/src/projection_target.rs` | Storage abstraction trait and implementations |
-| `crates/ipc/src/lib.rs` | IPC message types for UI communication |
-| `crates/dioxus-ui/src/components/paint_toolbar.rs` | UI buttons for projection controls |
+The Image asset path updates changed CPU rectangles; Bevy may upload the full
+image. This is not a custom partial-write GPU upload implementation.
 
-## Data Flow
+## Relevant files
 
-### Project-to-Scene Flow
+- crates/scene/src/projection_painting.rs: registration, cached UV coverage,
+  occlusion, per-canvas layers, material/image output, integration tests
+- crates/scene/src/projection_mode.rs: commands and enabled state
+- crates/painting/src/projection_target.rs: UV storage and dirty regions
+- crates/scene/src/painting_system.rs: source canvas pipeline and undo
 
-```
-1. User clicks "P" button
-   │
-   ▼
-2. UI sends PaintCommand::ProjectToScene via IPC
-   │
-   ▼
-3. handle_projection_events() receives ProjectionEvent::ProjectToScene
-   │
-   ▼
-4. project_canvas_to_scene() is called:
-   │
-   ├─► Get camera position (locked during paint mode)
-   ├─► Get canvas plane transform (position, orientation)
-   ├─► For each pixel (px, py) in canvas:
-   │     │
-   │     ├─► Get pixel color from PaintingPipeline
-   │     ├─► Skip if transparent (alpha < 0.01)
-   │     ├─► Convert pixel to canvas UV
-   │     ├─► Create ray: camera → canvas point → into scene
-   │     │
-   │     ├─► For each mesh with ProjectionTarget component:
-   │     │     ├─► Transform ray to mesh local space
-   │     │     ├─► raycast_mesh() → find triangle hit
-   │     │     └─► Track nearest hit (depth sorting)
-   │     │
-   │     └─► Apply paint to nearest hit's texture:
-   │           ├─► Get UV coordinate from MeshHit
-   │           └─► UvAtlasTarget::apply_projected_pixel()
-   │
-   ▼
-5. Dirty regions are uploaded to GPU textures
-```
+## Verification
 
-## Key Data Structures
+- cargo test -p painting projection_target
+- cargo test -p pentimento-scene projection_painting --lib
 
-### MeshHit (from raycast.rs)
-
-Contains all information about where a ray hit a mesh:
-
-```rust
-pub struct MeshHit {
-    pub world_pos: Vec3,      // World-space hit position
-    pub face_id: u32,         // Triangle index (for PTex)
-    pub barycentric: Vec3,    // Barycentric coords (u, v, w)
-    pub normal: Vec3,         // Interpolated surface normal
-    pub tangent: Vec3,        // Tangent vector
-    pub bitangent: Vec3,      // Bitangent vector
-    pub uv: Option<Vec2>,     // Interpolated UV (if mesh has UVs)
-}
-```
-
-### ProjectionTarget (Component)
-
-Marks a mesh as a target for projection painting:
-
-```rust
-#[derive(Component)]
-pub struct ProjectionTarget {
-    pub storage_mode: MeshStorageMode,  // UvAtlas or Ptex
-    pub texture_handle: Option<Handle<Image>>,
-    pub dirty: bool,
-}
-```
-
-### ProjectionTargetStorage (Trait)
-
-Abstraction for different paint storage backends:
-
-```rust
-pub trait ProjectionTargetStorage {
-    fn storage_mode(&self) -> MeshStorageMode;
-    fn hit_to_tex_coord(&self, hit: &MeshHit) -> Option<Vec2>;
-    fn apply_projected_pixel(&mut self, tex_coord: Vec2, color: [f32; 4], ...);
-    fn apply_projected_dab(&mut self, tex_coord: Vec2, radius: f32, ...);
-    fn take_dirty_regions(&mut self) -> Vec<DirtyRegion>;
-}
-```
-
-## Ray-Mesh Intersection
-
-The system uses the **Moller-Trumbore algorithm** for ray-triangle intersection:
-
-1. For each triangle in the mesh, compute intersection with the ray
-2. Return barycentric coordinates (u, v) and distance t
-3. Use barycentric coords to interpolate vertex attributes (UV, normal)
-
-```rust
-// Simplified Moller-Trumbore
-let edge1 = v1 - v0;
-let edge2 = v2 - v0;
-let pvec = ray_dir.cross(edge2);
-let det = edge1.dot(pvec);
-// ... compute u, v, t
-```
-
-Performance optimization: `MeshRaycastCache` stores extracted mesh data to avoid repeated asset lookups.
-
-## Coordinate Systems
-
-### Canvas UV to World Ray
-
-```
-Canvas Pixel (px, py)
-        │
-        ▼ pixel_to_canvas_uv()
-Canvas UV (0-1, 0-1)
-        │
-        ▼ canvas_uv_to_world()
-World Position on Canvas Plane
-        │
-        ▼ normalize(world_pos - camera_pos)
-Ray Direction
-```
-
-### Mesh Local Space Transformation
-
-Rays must be transformed to mesh local space before intersection:
-
-```rust
-let inv_transform = mesh_transform.affine().inverse();
-let local_origin = inv_transform.transform_point3(ray_origin);
-let local_dir = inv_transform.transform_vector3(ray_dir).normalize();
-```
-
-Hit results are transformed back to world space for depth comparison.
-
-## PTex Integration
-
-The architecture is designed to support PTex (per-face texturing) for meshes without UVs:
-
-- `MeshHit` includes `face_id` and `barycentric` coordinates
-- `MeshStorageMode::Ptex` variant exists
-- `PtexTargetStub` implements `ProjectionTargetStorage` (placeholder)
-- `barycentric_to_ptex_coords()` helper function exists
-
-When the PTex system is implemented (by another agent), it should:
-1. Implement `PtexTarget` struct with per-face tile storage
-2. Implement `ProjectionTargetStorage` trait
-3. Handle the face_id → tile mapping
-
-## GPU Texture Upload
-
-Projected paint uses the same tile-based dirty tracking as canvas painting:
-
-1. `UvAtlasTarget` wraps a `TiledSurface`
-2. Paint operations mark affected tiles as dirty
-3. `take_dirty_regions()` extracts changed tile data
-4. Data is converted to RGBA8 and uploaded via `wgpu::Queue::write_texture()`
-
-## Usage
-
-### Adding Projection Support to a Mesh
-
-```rust
-commands.entity(mesh_entity).insert(ProjectionTarget {
-    storage_mode: MeshStorageMode::UvAtlas { resolution: (512, 512) },
-    texture_handle: None,
-    dirty: false,
-});
-```
-
-### From the UI
-
-1. Enter paint mode (creates canvas, locks camera)
-2. Paint on canvas
-3. Click **L** to enable live projection, OR
-4. Click **P** to project canvas to scene (one-shot)
-
-## Limitations and Future Work
-
-- **Performance**: Currently iterates all canvas pixels; could be optimized with dirty tile tracking for live mode
-- **BVH**: No bounding volume hierarchy for large meshes; brute-force triangle iteration
-- **Brush Size**: Single-pixel projection; could project brush dabs for smoother results
-- **Occlusion**: Handles depth sorting but no transparency support
-- **PTex**: Stub implementation; needs full PTex storage system
+Coverage includes UV corner orientation and inclusive edges, invalid UV rejection,
+nonuniform normals, material-aware facing, reflected geometry, inverted-camera
+culling, rasterization without holes, UV-less occluders, packed dirty
+edge rectangles, live Image/material output, original/shared-material preservation,
+repeat-project idempotence, command ordering, clear, source-stroke undo, and
+material binding invalidation after image updates. These headless Bevy
+system tests validate the CPU and asset path; rendered frontend acceptance is a
+separate check.

@@ -8,6 +8,7 @@ This directory contains the platform-specific host implementations that embed br
 |-------------|-------------|
 | `lib.rs` | Shared public entrypoints and backend selection glue. |
 | `platform_linux.rs` | WebKitGTK capture backend for legacy/native browser embedding. |
+| `cef_bootstrap.js` | Idempotent CEF transport readiness handshake, shared with lifecycle tests. |
 | `platform_linux_cef.rs` | CEF backend used by the active Chromium-native frontend. |
 | `platform_linux_dioxus.rs` | Dioxus renderer bridge for the native Rust UI path. |
 | `platform_windows.rs` | Explicit unsupported stub for the current Windows path. |
