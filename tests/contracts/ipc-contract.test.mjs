@@ -70,6 +70,8 @@ function assertBevyToUiMessage(message) {
       assert.equal(typeof message.data.settings.customized, 'boolean');
       assert.ok(Array.isArray(message.data.presets));
       assert.equal(typeof message.data.can_undo, 'boolean');
+      assert.equal(typeof message.data.can_redo, 'boolean');
+      assert.equal(typeof message.data.source_visible, 'boolean');
       return;
     case 'SculptBrushStateChanged':
       if (message.data.settings !== null) {
@@ -119,7 +121,7 @@ function assertUiToBevyMessage(message) {
       assert.ok(message.data.height === null || typeof message.data.height === 'number');
       return;
     case 'PaintCommand':
-      if (typeof message.data === 'string') assert.ok(['Undo', 'ProjectToScene'].includes(message.data));
+      if (typeof message.data === 'string') assert.ok(['Undo', 'Redo', 'ProjectToScene'].includes(message.data));
       else assert.equal(typeof message.data, 'object');
       return;
     case 'SculptCommand':

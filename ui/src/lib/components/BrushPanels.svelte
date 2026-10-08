@@ -11,11 +11,13 @@
     let sculptReceived = $state(false);
     let sculptHistory = $state<SculptHistoryState>({ undo_strokes: 0, redo_strokes: 0, active: false, notice: null });
     let canUndo = $state(false);
+    let canRedo = $state(false);
+    let sourceVisible = $state(true);
     let liveProjection = $state(false);
     onMount(() => {
         const unsubscribe = bridge.subscribe(message => {
             if (message.type === 'PaintBrushStateChanged') {
-                paint = message.data.settings; presets = message.data.presets; canUndo = message.data.can_undo;
+                paint = message.data.settings; presets = message.data.presets; canUndo = message.data.can_undo; canRedo = message.data.can_redo; sourceVisible = message.data.source_visible;
             } else if (message.type === 'SculptBrushStateChanged') {
                 sculpt = message.data.settings; sculptReceived = true;
             } else if (message.type === 'SculptHistoryChanged') {
@@ -30,7 +32,7 @@
 </script>
 {#if mode === 'Paint' || mode === 'Sculpt'}
     <aside class="brush-panel panel interactive" data-ui-region="brush-panel" aria-label={mode === 'Paint' ? 'Projection paint controls' : 'Sculpt controls'}>
-        {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {presets} {canUndo} {liveProjection} />
+        {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {presets} {canUndo} {canRedo} {sourceVisible} {liveProjection} />
         {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} history={sculptHistory} />
         {:else if mode === 'Sculpt' && sculptReceived}<p class="notice">Sculpting is not available in this renderer build.</p>
         {:else}<p class="notice">Waiting for brush settings from the renderer.</p>{/if}

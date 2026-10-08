@@ -28,13 +28,11 @@ not upgraded here.
 
 ## Limitations and next requirement
 
-Sculpt strokes modify geometry immediately. The sculpt engine does not have
-working per-stroke undo/redo or transactional stroke cancellation; the panel says
-so and has no misleading Undo button. Implement real sculpt history next, using
-one transaction from `StrokeStart` through `StrokeEnd`, restoring geometry,
-topology, UV corner attributes, chunk mappings and GPU buffers atomically.
-`StrokeCancel`, mode exit, input interruption and history eviction need explicit
-behavior and tests. Do not use a paint-canvas undo action as a substitute.
+Sculpt has transactional per-stroke Undo/Redo and Escape cancellation; see
+[the history contract](sculpt-history-contract.md). Projection canvas stroke
+Redo and real source visibility are documented in
+[receiver inspection and history](projection-target-history.md). In Live mode,
+source Undo/Redo also refresh the UV target; with Live off, use Apply again.
 
 The sculpt engine measures radius in mesh-local units. Nonuniform object scale
 can also make the existing world-space brush gizmo differ from the deformation

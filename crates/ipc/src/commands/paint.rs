@@ -29,6 +29,10 @@ pub enum PaintCommand {
     SelectBrushPreset { preset_id: u32 },
     /// Undo last stroke
     Undo,
+    /// Restore the last undone canvas stroke.
+    Redo,
+    /// Show/hide the source canvas while retaining its projection and editing state.
+    SetSourceVisible { visible: bool },
     /// Enable/disable live projection mode (paint-as-project)
     SetLiveProjection { enabled: bool },
     /// Project current canvas contents to all visible meshes (one-shot)

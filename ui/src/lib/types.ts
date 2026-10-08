@@ -49,7 +49,7 @@ export type BevyToUi =
     | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
     | { type: 'CloseMenus' }
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
-    | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean } }
+    | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean; can_redo: boolean; source_visible: boolean } }
     | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } }
     | { type: 'SculptHistoryChanged'; data: SculptHistoryState };
 
@@ -268,6 +268,8 @@ export type PaintCommand =
     | { SetBlendMode: { mode: 'Normal' | 'Erase' } }
     | { SelectBrushPreset: { preset_id: number } }
     | 'Undo'
+    | 'Redo'
+    | { SetSourceVisible: { visible: boolean } }
     | { SetLiveProjection: { enabled: boolean } }
     | 'ProjectToScene'
     | { AddLayer: { name: string } }

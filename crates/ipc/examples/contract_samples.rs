@@ -98,6 +98,8 @@ fn main() {
                     name: "Hard Round".into(),
                 }],
                 can_undo: true,
+                can_redo: false,
+                source_visible: true,
             },
             BevyToUi::SculptBrushStateChanged {
                 settings: Some(SculptBrushSettings {
@@ -143,6 +145,8 @@ fn main() {
             }),
             UiToBevy::PaintCommand(PaintCommand::SetBrushSpacing { spacing: 0.2 }),
             UiToBevy::PaintCommand(PaintCommand::Undo),
+            UiToBevy::PaintCommand(PaintCommand::Redo),
+            UiToBevy::PaintCommand(PaintCommand::SetSourceVisible { visible: false }),
             UiToBevy::PaintCommand(PaintCommand::ProjectToScene),
             UiToBevy::SculptCommand(SculptCommand::SetTool {
                 tool: SculptTool::Grab,

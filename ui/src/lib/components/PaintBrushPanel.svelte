@@ -3,8 +3,8 @@
     import { colorToHex as toHex, hexToColor } from '$lib/brush-values';
     import type { PaintBrushSettings, PaintBrushPresetInfo } from '$lib/types';
     import BrushControl from './BrushControl.svelte';
-    interface Props { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; liveProjection: boolean }
-    let { settings, presets, canUndo, liveProjection }: Props = $props();
+    interface Props { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; canRedo: boolean; sourceVisible: boolean; liveProjection: boolean }
+    let { settings, presets, canUndo, canRedo, sourceVisible, liveProjection }: Props = $props();
     function colorChange(event: Event) {
         const hex = (event.currentTarget as HTMLInputElement).value;
         if (/^#[0-9a-f]{6}$/i.test(hex)) bridge.paintCommand({ SetBrushColor: { color: hexToColor(hex) } });
@@ -33,9 +33,11 @@
     <label class="color-row" for="paint-color">Color <input id="paint-color" type="color" value={toHex(settings.color)} disabled={settings.blend_mode === 'Erase'} oninput={colorChange} /><input class="hex-color" aria-label="Hex color" type="text" maxlength="7" pattern="#[0-9A-Fa-f]{6}" value={toHex(settings.color)} disabled={settings.blend_mode === 'Erase'} onchange={colorChange} /></label>
     <div class="divider"></div>
     <button class="wide" type="button" disabled={!canUndo} title="Undo the active canvas stroke (Ctrl+Z)" onclick={() => bridge.paintCommand('Undo')}>Undo canvas stroke</button>
+    <button class="wide" type="button" disabled={!canRedo} title="Redo the active canvas stroke (Ctrl+Shift+Z)" onclick={() => bridge.paintCommand('Redo')}>Redo canvas stroke</button>
     <label class="check-row"><input type="checkbox" checked={liveProjection} onchange={(e) => bridge.paintCommand({ SetLiveProjection: { enabled: e.currentTarget.checked } })} /> Live projection</label>
+    <label class="check-row"><input type="checkbox" checked={sourceVisible} onchange={(e) => bridge.paintCommand({ SetSourceVisible: { visible: e.currentTarget.checked } })} /> Show source canvas</label>
     <button class="wide primary" type="button" onclick={() => bridge.paintCommand('ProjectToScene')}>Apply canvas to UV surfaces</button>
-    <p class="hint">Paint on the source canvas, then apply to visible UV-mapped meshes. Live projection updates those surfaces while you paint.</p>
+    <p class="hint">Paint on the source canvas, then apply to visible UV-mapped meshes. Live projection also follows stroke Undo and Redo. Hide the source to inspect or paint the projected surface; the canvas remains the brush target.</p>
     <div class="divider"></div>
     <p class="hint">Shift + middle-drag: pan. Scroll: zoom. Tab: leave / return to canvas view. Middle-drag orbits outside canvas view.</p>
 </section>

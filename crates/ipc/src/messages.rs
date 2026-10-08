@@ -88,6 +88,8 @@ pub enum BevyToUi {
         settings: PaintBrushSettings,
         presets: Vec<PaintBrushPresetInfo>,
         can_undo: bool,
+        can_redo: bool,
+        source_visible: bool,
     },
 
     /// None means sculpting is unavailable in this build.

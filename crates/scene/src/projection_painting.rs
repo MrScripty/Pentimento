@@ -504,6 +504,7 @@ impl Plugin for ProjectionPaintingPlugin {
                     invalidate_mesh_cache,
                     live_projection_system,
                     upload_projection_textures,
+                    projection_native_inspection,
                 )
                     .chain()
                     .after(TransformSystems::Propagate)
@@ -1014,6 +1015,149 @@ fn upload_projection_textures(
     }
 }
 
+/// Read-only evidence from actual UV storage, bound Image and receiver geometry.
+/// Enabled only for native qualification; it never dispatches editor commands.
+fn projection_native_inspection(
+    targets: Res<ProjectionTargets>,
+    images: Res<Assets<Image>>,
+    meshes: Res<Assets<Mesh>>,
+    materials: Res<Assets<StandardMaterial>>,
+    painting: Res<PaintingResource>,
+    scene: ProjectionScene,
+    names: Query<&Name>,
+    visibility: Query<&InheritedVisibility>,
+    mut previous: Local<HashMap<Entity, String>>,
+) {
+    if std::env::var_os("PENTIMENTO_NATIVE_DIAGNOSTICS").is_none() {
+        return;
+    }
+    let Some(canvas_entity) = scene.active.entity else {
+        return;
+    };
+    let Ok((canvas, canvas_transform, _)) = scene.canvases.get(canvas_entity) else {
+        return;
+    };
+    let Some(pipeline) = painting.get_pipeline(canvas.plane_id) else {
+        return;
+    };
+    let Ok((camera_transform, Some(camera))) = scene.camera.single() else {
+        return;
+    };
+    let pixels = pipeline.layers.composited_surface().surface().pixels();
+    let mut min = UVec2::splat(u32::MAX);
+    let mut max = UVec2::ZERO;
+    for (i, pixel) in pixels.iter().enumerate().filter(|(_, p)| p[3] > 0.0) {
+        let _ = pixel;
+        let xy = UVec2::new(i as u32 % canvas.width, i as u32 / canvas.width);
+        min = min.min(xy);
+        max = max.max(xy + UVec2::ONE);
+    }
+    let source_bounds = (min.x != u32::MAX
+        && visibility.get(canvas_entity).ok().is_none_or(|v| v.get()))
+    .then(|| {
+        diagnostic_bounds(
+            camera,
+            camera_transform,
+            [
+                min.as_vec2(),
+                Vec2::new(max.x as f32, min.y as f32),
+                max.as_vec2(),
+                Vec2::new(min.x as f32, max.y as f32),
+            ]
+            .into_iter()
+            .map(|pixel| {
+                let uv = pixel / Vec2::new(canvas.width as f32, canvas.height as f32);
+                canvas_transform.transform_point(Vec3::new(
+                    (uv.x - 0.5) * canvas.world_width,
+                    (0.5 - uv.y) * canvas.world_height,
+                    0.,
+                ))
+            }),
+        )
+    })
+    .flatten();
+    for (entity, handle, transform, _, _, material_handle) in &scene.mesh_query {
+        let Some(target) = targets.get(entity) else {
+            continue;
+        };
+        let Some(texture) = targets.get_texture(entity) else {
+            continue;
+        };
+        let Some(image) = images.get(texture).and_then(|image| image.data.as_ref()) else {
+            continue;
+        };
+        let Some(mesh) = meshes.get(&handle.0) else {
+            continue;
+        };
+        let atlas = target.surface().surface().pixels();
+        let texels = atlas.iter().filter(|p| p[3] > 0.).count();
+        let atlas_hash = diagnostic_hash(bytemuck::cast_slice(atlas));
+        let image_hash = diagnostic_hash(image);
+        let geometry = format!(
+            "{:?}|{:?}|{:?}",
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0),
+            mesh.indices()
+        );
+        let geometry_hash = diagnostic_hash(geometry.as_bytes());
+        let bound = materials
+            .get(&material_handle.0)
+            .is_some_and(|m| m.base_color_texture.as_ref() == Some(texture));
+        let bounds = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(positions)) => diagnostic_bounds(
+                camera,
+                camera_transform,
+                positions
+                    .iter()
+                    .map(|p| transform.transform_point(Vec3::from(*p))),
+            ),
+            _ => None,
+        };
+        let receipt = format!(
+            "entity={} name={:?} texels={} atlas={:016x} image={:016x} geometry={:016x} bound={} undo={} redo={} active={} source_bounds={:?} target_bounds={:?}",
+            entity.to_bits(),
+            names.get(entity).map(Name::as_str).unwrap_or("unnamed"),
+            texels,
+            atlas_hash,
+            image_hash,
+            geometry_hash,
+            bound,
+            pipeline.undo_count(),
+            pipeline.redo_count(),
+            pipeline.is_stroking(),
+            source_bounds,
+            bounds
+        );
+        if previous.get(&entity) != Some(&receipt) {
+            info!("Projection target receipt: {}", receipt);
+            previous.insert(entity, receipt);
+        }
+    }
+}
+
+fn diagnostic_hash(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut hash = std::hash::DefaultHasher::new();
+    hash.write(bytes);
+    hash.finish()
+}
+
+fn diagnostic_bounds(
+    camera: &Camera,
+    transform: &GlobalTransform,
+    positions: impl IntoIterator<Item = Vec3>,
+) -> Option<[f32; 4]> {
+    let mut min = Vec2::splat(f32::INFINITY);
+    let mut max = Vec2::splat(f32::NEG_INFINITY);
+    for point in positions {
+        if let Ok(point) = camera.world_to_viewport(transform, point) {
+            min = min.min(point);
+            max = max.max(point);
+        }
+    }
+    min.is_finite().then_some([min.x, min.y, max.x, max.y])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1427,6 +1571,83 @@ mod tests {
             &original
         );
     }
+    #[test]
+    fn layered_source_redo_and_cancel_restore_actual_target_image_and_preserve_geometry() {
+        let (mut app, target, original_material) = test_app();
+        app.update();
+        let mesh_handle = app.world().get::<Mesh3d>(target).unwrap().0.clone();
+        let before_mesh = format!(
+            "{:?}",
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(&mesh_handle)
+                .unwrap()
+        );
+        let pristine = output(&app, target);
+        for id in 1..=2 {
+            let mut painting = app.world_mut().resource_mut::<PaintingResource>();
+            let p = painting.get_pipeline_mut(0).unwrap();
+            p.set_color([1., 0., 1., 0.4]);
+            p.begin_stroke(0, id, 0);
+            p.stroke_to(0.5, 0.5, 1.);
+            p.end_stroke();
+            drop(painting);
+            app.update();
+        }
+        let painted = output(&app, target);
+        assert_ne!(painted, pristine);
+        for _ in 0..3 {
+            assert!(app.world_mut().resource_mut::<PaintingResource>().undo(0));
+            app.update();
+            let first = output(&app, target);
+            assert_ne!(first, painted);
+            {
+                let mut painting = app.world_mut().resource_mut::<PaintingResource>();
+                let p = painting.get_pipeline_mut(0).unwrap();
+                p.set_color([0., 1., 0., 1.]);
+                p.begin_stroke(0, 99, 0);
+                p.stroke_to(1.5, 1.5, 1.);
+            }
+            app.update();
+            assert_ne!(output(&app, target), first);
+            app.world_mut()
+                .resource_mut::<PaintingResource>()
+                .get_pipeline_mut(0)
+                .unwrap()
+                .cancel_stroke();
+            app.update();
+            assert_eq!(output(&app, target), first);
+            assert!(app.world_mut().resource_mut::<PaintingResource>().redo(0));
+            app.update();
+            assert_eq!(output(&app, target), painted);
+        }
+        assert!(app.world_mut().resource_mut::<PaintingResource>().undo(0));
+        assert!(app.world_mut().resource_mut::<PaintingResource>().undo(0));
+        app.update();
+        assert_eq!(output(&app, target), pristine);
+        assert_eq!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(target)
+                .unwrap()
+                .0,
+            original_material
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                app.world()
+                    .resource::<Assets<Mesh>>()
+                    .get(&mesh_handle)
+                    .unwrap()
+            ),
+            before_mesh
+        );
+        assert!(app.world_mut().resource_mut::<PaintingResource>().redo(0));
+        assert!(app.world_mut().resource_mut::<PaintingResource>().redo(0));
+        app.update();
+        assert_eq!(output(&app, target), painted);
+    }
+
     #[test]
     fn modified_mesh_invalidates_live_coverage() {
         let (mut app, target, original) = test_app();

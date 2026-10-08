@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
 import { assertContinuousPaint } from './paint-stroke-pixels.mjs';
+import { projectionReceipts, assertRenderedTarget, receiverHistoryRegion, assertReceiverEndpoint } from './projection-target-evidence.mjs';
 import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -111,7 +112,19 @@ async function clickAt(x, y) {
 }
 async function nativeClick(locator) {
     await locator.waitFor({ state: 'visible' });
-    const box = await locator.boundingBox(); assert.ok(box);
+    let box = await locator.boundingBox(); assert.ok(box);
+    if (box.y < 60 || box.y + box.height > height - 12) {
+        // Read bounds only; scrolling is genuine X11 wheel input on the panel.
+        const panel = await page.locator('[data-ui-region="brush-panel"]').boundingBox();
+        assert.ok(panel, 'Off-screen native control has no scrollable brush panel');
+        await until(async () => {
+            box = await locator.boundingBox();
+            if (box.y >= 60 && box.y + box.height <= height - 12) return true;
+            xdo('mousemove', '--window', windowId, Math.round(panel.x + panel.width / 2), Math.round(panel.y + panel.height / 2));
+            xdo('click', box.y < 60 ? '4' : '5');
+            await pause(400); return false;
+        }, 'native wheel scroll to requested brush control');
+    }
     assertNativeClickBounds(box, width, height);
     await clickAt(box.x + box.width / 2, box.y + box.height / 2);
 }
@@ -437,6 +450,90 @@ try {
     const projectionFrame = await capture('paint-after-projection');
     record('projection_controls', { live_projection: true, applied: true, engine_event_log: true,
         nonempty_source: true, source_screenshot: projectionSource.screenshot, screenshot: projectionFrame.screenshot });
+
+    stage = 'projection_receiver_history';
+    const redo = page.getByRole('button', { name: 'Redo canvas stroke', exact: true });
+    const receiver = () => projectionReceipts(log()).at(-1);
+    async function inspectReceiver(name) {
+        const frame = await capture(name);
+        const state = receiver(); assert.ok(state && !state.active && state.target_bounds && state.source_bounds === null);
+        return { frame, frames: [frame, await capture(`${name}-noise`)], state };
+    }
+    async function returnToCanvas() {
+        // Hidden source stays the active editable canvas; no synthetic mode change.
+        assert.equal(await page.getByRole('heading', { name: 'Projection paint' }).count(), 1);
+    }
+    await nativeClick(page.getByRole('checkbox', { name: 'Show source canvas', exact: true }));
+    await until(() => page.getByRole('checkbox', { name: 'Show source canvas', exact: true }).isChecked().then(v => !v), 'backend source visibility');
+    // Remove the earlier source stroke. The atlas must clear before baseline capture.
+    await nativeClick(undo);
+    await until(() => receiver()?.painted_texels === 0 && !receiver()?.active, 'actual receiver atlas cleared by source Undo');
+    const pristineTarget = await inspectReceiver('projection-target-before');
+    await returnToCanvas();
+    await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '14');
+    await fill(page.getByRole('spinbutton', { name: 'Opacity value', exact: true }), '45');
+    await clickAt(35, height - 35);
+    // Paint over the real sphere, rather than an arbitrary background location.
+    await drag(sculptPoint.x - 35, sculptPoint.y - 10, 70, 0);
+    await until(() => receiver()?.painted_texels > 100 && receiver()?.texture_bound && !receiver()?.active, 'actual UV target image after first stroke');
+    const firstTarget = await inspectReceiver('projection-target-first');
+    assert.equal(firstTarget.state.geometry, pristineTarget.state.geometry, 'Projection changed receiver topology/positions/UVs');
+    const firstRendered = assertRenderedTarget(pristineTarget.frame, firstTarget.frame, width, height, firstTarget.state);
+    record('projection_target_pixels', { ...firstRendered, engine: firstTarget.state, screenshot: firstTarget.frame.screenshot });
+    await returnToCanvas();
+    const once = receiver(); await nativeClick(page.getByRole('button', { name: 'Apply canvas to UV surfaces', exact: true }));
+    await capture('projection-repeat-apply');
+    assert.equal(receiver().atlas, once.atlas, 'Repeat Apply accumulated paint');
+    assert.equal(receiver().image, once.image, 'Repeat Apply changed target image');
+    await clickAt(35, height - 35);
+    await drag(sculptPoint.x - 35, sculptPoint.y + 4, 70, 0);
+    await until(() => receiver()?.image !== firstTarget.state.image && !receiver()?.active, 'second layered stroke changed actual target image');
+    const secondTarget = await inspectReceiver('projection-target-layered');
+    assert.equal(secondTarget.state.geometry, pristineTarget.state.geometry);
+    assertRenderedTarget(pristineTarget.frame, secondTarget.frame, width, height, secondTarget.state);
+    const layeredRegion = receiverHistoryRegion(deformationRegion(firstTarget.frames, secondTarget.frames, width, height), [firstTarget.state, secondTarget.state]);
+    assert.ok(layeredRegion.pixels.length > 100, 'Second stroke produced no independent rendered target change');
+    await returnToCanvas();
+    await clickAt(35, height - 35);
+    xdo('mousemove', '--window', windowId, Math.round(sculptPoint.x), Math.round(sculptPoint.y - 30));
+    await pause(400); xdo('mousedown', '1');
+    try {
+        xdo('mousemove', '--window', windowId, Math.round(sculptPoint.x + 20), Math.round(sculptPoint.y - 30));
+        await until(() => receiver()?.active && receiver()?.image !== secondTarget.state.image, 'live target changed during cancellable stroke');
+        var activeTargetFrames = [await capture('projection-target-cancel-active'), await capture('projection-target-cancel-active-noise')];
+        var activeTargetState = receiver();
+        await key('Escape', () => !receiver()?.active && receiver()?.image === secondTarget.state.image, 'cancel restores exact UV target image');
+    } finally { xdo('mouseup', '1'); }
+    const cancelledTarget = await inspectReceiver('projection-target-cancelled');
+    assert.equal(cancelledTarget.state.atlas, secondTarget.state.atlas);
+    assert.equal(cancelledTarget.state.image, secondTarget.state.image);
+    assert.equal(cancelledTarget.state.undo, secondTarget.state.undo);
+    const projectionCancelRegion = receiverHistoryRegion(deformationRegion(secondTarget.frames, activeTargetFrames, width, height), [secondTarget.state, activeTargetState]);
+    assertReceiverEndpoint(projectionCancelRegion, secondTarget.frame, cancelledTarget.frame, cancelledTarget.state);
+    const cancelPixels = assertRegionRestored(projectionCancelRegion, secondTarget.frame, activeTargetFrames.at(-1), cancelledTarget.frame, 'Projection cancel');
+    record('projection_target_cancel', { ...cancelPixels, engine: cancelledTarget.state, active_screenshot: 'projection-target-cancel-active.jpg', screenshot: cancelledTarget.frame.screenshot });
+    await returnToCanvas(); await nativeClick(undo);
+    await until(() => receiver()?.image === firstTarget.state.image && receiver()?.redo === 1, 'Undo exact target image with Redo available');
+    const undoTarget = await inspectReceiver('projection-target-undone');
+    assertReceiverEndpoint(layeredRegion, firstTarget.frame, undoTarget.frame, undoTarget.state);
+    const undoPixels = assertRegionRestored(layeredRegion, firstTarget.frame, secondTarget.frame, undoTarget.frame, 'Projection Undo');
+    record('projection_target_undo', { ...undoPixels, engine: undoTarget.state, screenshot: undoTarget.frame.screenshot });
+    await returnToCanvas(); await nativeClick(redo);
+    await until(() => receiver()?.image === secondTarget.state.image && receiver()?.redo === 0, 'Redo exact target image');
+    const redoTarget = await inspectReceiver('projection-target-redone');
+    assert.equal(redoTarget.state.atlas, secondTarget.state.atlas);
+    assert.equal(redoTarget.state.geometry, pristineTarget.state.geometry);
+    assertReceiverEndpoint(layeredRegion, secondTarget.frame, redoTarget.frame, redoTarget.state);
+    const redoPixels = assertRegionRestored(layeredRegion, secondTarget.frame, undoTarget.frame, redoTarget.frame, 'Projection Redo');
+    record('projection_target_redo', { ...redoPixels, engine: redoTarget.state, screenshot: redoTarget.frame.screenshot });
+
+    await returnToCanvas(); await nativeClick(undo);
+    await until(() => receiver()?.image === firstTarget.state.image && receiver()?.redo === 1, 'Undo before native Redo shortcut');
+    await clickAt(35, height - 35);
+    await key('ctrl+shift+z', () => receiver()?.image === secondTarget.state.image && receiver()?.redo === 0, 'native paint Redo shortcut');
+    const shortcutTarget = await inspectReceiver('projection-target-redo-shortcut');
+    assertReceiverEndpoint(layeredRegion, secondTarget.frame, shortcutTarget.frame, shortcutTarget.state);
+    record('projection_target_redo_shortcut', { engine: shortcutTarget.state, screenshot: shortcutTarget.frame.screenshot });
 
     stage = 'complete';
     writeFileSync(`${out}/result.json`, JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', commit: command('git', ['rev-parse', 'HEAD']).toString().trim(), records, native_input_events: (await failureDiagnostics())?.native_input_events ?? null }, null, 2));

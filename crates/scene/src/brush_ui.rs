@@ -48,6 +48,20 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
         }
         UiToBevy::PaintCommand(command) => {
             match command {
+                PaintCommand::SetSourceVisible { visible } => {
+                    if let Some(entity) = world
+                        .get_resource::<ActiveCanvasPlane>()
+                        .and_then(|active| active.entity)
+                    {
+                        if let Some(mut visibility) = world.get_mut::<Visibility>(entity) {
+                            *visibility = if *visible {
+                                Visibility::Visible
+                            } else {
+                                Visibility::Hidden
+                            };
+                        }
+                    }
+                }
                 PaintCommand::SetLiveProjection { enabled } => {
                     if let Some(mut events) = world.get_resource_mut::<Messages<ProjectionEvent>>()
                     {
@@ -134,6 +148,14 @@ fn paint_message(world: &World) -> Option<BevyToUi> {
             })
             .collect(),
         can_undo,
+        source_visible: world
+            .get_resource::<ActiveCanvasPlane>()
+            .and_then(|a| a.entity)
+            .and_then(|e| world.get::<Visibility>(e))
+            .is_none_or(|v| *v != Visibility::Hidden),
+        can_redo: active_plane_id(world)
+            .and_then(|id| painting.get_pipeline(id))
+            .is_some_and(|p| p.can_redo()),
     })
 }
 
@@ -278,6 +300,12 @@ fn handle_paint_command(
                 let _ = painting.undo(id);
             }
         }
+        PaintCommand::SetSourceVisible { .. } => {}
+        PaintCommand::Redo => {
+            if let Some(id) = active_plane_id {
+                let _ = painting.redo(id);
+            }
+        }
         PaintCommand::SetLiveProjection { enabled } => {
             debug!("Live projection toggle requested: {}", enabled);
         }
@@ -411,6 +439,83 @@ mod tests {
             .unwrap()
             .get_pixel(x, y)
             .unwrap()
+    }
+
+    #[test]
+    fn source_visibility_command_preserves_live_projection_pixels_and_history() {
+        let mut world = world_with_canvas();
+        let entity = world.resource::<ActiveCanvasPlane>().entity.unwrap();
+        world.entity_mut(entity).insert(Visibility::Visible);
+        world.resource_mut::<ProjectionMode>().live_projection = true;
+        stamp(&mut world);
+        let pixel_before = pixel(&world, 64, 64);
+        paint(
+            &mut world,
+            PaintCommand::SetSourceVisible { visible: false },
+        );
+        assert_eq!(
+            *world.get::<Visibility>(entity).unwrap(),
+            Visibility::Hidden
+        );
+        assert!(world.resource::<ProjectionMode>().live_projection);
+        assert_eq!(pixel(&world, 64, 64), pixel_before);
+        assert_eq!(
+            world
+                .resource::<PaintingResource>()
+                .get_pipeline(7)
+                .unwrap()
+                .undo_count(),
+            1
+        );
+        assert!(matches!(
+            paint_message(&world),
+            Some(BevyToUi::PaintBrushStateChanged {
+                source_visible: false,
+                can_undo: true,
+                ..
+            })
+        ));
+        paint(&mut world, PaintCommand::SetSourceVisible { visible: true });
+        assert_eq!(
+            *world.get::<Visibility>(entity).unwrap(),
+            Visibility::Visible
+        );
+        assert_eq!(pixel(&world, 64, 64), pixel_before);
+    }
+
+    #[test]
+    fn redo_command_restores_active_canvas_and_reports_real_availability() {
+        let mut world = world_with_canvas();
+        stamp(&mut world);
+        let painted = pixel(&world, 64, 64);
+        paint(&mut world, PaintCommand::Undo);
+        world
+            .resource_mut::<PaintingResource>()
+            .get_pipeline_mut(7)
+            .unwrap()
+            .layers
+            .composite();
+        assert_eq!(pixel(&world, 64, 64)[3], 0.);
+        assert!(matches!(
+            paint_message(&world),
+            Some(BevyToUi::PaintBrushStateChanged { can_redo: true, .. })
+        ));
+        paint(&mut world, PaintCommand::Redo);
+        world
+            .resource_mut::<PaintingResource>()
+            .get_pipeline_mut(7)
+            .unwrap()
+            .layers
+            .composite();
+        assert_eq!(pixel(&world, 64, 64), painted);
+        assert!(matches!(
+            paint_message(&world),
+            Some(BevyToUi::PaintBrushStateChanged {
+                can_redo: false,
+                can_undo: true,
+                ..
+            })
+        ));
     }
 
     #[test]

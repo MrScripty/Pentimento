@@ -130,6 +130,13 @@ impl PaintingResource {
         }
     }
 
+    /// Redo the last undone stroke on the requested canvas only.
+    pub fn redo(&mut self, plane_id: u32) -> bool {
+        self.pipelines
+            .get_mut(&plane_id)
+            .is_some_and(|pipeline| pipeline.redo())
+    }
+
     /// Undo the last stroke on any pipeline that has undo available
     /// Returns true if an undo was performed
     pub fn undo_any(&mut self) -> bool {

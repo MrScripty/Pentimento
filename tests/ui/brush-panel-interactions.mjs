@@ -28,7 +28,7 @@ for (const mode of ['None', 'MeshEdit']) {
 }
 
 let paint = { preset_id: 0, customized: true, color: [0.2158605, 0.2158605, 0.2158605, 1], size: 50, opacity: 1, hardness: 0.8, spacing: 0.25, blend_mode: 'Normal' };
-const paintState = () => receive({ type: 'PaintBrushStateChanged', data: { settings: paint, presets: [{ id: 0, name: 'Hard Round' }, { id: 1, name: 'Soft Round' }], can_undo: true } });
+const paintState = () => receive({ type: 'PaintBrushStateChanged', data: { settings: paint, presets: [{ id: 0, name: 'Hard Round' }, { id: 1, name: 'Soft Round' }], can_undo: true, can_redo: true, source_visible: true } });
 await paintState();
 await receive({ type: 'EditModeChanged', data: { mode: 'Paint' } });
 await page.getByRole('heading', { name: 'Projection paint' }).waitFor();
@@ -56,10 +56,14 @@ await page.getByLabel('Brush preset', { exact: true }).selectOption('1');
 assert.deepEqual((await lastCommand('PaintCommand')).data, { SelectBrushPreset: { preset_id: 1 } });
 await page.getByRole('button', { name: 'Undo canvas stroke' }).click();
 assert.equal((await lastCommand('PaintCommand')).data, 'Undo');
+await page.getByRole('button', { name: 'Redo canvas stroke', exact: true }).click();
+assert.equal((await lastCommand('PaintCommand')).data, 'Redo');
 await page.getByLabel('Live projection', { exact: true }).check();
 assert.deepEqual((await lastCommand('PaintCommand')).data, { SetLiveProjection: { enabled: true } });
 await page.getByRole('button', { name: 'Apply canvas to UV surfaces' }).click();
 assert.equal((await lastCommand('PaintCommand')).data, 'ProjectToScene');
+await page.getByRole('checkbox', { name: 'Show source canvas', exact: true }).uncheck();
+assert.deepEqual((await lastCommand('PaintCommand')).data, { SetSourceVisible: { visible: false } });
 const output = process.env.PENTIMENTO_EVIDENCE_DIR ?? '/tmp/pentimento-brush-evidence';
 await mkdir(output, { recursive: true });
 await page.screenshot({ path: `${output}/projection-paint-controls.jpg`, type: 'jpeg', quality: 85 });

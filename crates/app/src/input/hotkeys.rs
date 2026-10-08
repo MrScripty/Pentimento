@@ -2,7 +2,7 @@
 //!
 //! This module handles global hotkeys that aren't forwarded to the webview:
 //! - Ctrl+Shift+I: Open DevTools (CEF mode only)
-//! - Ctrl+Z: Undo paint stroke
+//! - Ctrl+Z / Ctrl+Shift+Z: Undo / Redo paint stroke
 //! - Shift+A: Open add object menu
 
 use bevy::prelude::*;
@@ -41,7 +41,7 @@ pub fn handle_devtools_hotkey(
     }
 }
 
-/// Handle Ctrl+Z for paint undo
+/// Handle Ctrl+Z / Ctrl+Shift+Z for the active canvas history
 pub fn handle_paint_undo_hotkey(
     key_input: Res<ButtonInput<KeyCode>>,
     input_blocks: Res<FrontendInputBlockState>,
@@ -58,15 +58,19 @@ pub fn handle_paint_undo_hotkey(
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
     let z_pressed = key_input.just_pressed(KeyCode::KeyZ);
 
-    // Ctrl+Z (without shift) for undo
-    if ctrl && !shift && z_pressed && paint_mode.active {
+    // Ctrl+Z for Undo, Ctrl+Shift+Z for Redo.
+    if ctrl && z_pressed && paint_mode.active {
         if let Some(ref mut painting) = painting_res {
             if let Some(canvas) = active_canvas
                 .entity
                 .and_then(|entity| canvases.get(entity).ok())
             {
-                if painting.undo(canvas.plane_id) {
-                    info!("Paint undo (Ctrl+Z)");
+                if if shift {
+                    painting.redo(canvas.plane_id)
+                } else {
+                    painting.undo(canvas.plane_id)
+                } {
+                    info!("Paint history restored (redo={})", shift);
                 }
             }
         }
