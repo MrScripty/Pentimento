@@ -109,12 +109,20 @@ fn main() {
                 }),
             },
             BevyToUi::SculptBrushStateChanged { settings: None },
+            BevyToUi::SculptHistoryChanged {
+                undo_strokes: 1,
+                redo_strokes: 2,
+                active: false,
+                notice: None,
+            },
             BevyToUi::ProjectionModeChanged {
                 live_projection: true,
             },
             BevyToUi::CloseMenus,
         ],
         ui_to_bevy: vec![
+            UiToBevy::SculptCommand(SculptCommand::Undo),
+            UiToBevy::SculptCommand(SculptCommand::Redo),
             UiToBevy::AddObject(AddObjectRequest {
                 primitive_type: PrimitiveType::Cube,
                 position: Some([0.0, 1.0, 0.0]),

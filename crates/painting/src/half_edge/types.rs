@@ -15,7 +15,7 @@ pub struct HalfEdgeId(pub u32);
 pub struct FaceId(pub u32);
 
 /// A vertex in the half-edge mesh
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Vertex {
     pub id: VertexId,
     pub position: Vec3,
@@ -32,7 +32,7 @@ pub struct Vertex {
 ///
 /// Each edge in the mesh is represented by two half-edges pointing in opposite
 /// directions. Half-edges store connectivity information for traversing the mesh.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HalfEdge {
     pub id: HalfEdgeId,
     /// The vertex this half-edge originates from
@@ -50,7 +50,7 @@ pub struct HalfEdge {
 }
 
 /// A face (polygon) in the mesh
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Face {
     pub id: FaceId,
     /// One half-edge on the boundary of this face

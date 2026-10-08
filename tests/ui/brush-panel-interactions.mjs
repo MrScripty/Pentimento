@@ -88,6 +88,22 @@ sculpt = { tool: 'Grab', radius: 1.7, strength: 0.4, hardness: 0.25, falloff: 'S
 await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
 assert.equal(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue(), '1.7');
 await page.screenshot({ path: `${output}/sculpt-brush-controls.jpg`, type: 'jpeg', quality: 85 });
+// History availability comes from the native owner; buttons emit real protocol commands.
+const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });
+const sculptRedo = page.getByRole('button', { name: 'Redo sculpt stroke', exact: true });
+assert.equal(await sculptUndo.isDisabled(), true);
+assert.equal(await sculptRedo.isDisabled(), true);
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 1, redo_strokes: 0, active: false, notice: null } });
+await sculptUndo.click();
+assert.equal((await lastCommand('SculptCommand')).data, 'Undo');
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 1, active: false, notice: null } });
+await sculptRedo.click();
+assert.equal((await lastCommand('SculptCommand')).data, 'Redo');
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 1, redo_strokes: 1, active: true, notice: null } });
+assert.equal(await sculptUndo.isDisabled(), true);
+assert.equal(await sculptRedo.isDisabled(), true);
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: false, notice: 'This stroke exceeds the local history limit and cannot be undone.' } });
+assert.match(await page.getByRole('status').textContent(), /cannot be undone/);
 // Mode unmount/remount keeps each backend-owned brush independently.
 for (const mode of ['None', 'Paint', 'Sculpt', 'Paint']) await receive({ type: 'EditModeChanged', data: { mode } });
 assert.equal(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue(), '25');

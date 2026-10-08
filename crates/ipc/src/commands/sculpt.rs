@@ -24,6 +24,8 @@ pub enum SculptFalloff {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SculptCommand {
+    Undo,
+    Redo,
     SetTool { tool: SculptTool },
     SetRadius { radius: f32 },
     SetStrength { strength: f32 },

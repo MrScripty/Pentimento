@@ -11,7 +11,9 @@ use bevy::input::mouse::MouseButton;
 use bevy::math::{Affine3A, Isometry3d};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow};
+#[cfg(test)]
+use bevy::window::CursorMoved;
+use bevy::window::{PrimaryWindow, WindowEvent};
 use painting::half_edge::HalfEdgeMesh;
 use pentimento_ipc::{
     BevyToUi, EditMode, SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool,
@@ -136,7 +138,9 @@ pub struct SculptingData {
 #[derive(Message, Debug, Clone)]
 pub enum SculptEvent {
     /// Enter sculpt mode for the specified entity
-    Enter { entity: Entity },
+    Enter {
+        entity: Entity,
+    },
     /// Exit sculpt mode
     Exit,
     /// Set the deformation type
@@ -167,6 +171,8 @@ pub enum SculptEvent {
     StrokeEnd,
     /// Cancel a sculpt stroke
     StrokeCancel,
+    Undo,
+    Redo,
 }
 
 /// Plugin for sculpt mode functionality
@@ -350,6 +356,25 @@ fn handle_sculpt_mode_hotkey(
     // Check for Ctrl modifier
     let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
+    if edit_mode.mode == EditMode::Sculpt {
+        if key_input.just_pressed(KeyCode::Escape) {
+            events.write(SculptEvent::StrokeCancel);
+        }
+        if ctrl && key_input.just_pressed(KeyCode::KeyZ) {
+            let shift =
+                key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
+            events.write(if shift {
+                SculptEvent::Redo
+            } else {
+                SculptEvent::Undo
+            });
+            return;
+        }
+        if ctrl && key_input.just_pressed(KeyCode::KeyY) {
+            events.write(SculptEvent::Redo);
+            return;
+        }
+    }
 
     if !ctrl || !tab {
         return;
@@ -524,20 +549,44 @@ fn handle_brush_adjustment(
     }
 }
 
-/// Handle mouse input for sculpting
+/// Handle ordered pointer samples without dropping press/release-frame motion.
 fn handle_sculpt_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut cursor_events: MessageReader<CursorMoved>,
+    mut window_events: MessageReader<WindowEvent>,
+    mut last_cursor: Local<Option<Vec2>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
     mut sculpt_state: ResMut<SculptState>,
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut sculpt_events: MessageWriter<SculptEvent>,
-    time: Res<Time>,
     input_blocks: Res<FrontendInputBlockState>,
 ) {
+    let Ok((window_entity, window)) = windows.single() else {
+        window_events.clear();
+        return;
+    };
+    // Read our own ordered stream. Other frontend/scene readers retain theirs.
+    // Track hover even during blocked or inactive frames, but never replay it.
+    let batch: Vec<_> = window_events.read().cloned().collect();
+    let prior_cursor = *last_cursor;
+    let mut cursor = prior_cursor;
+    let mut has_cursor_event = false;
+    for event in &batch {
+        if let WindowEvent::CursorMoved(event) = event {
+            if event.window == window_entity {
+                *last_cursor = Some(event.position);
+                has_cursor_event = true;
+            }
+        }
+    }
+    // If no movement occurred this frame, Window's position is a valid fallback
+    // for a press. With later moves, its final position cannot identify origin.
+    if cursor.is_none() && !has_cursor_event {
+        cursor = window.cursor_position();
+    }
+
     if sculpt_state.suppress_left_until_release {
         if sculpt_state.current_stroke_id.is_some() {
             sculpt_events.write(SculptEvent::StrokeEnd);
@@ -545,107 +594,103 @@ fn handle_sculpt_input(
         if !mouse_button.pressed(MouseButton::Left) {
             sculpt_state.suppress_left_until_release = false;
         }
-        cursor_events.clear();
         return;
     }
-    if input_blocks.blocks_pointer() {
+    if input_blocks.blocks_pointer() || !window.focused {
         if sculpt_state.current_stroke_id.is_some() {
             sculpt_events.write(SculptEvent::StrokeEnd);
         }
-        cursor_events.clear();
         return;
     }
-
-    // Only process if sculpt mode is active
-    if !sculpt_state.active {
+    if !sculpt_state.active || sculpt_state.adjust_mode != BrushAdjustMode::None {
         return;
     }
-
-    // Don't process sculpting while adjusting brush parameters
-    if sculpt_state.adjust_mode != BrushAdjustMode::None {
-        // Consume cursor events to prevent them from accumulating
-        cursor_events.read().for_each(drop);
-        return;
-    }
-
     let Some(target_entity) = sculpt_state.target_entity else {
         return;
     };
-
-    // Get camera for ray casting
     let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
-
-    // Get window for cursor position
-    let Ok((window_entity, window)) = windows.single() else {
-        return;
-    };
-
-    // Get target mesh
     let Ok((mesh_handle, mesh_transform)) = mesh_query.get(target_entity) else {
         return;
     };
-
     let Some(mesh) = meshes.get(&mesh_handle.0) else {
         return;
     };
+    let hit = |position| {
+        camera
+            .viewport_to_world(camera_transform, position)
+            .ok()
+            .and_then(|ray| ray_mesh_intersection_simple(&ray, mesh, mesh_transform))
+    };
 
-    // Collect cursor positions from this frame
-    let cursor_positions: Vec<Vec2> = cursor_events
-        .read()
-        .filter(|e| e.window == window_entity)
-        .map(|e| e.position)
-        .collect();
-
-    let _current_time = time.elapsed_secs_f64();
-
-    // Handle stroke start
-    if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions
-            .last()
-            .copied()
-            .or_else(|| window.cursor_position());
-        if let Some(cursor_pos) = cursor_pos {
-            if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                if let Some((world_pos, normal)) =
-                    ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
-                {
-                    let stroke_id = stroke_id_gen.next();
-                    sculpt_events.write(SculptEvent::StrokeStart {
-                        world_pos,
-                        normal,
-                        stroke_id,
-                    });
+    // Event handling follows after this system, so a stroke started in this
+    // batch is tracked locally until its queued Start/Move/End events execute.
+    let mut stroke_open = sculpt_state.current_stroke_id.is_some();
+    let mut began_this_frame = false;
+    let mut moved_this_frame = false;
+    let mut focus_lost = false;
+    for event in batch {
+        match event {
+            WindowEvent::CursorMoved(event) if event.window == window_entity => {
+                cursor = Some(event.position);
+                if stroke_open {
+                    if let Some((world_pos, normal)) = hit(event.position) {
+                        sculpt_events.write(SculptEvent::StrokeMove {
+                            world_pos,
+                            normal,
+                            pressure: 1.,
+                        });
+                        moved_this_frame = true;
+                    }
                 }
             }
-        }
-    } else if mouse_button.pressed(MouseButton::Left) && sculpt_state.current_stroke_id.is_some() {
-        // Continue stroke
-        let positions_to_process: Vec<Vec2> = if !cursor_positions.is_empty() {
-            cursor_positions
-        } else if let Some(pos) = window.cursor_position() {
-            vec![pos]
-        } else {
-            vec![]
-        };
-
-        for cursor_pos in positions_to_process {
-            if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                if let Some((world_pos, normal)) =
-                    ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
-                {
-                    sculpt_events.write(SculptEvent::StrokeMove {
-                        world_pos,
-                        normal,
-                        pressure: 1.0, // No pressure sensitivity for mouse
-                    });
+            WindowEvent::MouseButtonInput(event)
+                if event.window == window_entity && event.button == MouseButton::Left =>
+            {
+                if event.state == bevy::input::ButtonState::Pressed {
+                    if !stroke_open && !focus_lost {
+                        if let Some((world_pos, normal)) = cursor.and_then(hit) {
+                            sculpt_events.write(SculptEvent::StrokeStart {
+                                world_pos,
+                                normal,
+                                stroke_id: stroke_id_gen.next(),
+                            });
+                            stroke_open = true;
+                            began_this_frame = true;
+                        }
+                    }
+                } else if stroke_open {
+                    sculpt_events.write(SculptEvent::StrokeEnd);
+                    stroke_open = false;
                 }
             }
+            WindowEvent::WindowFocused(event) if event.window == window_entity => {
+                focus_lost = !event.focused;
+                if focus_lost {
+                    if stroke_open {
+                        sculpt_events.write(SculptEvent::StrokeEnd);
+                    }
+                    stroke_open = false;
+                    cursor = None;
+                    *last_cursor = None;
+                }
+            }
+            _ => {}
         }
-    } else if mouse_button.just_released(MouseButton::Left) {
-        if sculpt_state.current_stroke_id.is_some() {
-            sculpt_events.write(SculptEvent::StrokeEnd);
+    }
+    if stroke_open && !mouse_button.pressed(MouseButton::Left) {
+        // Account for a host reset (e.g. focus loss) without a release message.
+        sculpt_events.write(SculptEvent::StrokeEnd);
+    } else if stroke_open && !began_this_frame && !moved_this_frame {
+        // Keep the established stationary-stroke behavior without duplicating
+        // sampled movement or resurrecting a stroke after its release.
+        if let Some((world_pos, normal)) = cursor.and_then(hit) {
+            sculpt_events.write(SculptEvent::StrokeMove {
+                world_pos,
+                normal,
+                pressure: 1.,
+            });
         }
     }
 }
@@ -910,6 +955,24 @@ fn handle_sculpt_events(
             SculptEvent::Exit => {
                 info!("Exited sculpt mode");
 
+                {
+                    let SculptingData {
+                        pipeline,
+                        chunked_mesh,
+                        ..
+                    } = &mut *sculpting_data;
+                    if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
+                        if pipeline.is_stroke_active() {
+                            let result = pipeline.end_stroke(mesh);
+                            if let Some(error) = result.rejected {
+                                outbound.send(BevyToUi::Error {
+                                    code: "sculpt_stroke_rejected".into(),
+                                    message: format!("Sculpt stroke was rolled back: {error}"),
+                                });
+                            }
+                        }
+                    }
+                }
                 // Merge chunks back and update original mesh
                 if let Some(chunked_mesh) = sculpting_data.chunked_mesh.take() {
                     let merged = sculpting::merge_chunks(&chunked_mesh);
@@ -1085,6 +1148,15 @@ fn handle_sculpt_events(
                     };
 
                     let result = pipeline.process_input(input, chunked_mesh);
+                    if let Some(error) = &result.rejected {
+                        outbound.send(BevyToUi::Error {
+                            code: "sculpt_stroke_rejected".into(),
+                            message: format!("Sculpt stroke was rolled back: {error}"),
+                        });
+                        pipeline.cancel_stroke(chunked_mesh);
+                        sculpt_state.current_stroke_id = None;
+                        sculpt_state.suppress_left_until_release = true;
+                    }
 
                     if result.vertices_modified > 0 {
                         debug!(
@@ -1114,6 +1186,12 @@ fn handle_sculpt_events(
                         (pipeline.as_mut(), chunked_mesh.as_mut())
                     {
                         let result = pipeline.end_stroke(chunked_mesh);
+                        if let Some(error) = &result.rejected {
+                            outbound.send(BevyToUi::Error {
+                                code: "sculpt_stroke_rejected".into(),
+                                message: format!("Sculpt stroke was rolled back: {error}"),
+                            });
+                        }
                         if result.chunks_split > 0 || result.chunks_merged > 0 {
                             info!(
                                 "Rebalanced: {} chunks split, {} chunks merged",
@@ -1129,13 +1207,49 @@ fn handle_sculpt_events(
                 if let Some(stroke_id) = sculpt_state.current_stroke_id.take() {
                     info!("Sculpt stroke cancelled: id={}", stroke_id);
 
-                    // Cancel stroke in pipeline
-                    if let Some(pipeline) = &mut sculpting_data.pipeline {
-                        pipeline.cancel_stroke();
+                    let SculptingData {
+                        pipeline,
+                        chunked_mesh,
+                        cached_vertex_mapping,
+                        ..
+                    } = &mut *sculpting_data;
+                    if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
+                        pipeline.cancel_stroke(mesh);
+                        *cached_vertex_mapping = None;
+                        info!("Sculpt stroke rollback: faces={}", mesh.total_face_count());
                     }
                 }
 
                 sculpt_state.last_world_pos = None;
+                sculpt_state.suppress_left_until_release = true;
+            }
+            SculptEvent::Undo | SculptEvent::Redo => {
+                if !sculpt_state.active {
+                    continue;
+                }
+                let SculptingData {
+                    pipeline,
+                    chunked_mesh,
+                    cached_vertex_mapping,
+                    ..
+                } = &mut *sculpting_data;
+                if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
+                    match pipeline.restore_history(mesh, matches!(event, SculptEvent::Redo)) {
+                        Ok(true) => {
+                            *cached_vertex_mapping = None;
+                            info!(
+                                "Sculpt history restored: redo={}, faces={}",
+                                matches!(event, SculptEvent::Redo),
+                                mesh.total_face_count()
+                            );
+                        }
+                        Ok(false) => {}
+                        Err(error) => outbound.send(BevyToUi::Error {
+                            code: "sculpt_history_rejected".into(),
+                            message: format!("Sculpt history could not be restored: {error:?}"),
+                        }),
+                    }
+                }
             }
         }
     }
@@ -1420,6 +1534,7 @@ mod sculpt_geometry_sync_tests {
         world.init_resource::<StrokeIdGenerator>();
         world.init_resource::<Time>();
         world.init_resource::<Messages<CursorMoved>>();
+        world.init_resource::<Messages<WindowEvent>>();
         world.init_resource::<Messages<SculptEvent>>();
         world.spawn((Window::default(), PrimaryWindow));
         {
@@ -1479,6 +1594,569 @@ mod sculpt_geometry_sync_tests {
             .add_message::<crate::PaintEvent>()
             .add_systems(Update, handle_sculpt_events);
         app
+    }
+
+    fn entered_history_app() -> App {
+        let mut app = sculpt_event_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Sphere::new(1.).mesh().uv(16, 8));
+        let entity = app
+            .world_mut()
+            .spawn((Mesh3d(handle), GlobalTransform::IDENTITY))
+            .id();
+        app.world_mut().write_message(SculptEvent::Enter { entity });
+        app.update();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::SetRadius { radius: 0.75 });
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetStrength { strength: 0.4 },
+        );
+        let mut data = app.world_mut().resource_mut::<SculptingData>();
+        let pipeline = data.pipeline.as_mut().unwrap();
+        pipeline.config.tessellation_enabled = false;
+        pipeline.config.rebalance_after_stroke = false;
+        drop(data);
+        app
+    }
+
+    fn move_history_stroke(app: &mut App) {
+        app.world_mut().write_message(SculptEvent::StrokeStart {
+            world_pos: Vec3::Z,
+            normal: Vec3::Z,
+            stroke_id: 8,
+        });
+        app.update();
+        app.world_mut().write_message(SculptEvent::StrokeMove {
+            world_pos: Vec3::new(0.02, 0., 1.),
+            normal: Vec3::Z,
+            pressure: 1.,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn scene_history_commands_roundtrip_and_invalidate_render_mapping() {
+        let mut app = entered_history_app();
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        move_history_stroke(&mut app);
+        app.world_mut().write_message(SculptEvent::StrokeEnd);
+        app.update();
+        let after = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(!before.same_authoritative_state(&after));
+        app.world_mut()
+            .resource_mut::<SculptingData>()
+            .cached_vertex_mapping = Some(Default::default());
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        let data = app.world().resource::<SculptingData>();
+        assert!(before.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+        assert!(data.cached_vertex_mapping.is_none());
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .redo_strokes,
+            1
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Redo);
+        app.update();
+        assert!(
+            after.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn scene_cancel_rolls_back_and_active_history_is_blocked() {
+        let mut app = entered_history_app();
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        move_history_stroke(&mut app);
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        assert!(app.world().resource::<OutboundUiMessages>().messages.iter().any(|message| matches!(message, BevyToUi::Error { code, .. } if code == "sculpt_history_rejected")));
+        app.world_mut().write_message(SculptEvent::StrokeCancel);
+        app.update();
+        let data = app.world().resource::<SculptingData>();
+        assert!(before.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            0
+        );
+        assert!(
+            app.world()
+                .resource::<SculptState>()
+                .suppress_left_until_release
+        );
+    }
+
+    fn batched_input_app() -> (App, Entity) {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
+        let mut app = entered_history_app();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<StrokeIdGenerator>()
+            .init_resource::<FrontendInputBlockState>()
+            .add_message::<CursorMoved>()
+            .add_message::<bevy::window::WindowEvent>()
+            .add_systems(Update, handle_sculpt_input.before(handle_sculpt_events));
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.world_mut().spawn((
+            Camera {
+                computed: ComputedCameraValues {
+                    clip_from_view: Mat4::perspective_infinite_reverse_rh(
+                        std::f32::consts::FRAC_PI_4,
+                        1.,
+                        0.1,
+                    ),
+                    target_info: Some(RenderTargetInfo {
+                        physical_size: UVec2::splat(1000),
+                        scale_factor: 1.,
+                    }),
+                    ..default()
+                },
+                ..default()
+            },
+            GlobalTransform::from(Transform::from_xyz(0., 0., 4.).looking_at(Vec3::ZERO, Vec3::Y)),
+            MainCamera,
+        ));
+        app.world_mut()
+            .resource_mut::<Messages<SculptEvent>>()
+            .clear();
+        (app, window)
+    }
+
+    fn pointer_move(window: Entity, x: f32, y: f32) -> bevy::window::WindowEvent {
+        bevy::window::WindowEvent::CursorMoved(CursorMoved {
+            window,
+            position: Vec2::new(x, y),
+            delta: None,
+        })
+    }
+
+    fn pointer_button(window: Entity, pressed: bool) -> bevy::window::WindowEvent {
+        bevy::window::WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+            window,
+            button: MouseButton::Left,
+            state: if pressed {
+                bevy::input::ButtonState::Pressed
+            } else {
+                bevy::input::ButtonState::Released
+            },
+        })
+    }
+
+    fn run_pointer_batch(
+        app: &mut App,
+        events: Vec<bevy::window::WindowEvent>,
+    ) -> Vec<SculptEvent> {
+        app.world_mut()
+            .resource_mut::<Messages<SculptEvent>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        for event in events {
+            match &event {
+                bevy::window::WindowEvent::CursorMoved(movement) => {
+                    app.world_mut()
+                        .get_mut::<Window>(movement.window)
+                        .unwrap()
+                        .set_cursor_position(Some(movement.position));
+                    app.world_mut().write_message(movement.clone());
+                }
+                bevy::window::WindowEvent::MouseButtonInput(button) => {
+                    let mut input = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+                    if button.state == bevy::input::ButtonState::Pressed {
+                        input.press(button.button);
+                    } else {
+                        input.release(button.button);
+                    }
+                }
+                bevy::window::WindowEvent::WindowFocused(focus) => {
+                    app.world_mut()
+                        .get_mut::<Window>(focus.window)
+                        .unwrap()
+                        .focused = focus.focused;
+                }
+                _ => {}
+            }
+            app.world_mut().write_message(event);
+        }
+        app.update();
+        app.world_mut()
+            .resource_mut::<Messages<SculptEvent>>()
+            .drain()
+            .collect()
+    }
+
+    #[test]
+    fn observed_press_moves_then_moves_release_batches_sculpt_real_geometry() {
+        let (mut app, window) = batched_input_app();
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let mut first = vec![
+            pointer_move(window, 500., 500.),
+            pointer_button(window, true),
+        ];
+        first.extend((1..=8).map(|step| pointer_move(window, 500. + step as f32, 500.)));
+        let emitted = run_pointer_batch(&mut app, first);
+        assert!(
+            matches!(emitted.first(), Some(SculptEvent::StrokeStart { world_pos, .. }) if world_pos.x.abs() < 1e-5),
+            "stroke must start at the press origin, not the final frame cursor"
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, SculptEvent::StrokeMove { .. }))
+                .count(),
+            8,
+            "press-frame motion was lost"
+        );
+        let intermediate = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(!baseline.same_authoritative_state(&intermediate));
+        let mut second: Vec<_> = (9..=16)
+            .map(|step| pointer_move(window, 500. + step as f32, 500.))
+            .collect();
+        second.push(pointer_button(window, false));
+        second.push(pointer_move(window, 20., 970.));
+        let emitted = run_pointer_batch(&mut app, second);
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, SculptEvent::StrokeMove { .. }))
+                .count(),
+            8,
+            "release-frame motion was lost"
+        );
+        assert!(matches!(emitted.last(), Some(SculptEvent::StrokeEnd)));
+        let data = app.world().resource::<SculptingData>();
+        assert!(!intermediate.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        assert!(!data.pipeline.as_ref().unwrap().is_stroke_active());
+    }
+
+    #[test]
+    fn release_batch_processes_motion_before_end_and_ignores_later_hover() {
+        let (mut app, window) = batched_input_app();
+        run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+            ],
+        );
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let emitted = run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 508., 500.),
+                pointer_button(window, false),
+                pointer_move(window, 550., 500.),
+            ],
+        );
+        assert!(matches!(
+            emitted.as_slice(),
+            [SculptEvent::StrokeMove { .. }, SculptEvent::StrokeEnd]
+        ));
+        assert!(
+            !baseline.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn same_frame_press_motion_release_is_one_complete_sculpt_stroke() {
+        let (mut app, window) = batched_input_app();
+        let emitted = run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+                pointer_move(window, 508., 500.),
+                pointer_button(window, false),
+            ],
+        );
+        assert!(matches!(
+            emitted.as_slice(),
+            [
+                SculptEvent::StrokeStart { .. },
+                SculptEvent::StrokeMove { .. },
+                SculptEvent::StrokeEnd
+            ]
+        ));
+        let data = app.world().resource::<SculptingData>();
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        assert!(!data.pipeline.as_ref().unwrap().is_stroke_active());
+    }
+
+    #[test]
+    fn blocked_batch_and_off_target_press_cannot_claim_sculpt_ownership() {
+        let (mut app, window) = batched_input_app();
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<FrontendInputBlockState>()
+            .block_pointer = true;
+        assert!(
+            run_pointer_batch(
+                &mut app,
+                vec![
+                    pointer_move(window, 500., 500.),
+                    pointer_button(window, true),
+                    pointer_move(window, 508., 500.),
+                    pointer_button(window, false)
+                ]
+            )
+            .is_empty()
+        );
+        app.world_mut()
+            .resource_mut::<FrontendInputBlockState>()
+            .block_pointer = false;
+        assert!(run_pointer_batch(&mut app, vec![pointer_move(window, 510., 500.)]).is_empty());
+        assert!(
+            run_pointer_batch(
+                &mut app,
+                vec![
+                    pointer_move(window, 20., 970.),
+                    pointer_button(window, true),
+                    pointer_move(window, 500., 500.),
+                    pointer_button(window, false)
+                ]
+            )
+            .is_empty()
+        );
+        assert!(
+            baseline.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn focus_loss_ends_owned_stroke_and_regain_does_not_synthesize_a_press() {
+        let (mut app, window) = batched_input_app();
+        run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+                pointer_move(window, 508., 500.),
+            ],
+        );
+        let moved = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let lost = bevy::window::WindowEvent::WindowFocused(bevy::window::WindowFocused {
+            window,
+            focused: false,
+        });
+        let emitted = run_pointer_batch(&mut app, vec![lost, pointer_move(window, 516., 500.)]);
+        assert!(matches!(emitted.as_slice(), [SculptEvent::StrokeEnd]));
+        assert!(run_pointer_batch(&mut app, vec![pointer_move(window, 520., 500.)]).is_empty());
+        let gained = bevy::window::WindowEvent::WindowFocused(bevy::window::WindowFocused {
+            window,
+            focused: true,
+        });
+        assert!(
+            run_pointer_batch(&mut app, vec![gained, pointer_move(window, 524., 500.)]).is_empty()
+        );
+        assert!(
+            moved.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        let emitted = run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_button(window, false),
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+                pointer_move(window, 504., 500.),
+                pointer_button(window, false),
+            ],
+        );
+        assert!(matches!(
+            emitted.as_slice(),
+            [
+                SculptEvent::StrokeStart { .. },
+                SculptEvent::StrokeMove { .. },
+                SculptEvent::StrokeEnd
+            ]
+        ));
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            2
+        );
+    }
+
+    fn assert_final_rejection_is_reported(event: SculptEvent, exiting: bool) {
+        let mut app = entered_history_app();
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let handle = app
+            .world()
+            .resource::<SculptingData>()
+            .original_mesh_handle
+            .clone()
+            .unwrap();
+        move_history_stroke(&mut app);
+        app.world_mut()
+            .resource_mut::<SculptingData>()
+            .chunked_mesh
+            .as_mut()
+            .unwrap()
+            .next_original_vertex_id = 0;
+        app.world_mut()
+            .resource_mut::<OutboundUiMessages>()
+            .messages
+            .clear();
+        app.world_mut().write_message(event);
+        app.update();
+        let messages = &app.world().resource::<OutboundUiMessages>().messages;
+        let errors: Vec<_> = messages.iter().filter(|message| matches!(message, BevyToUi::Error { code, .. } if code == "sculpt_stroke_rejected")).collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "final rejection must emit exactly one user-visible error"
+        );
+        let BevyToUi::Error { message, .. } = errors[0] else {
+            unreachable!()
+        };
+        assert!(message.contains("rolled back"));
+        if exiting {
+            assert!(!app.world().resource::<SculptState>().active);
+            let expected = half_edge_to_bevy_mesh(&sculpting::merge_chunks(&baseline).mesh)
+                .unwrap()
+                .0;
+            let assets = app.world().resource::<Assets<Mesh>>();
+            let restored = assets.get(&handle).unwrap();
+            assert_eq!(
+                restored.attribute(Mesh::ATTRIBUTE_POSITION),
+                expected.attribute(Mesh::ATTRIBUTE_POSITION)
+            );
+            assert_eq!(
+                restored.attribute(Mesh::ATTRIBUTE_UV_0),
+                expected.attribute(Mesh::ATTRIBUTE_UV_0)
+            );
+            assert_eq!(
+                restored.indices().unwrap().iter().collect::<Vec<_>>(),
+                expected.indices().unwrap().iter().collect::<Vec<_>>()
+            );
+        } else {
+            let data = app.world().resource::<SculptingData>();
+            assert!(baseline.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+            assert_eq!(
+                data.pipeline
+                    .as_ref()
+                    .unwrap()
+                    .history_status()
+                    .undo_strokes,
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn stroke_end_final_rejection_reports_rollback() {
+        assert_final_rejection_is_reported(SculptEvent::StrokeEnd, false);
+    }
+
+    #[test]
+    fn exit_final_rejection_reports_rollback() {
+        assert_final_rejection_is_reported(SculptEvent::Exit, true);
     }
 
     #[test]
@@ -1764,6 +2442,23 @@ fn sculpt_preset(tool: DeformationType) -> BrushPreset {
 }
 
 pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
+    if matches!(command, SculptCommand::Undo | SculptCommand::Redo) {
+        if world
+            .get_resource::<SculptState>()
+            .is_some_and(|state| state.active)
+        {
+            if let Some(mut events) =
+                world.get_resource_mut::<bevy::ecs::message::Messages<SculptEvent>>()
+            {
+                events.write(if matches!(command, SculptCommand::Undo) {
+                    SculptEvent::Undo
+                } else {
+                    SculptEvent::Redo
+                });
+            }
+        }
+        return;
+    }
     let Some(mut state) = world.get_resource_mut::<SculptState>() else {
         return;
     };

@@ -15,8 +15,17 @@ is still unqualified. It includes the separately attributed PR #15
 pixel-coverage winding prerequisite. PR #2's normal-packet decoder correction is
 not a dependency: live sculpt deformation receives the original input normal,
 not the decoded packet. The decoder/replay repair is excluded and must not be
-reported as fixed by this integration. Sculpt per-stroke undo/redo and atomic
-stroke cancellation also remain unsupported; the UI explicitly says so.
+reported as fixed by this integration.
+
+The original public PR18 baseline did not implement sculpt history or atomic
+cancellation. The separately attributed Dot reconstruction now implements local,
+bounded per-stroke snapshot undo/redo, complete checkpoint cancellation, current-
+policy detached restore validation, and authoritative history controls. See
+[the reconstruction lineage and contract](sculpt-history-dot-reconstruction.md).
+Its CPU tests establish geometry/state behavior; they do not establish a native
+CEF visual pass. The unrecovered cloud candidate `1a4601a` remains a separate
+artifact and its results must not be attributed to this reconstruction. Snapshot
+history does not qualify historical packet replay.
 
 ## Repeatable engine and frontend gates
 
@@ -66,7 +75,10 @@ PENTIMENTO_EVIDENCE_DIR=/tmp/pentimento-brush-evidence \
 This launches and inspects the actual Svelte controls, captures JPEG quality 85,
 and verifies emitted commands with a mocked IPC bridge. It covers numeric input,
 color, presets, erase/undo, live/apply, all sculpt tools, falloff, backend snapshots,
-mode remounting, keyboard capture, layout regions and narrow windows. It does not
+mode remounting, keyboard capture, layout regions and narrow windows. Sculpt
+history cases cover authoritative undo/redo availability, transaction lockout and
+history-limit notices. These browser cases are distinct from real engine history.
+It does not
 prove native input arbitration or any 3D rendering. Do not bypass denied browser
 socket/security restrictions; record the blocked stage and run on an allowed host.
 
@@ -107,7 +119,17 @@ capture; logs alone cannot establish correct visible output.
    mode switches while a stroke is active, and pointer/focus interruption.
    While sculpting, plain Tab and Add Canvas must not activate another brush.
    Rejected mode entries must show a dismissible error even outside paint/sculpt.
-6. Drag every slider off the panel into the viewport and release both inside and
+6. For sculpt history, establish a visible deformation, then undo and redo it.
+   Capture at least three unchanged frames at each endpoint to calibrate pixel
+   noise. Check restoration over the pixels that actually deformed, and require
+   an actual transition from the prior endpoint. A small whole-viewport average
+   difference alone cannot establish restoration. While a new stroke is still
+   active, first establish visible deformation, then press Escape and verify its
+   complete rollback with the same regional/noise checks. Undo and make a new
+   accepted stroke; redo must become unavailable. Verify history buttons remain
+   disabled during active transactions. At release and Exit, a final rejected
+   stroke must roll back and emit `sculpt_stroke_rejected` to the user.
+7. Drag every slider off the panel into the viewport and release both inside and
    outside it. No paint/sculpt stroke should start from the widget drag. Focus
    numeric/color controls and press shortcuts; viewport tools should stay idle.
    Confirm F/Shift+F adjustments with a click held into a drag; that press must
@@ -148,4 +170,10 @@ DPI scaling, focus loss, typed-reader preservation and duplicate forwarding.
 JavaScript tests cover stalled RAF, fallback races, latest-layout delivery,
 bootstrap replay and cleanup. These regressions supplement the actual native
 CEF suite; its original assertions and input sequence remain the qualification
-criteria. Passing focused tests does not establish a complete native CEF pass.
+criteria. The history extension preserves all 16 original native assertion lines
+and adds undo, redo, cancellation and redo-branch checks. History restoration
+also requires deformation-region motion and return within measured unchanged-
+frame noise; cancellation cannot pass without a visibly deformed active stroke.
+Synthetic oracle regressions prove that no-op and partial restoration fail these
+criteria, but they do not replace executing the actual CEF application. Native CEF
+qualification remains open until that exact final build passes on a permitted host.

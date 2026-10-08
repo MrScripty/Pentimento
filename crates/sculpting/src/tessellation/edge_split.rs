@@ -216,8 +216,36 @@ pub fn split_edge_curvature_aware(
     // Perform the standard split
     let (new_vertex, new_faces) = mesh.split_edge_topology(edge_id)?;
 
-    // Update the new vertex position to the curvature-aware position
-    mesh.set_vertex_position(new_vertex, new_pos);
+    // Curvature offsets must not invert a child facet. Keep the valid midpoint
+    // split when the heuristic would flatten/reverse any incident triangle.
+    let preserves_orientation = new_pos.is_finite()
+        && mesh.get_vertex_faces(new_vertex).iter().all(|&face| {
+            let ids = mesh.get_face_vertices(face);
+            if ids.len() != 3 {
+                return false;
+            }
+            let old: Vec<_> = ids
+                .iter()
+                .map(|&id| mesh.vertex(id).unwrap().position.as_dvec3())
+                .collect();
+            let next: Vec<_> = ids
+                .iter()
+                .zip(&old)
+                .map(|(&id, &p)| {
+                    if id == new_vertex {
+                        new_pos.as_dvec3()
+                    } else {
+                        p
+                    }
+                })
+                .collect();
+            let before = (old[1] - old[0]).cross(old[2] - old[0]);
+            let after = (next[1] - next[0]).cross(next[2] - next[0]);
+            before.dot(after) > before.length_squared() * 1e-8
+        });
+    if preserves_orientation {
+        mesh.set_vertex_position(new_vertex, new_pos);
+    }
 
     // The split already set an interpolated normal from the edge endpoints,
     // which is a reasonable approximation for curvature-aware splits.

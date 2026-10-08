@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { bridge } from '$lib/bridge';
-    import type { EditMode, PaintBrushSettings, PaintBrushPresetInfo, SculptBrushSettings } from '$lib/types';
+    import type { EditMode, PaintBrushSettings, PaintBrushPresetInfo, SculptBrushSettings, SculptHistoryState } from '$lib/types';
     import PaintBrushPanel from './PaintBrushPanel.svelte';
     import SculptBrushPanel from './SculptBrushPanel.svelte';
     let { mode }: { mode: EditMode } = $props();
@@ -9,6 +9,7 @@
     let sculpt = $state<SculptBrushSettings | null>(null);
     let presets = $state<PaintBrushPresetInfo[]>([]);
     let sculptReceived = $state(false);
+    let sculptHistory = $state<SculptHistoryState>({ undo_strokes: 0, redo_strokes: 0, active: false, notice: null });
     let canUndo = $state(false);
     let liveProjection = $state(false);
     onMount(() => {
@@ -17,6 +18,8 @@
                 paint = message.data.settings; presets = message.data.presets; canUndo = message.data.can_undo;
             } else if (message.type === 'SculptBrushStateChanged') {
                 sculpt = message.data.settings; sculptReceived = true;
+            } else if (message.type === 'SculptHistoryChanged') {
+                sculptHistory = message.data;
             } else if (message.type === 'ProjectionModeChanged') {
                 liveProjection = message.data.live_projection;
             }
@@ -28,7 +31,7 @@
 {#if mode === 'Paint' || mode === 'Sculpt'}
     <aside class="brush-panel panel interactive" data-ui-region="brush-panel" aria-label={mode === 'Paint' ? 'Projection paint controls' : 'Sculpt controls'}>
         {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {presets} {canUndo} {liveProjection} />
-        {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} />
+        {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} history={sculptHistory} />
         {:else if mode === 'Sculpt' && sculptReceived}<p class="notice">Sculpting is not available in this renderer build.</p>
         {:else}<p class="notice">Waiting for brush settings from the renderer.</p>{/if}
     </aside>

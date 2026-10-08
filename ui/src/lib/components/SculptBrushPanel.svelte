@@ -1,8 +1,8 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
-    import type { SculptBrushSettings, SculptTool, SculptFalloff } from '$lib/types';
+    import type { SculptBrushSettings, SculptTool, SculptFalloff, SculptHistoryState } from '$lib/types';
     import BrushControl from './BrushControl.svelte';
-    let { settings }: { settings: SculptBrushSettings } = $props();
+    let { settings, history }: { settings: SculptBrushSettings; history: SculptHistoryState } = $props();
     const tools: { name: SculptTool; description: string }[] = [
         { name: 'Push', description: 'Move along the hit surface normal' },
         { name: 'Pull', description: 'Draw vertices toward the brush center' },
@@ -29,7 +29,12 @@
     <select id="sculpt-falloff" value={settings.falloff} onchange={(e) => bridge.sculptCommand({ SetFalloff: { falloff: e.currentTarget.value as SculptFalloff } })}>{#each falloffs as falloff}<option>{falloff}</option>{/each}</select>
     <p class="hint">Hardness defines the full-strength center. The curve controls the edge.</p>
     <div class="divider"></div>
-    <p class="notice">Sculpt undo is not available yet. Geometry changes are applied immediately.</p>
+    <div class="sculpt-tools" aria-label="Sculpt history">
+        <button type="button" disabled={history.active || history.undo_strokes === 0} title="Undo sculpt stroke (Ctrl+Z)" onclick={() => bridge.sculptCommand('Undo')}>Undo sculpt stroke</button>
+        <button type="button" disabled={history.active || history.redo_strokes === 0} title="Redo sculpt stroke (Ctrl+Shift+Z)" onclick={() => bridge.sculptCommand('Redo')}>Redo sculpt stroke</button>
+    </div>
+    <p class="hint">{history.undo_strokes} undo / {history.redo_strokes} redo. History lasts for this sculpt session. Escape rolls back an active stroke.</p>
+    {#if history.notice}<p class="notice" role="status">{history.notice}</p>{/if}
     <p class="hint">F: adjust radius. Shift + F: adjust strength. Click or Enter to confirm; Escape to cancel the adjustment.</p>
     <p class="hint">Middle-drag: orbit. Shift + middle-drag: pan. Scroll: zoom. Ctrl + Tab: leave sculpt mode.</p>
 </section>

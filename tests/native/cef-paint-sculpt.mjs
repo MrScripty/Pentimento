@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
+import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const out = process.env.PENTIMENTO_EVIDENCE_DIR ?? '/tmp/pentimento-cef-evidence';
@@ -245,11 +246,67 @@ try {
     await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '0.8');
     await clickAt(35, height - 35);
     const beforeSculpt = await capture('sculpt-before-stroke'); const beforeStarts = starts();
+    const beforeSculptFrames = [beforeSculpt, await capture('sculpt-before-noise-1'), await capture('sculpt-before-noise-2')];
     await drag(sx, sy, 24, -12);
     await until(() => starts().sculpt > beforeStarts.sculpt, 'native sculpt stroke start');
     const afterSculpt = await capture('sculpt-after-stroke'); const sculptDelta = difference(beforeSculpt, afterSculpt);
     assert.ok(sculptDelta.changed_pixels > 25, 'Sculpt stroke produced no visible viewport change');
+    const afterSculptFrames = [afterSculpt, await capture('sculpt-after-noise-1'), await capture('sculpt-after-noise-2')];
+    const sculptRegion = deformationRegion(beforeSculptFrames, afterSculptFrames, width, height);
     record('sculpt_stroke', { ...sculptDelta, stroke_starts: starts(), screenshot: afterSculpt.screenshot });
+    stage = 'sculpt_history';
+    const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });
+    const sculptRedo = page.getByRole('button', { name: 'Redo sculpt stroke', exact: true });
+    await until(() => sculptUndo.isEnabled(), 'native sculpt history acceptance');
+    const historyStarts = starts();
+    await nativeClick(sculptUndo);
+    await until(() => sculptRedo.isEnabled(), 'native sculpt undo');
+    assert.deepEqual(starts(), historyStarts, 'Sculpt Undo button started an underlying stroke');
+    const undoneSculpt = await capture('sculpt-undone');
+    const sculptUndoDelta = difference(beforeSculpt, undoneSculpt);
+    assert.ok(sculptUndoDelta.mean_max_channel_difference < 2, 'Sculpt Undo did not restore the visible baseline');
+    const sculptUndoRegion = assertRegionRestored(sculptRegion, sculptRegion.baseline, sculptRegion.deformed, undoneSculpt, 'Sculpt Undo');
+    record('sculpt_undo', { ...sculptUndoDelta, ...sculptUndoRegion, screenshot: undoneSculpt.screenshot });
+    await nativeClick(sculptRedo);
+    await until(() => sculptRedo.isDisabled(), 'native sculpt redo');
+    const redoneSculpt = await capture('sculpt-redone');
+    const sculptRedoDelta = difference(afterSculpt, redoneSculpt);
+    assert.ok(sculptRedoDelta.mean_max_channel_difference < 2, 'Sculpt Redo did not restore the visible stroke');
+    assert.ok(difference(beforeSculpt, redoneSculpt).changed_pixels > 25, 'Sculpt Redo has no visible deformation');
+    const sculptRedoRegion = assertRegionRestored(sculptRegion, sculptRegion.deformed, undoneSculpt, redoneSculpt, 'Sculpt Redo');
+    record('sculpt_redo', { ...sculptRedoDelta, ...sculptRedoRegion, screenshot: redoneSculpt.screenshot });
+    const beforeCancelFrames = [redoneSculpt, await capture('sculpt-redone-noise-1'), await capture('sculpt-redone-noise-2')];
+    let cancelRegion;
+    const cancelStarts = starts();
+    const rollbackCount = (log().match(/Sculpt stroke rollback:/g) ?? []).length;
+    try {
+        xdo('mousemove', '--window', windowId, Math.round(sx), Math.round(sy));
+        xdo('mousedown', '1');
+        await until(() => starts().sculpt > cancelStarts.sculpt, 'native cancellable sculpt stroke');
+        for (let step = 1; step <= 8; step++) {
+            xdo('mousemove', '--window', windowId, Math.round(sx - step), Math.round(sy + step));
+            await pause(100);
+        }
+        // Establish visible deformation before Escape. Moving the pointer to
+        // the same empty capture location hides the gizmo while the button stays held.
+        const duringCancelFrames = [await capture('sculpt-cancel-active'), await capture('sculpt-cancel-active-noise-1'), await capture('sculpt-cancel-active-noise-2')];
+        cancelRegion = deformationRegion(beforeCancelFrames, duringCancelFrames, width, height);
+        xdo('key', '--clearmodifiers', 'Escape');
+        await until(() => (log().match(/Sculpt stroke rollback:/g) ?? []).length > rollbackCount, 'native sculpt rollback');
+    } finally { xdo('mouseup', '1'); }
+    const cancelledSculpt = await capture('sculpt-cancelled');
+    const sculptCancelDelta = difference(redoneSculpt, cancelledSculpt);
+    assert.ok(sculptCancelDelta.mean_max_channel_difference < 2, 'Sculpt Escape did not roll back visible geometry');
+    const sculptCancelRegion = assertRegionRestored(cancelRegion, cancelRegion.baseline, cancelRegion.deformed, cancelledSculpt, 'Sculpt Escape rollback');
+    record('sculpt_cancel_rollback', { ...sculptCancelDelta, ...sculptCancelRegion, active_screenshot: 'sculpt-cancel-active.jpg', screenshot: cancelledSculpt.screenshot });
+    await nativeClick(sculptUndo);
+    await until(() => sculptRedo.isEnabled(), 'native sculpt branch baseline');
+    await drag(sx, sy, -16, 8);
+    await until(async () => (await sculptUndo.isEnabled()) && (await sculptRedo.isDisabled()), 'new accepted sculpt branch clears redo');
+    const branchedSculpt = await capture('sculpt-new-branch');
+    assert.ok(difference(beforeSculpt, branchedSculpt).changed_pixels > 25, 'New sculpt branch has no visible deformation');
+    record('sculpt_new_branch', { screenshot: branchedSculpt.screenshot });
+
     await key('Tab'); assert.equal(await page.getByRole('heading', { name: 'Sculpt brushes' }).count(), 1);
     // Tab may focus a browser widget. Return keyboard ownership to the viewport
     // before its Ctrl+Tab shortcut; a miss in sculpt mode preserves selection.

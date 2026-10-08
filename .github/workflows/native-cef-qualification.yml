@@ -60,7 +60,7 @@ jobs:
             npm --version
             uname -a
             dpkg-query -W libgtk-3-dev libwebkit2gtk-4.1-dev mesa-vulkan-drivers xvfb
-          } > "$PENTIMENTO_EVIDENCE_DIR/environment.txt"
+          } > "$PENTIMENTO_EVIDENCE_DIR/environment.log"
       - name: Build the actual canonical CEF app and subprocess helper
         shell: bash
         run: |

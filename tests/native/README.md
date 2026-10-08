@@ -29,6 +29,12 @@ References checked for this path:
 The test covers startup/bootstrap, actual Grab selection and radius update,
 widget-drag capture, a visible sculpt stroke, Tab ownership, Exit/reentry,
 canvas creation, paint settings/stroke/undo, and production live/apply events.
+The history extension retains all original assertions and adds undo, redo,
+active-stroke Escape rollback and redo-branch invalidation. Its pixel oracle uses
+three unchanged captures at both endpoints, compares the pixels that actually
+deformed, and requires both visible motion and restoration within measured frame
+noise. Escape is tested only after visible active-stroke deformation is established.
+The helper's synthetic negative tests cannot substitute for this native run.
 It uses the default scene's sphere and default camera as a reproducible fixture.
 A failed stage produces a failure result and screenshot; it must not be reported
 as an interaction pass just because the window appeared.

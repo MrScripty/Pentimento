@@ -95,6 +95,14 @@ pub enum BevyToUi {
         settings: Option<SculptBrushSettings>,
     },
 
+    /// Authoritative local sculpt history availability, including transaction lock.
+    SculptHistoryChanged {
+        undo_strokes: usize,
+        redo_strokes: usize,
+        active: bool,
+        notice: Option<String>,
+    },
+
     /// Mesh edit mode state changed
     MeshEditModeChanged {
         /// Whether mesh edit mode is active

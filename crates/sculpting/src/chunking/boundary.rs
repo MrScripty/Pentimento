@@ -9,7 +9,7 @@ use glam::Vec3;
 use painting::half_edge::VertexId;
 
 /// Reference to a vertex in another chunk that shares the same position.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoundaryVertex {
     /// The chunk containing the mirrored vertex.
     pub chunk_id: ChunkId,

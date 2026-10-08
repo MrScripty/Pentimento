@@ -78,6 +78,11 @@ function assertBevyToUiMessage(message) {
         for (const field of ['radius', 'strength', 'hardness']) assert.equal(typeof message.data.settings[field], 'number');
       }
       return;
+    case 'SculptHistoryChanged':
+      for (const field of ['undo_strokes', 'redo_strokes']) assert.equal(typeof message.data[field], 'number');
+      assert.equal(typeof message.data.active, 'boolean');
+      assert.ok(message.data.notice === null || typeof message.data.notice === 'string');
+      return;
     case 'ProjectionModeChanged':
       assert.equal(typeof message.data.live_projection, 'boolean');
       return;
@@ -118,6 +123,7 @@ function assertUiToBevyMessage(message) {
       else assert.equal(typeof message.data, 'object');
       return;
     case 'SculptCommand':
+      if (typeof message.data === 'string') { assert.ok(['Undo', 'Redo'].includes(message.data)); return; }
       assert.equal(typeof message.data, 'object');
       assert.ok(['SetTool', 'SetRadius', 'SetStrength', 'SetHardness', 'SetFalloff'].includes(Object.keys(message.data)[0]));
       return;
@@ -160,6 +166,7 @@ test('rust ipc samples cover the active frontend contract surface', () => {
   assert.ok(outboundTypes.has('SculptCommand'));
   assert.ok(inboundTypes.has('PaintBrushStateChanged'));
   assert.ok(inboundTypes.has('SculptBrushStateChanged'));
+  assert.ok(inboundTypes.has('SculptHistoryChanged'));
 });
 
 test('rust ipc samples satisfy the JavaScript consumer expectations', () => {

@@ -137,6 +137,34 @@ fn paint_message(world: &World) -> Option<BevyToUi> {
     })
 }
 
+fn sculpt_history_message(world: &World) -> BevyToUi {
+    #[cfg(feature = "sculpting")]
+    if world
+        .get_resource::<crate::SculptState>()
+        .is_some_and(|s| s.active)
+    {
+        if let Some(pipeline) = world
+            .get_resource::<crate::sculpt_mode::SculptingData>()
+            .and_then(|d| d.pipeline.as_ref())
+        {
+            let status = pipeline.history_status();
+            return BevyToUi::SculptHistoryChanged {
+                undo_strokes: status.undo_strokes,
+                redo_strokes: status.redo_strokes,
+                active: pipeline.is_stroke_active(),
+                notice: pipeline.history_notice().map(str::to_owned),
+            };
+        }
+    }
+    let _ = world;
+    BevyToUi::SculptHistoryChanged {
+        undo_strokes: 0,
+        redo_strokes: 0,
+        active: false,
+        notice: None,
+    }
+}
+
 fn send_brush_state(world: &mut World) {
     let paint = paint_message(world);
     let live_projection = world
@@ -148,7 +176,9 @@ fn send_brush_state(world: &mut World) {
         .map(crate::sculpt_mode::sculpt_snapshot);
     #[cfg(not(feature = "sculpting"))]
     let sculpt = None;
+    let history = sculpt_history_message(world);
     if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+        outbound.send(history);
         if let Some(paint) = paint {
             outbound.send(paint);
         }
@@ -170,7 +200,13 @@ pub(crate) fn sync_brush_ui_state(world: &mut World, mut previous: Local<String>
     #[cfg(not(feature = "sculpting"))]
     let sculpt: Option<pentimento_ipc::SculptBrushSettings> = None;
     // Tiny settings payload; serialization is stable and avoids keeping duplicate state resources.
-    let key = format!("{:?}|{:?}|{}", paint, sculpt, projection);
+    let key = format!(
+        "{:?}|{:?}|{}|{:?}",
+        paint,
+        sculpt,
+        projection,
+        sculpt_history_message(world)
+    );
     if *previous != key {
         *previous = key;
         send_brush_state(world);

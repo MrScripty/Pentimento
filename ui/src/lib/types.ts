@@ -50,7 +50,8 @@ export type BevyToUi =
     | { type: 'CloseMenus' }
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
     | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean } }
-    | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } };
+    | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } }
+    | { type: 'SculptHistoryChanged'; data: SculptHistoryState };
 
 // Messages from UI to Bevy
 export type UiToBevy =
@@ -305,7 +306,10 @@ export interface SculptBrushSettings {
     hardness: number;
     falloff: SculptFalloff;
 }
+export interface SculptHistoryState { undo_strokes: number; redo_strokes: number; active: boolean; notice: string | null }
 export type SculptCommand =
+    | 'Undo'
+    | 'Redo'
     | { SetTool: { tool: SculptTool } }
     | { SetRadius: { radius: number } }
     | { SetStrength: { strength: number } }
