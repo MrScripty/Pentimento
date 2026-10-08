@@ -41,7 +41,11 @@ impl Plugin for InputPlugin {
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(
                 PreUpdate,
-                (clear_motion_events, mouse::track_mouse_position)
+                (
+                    clear_motion_events,
+                    mouse::trace_pointer_origin,
+                    mouse::track_mouse_position,
+                )
                     .chain()
                     .after(InputSystems),
             )

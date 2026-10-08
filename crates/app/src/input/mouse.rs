@@ -7,7 +7,7 @@
 
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
-use bevy::window::CursorMoved;
+use bevy::window::{CursorMoved, WindowEvent};
 use pentimento_ipc::{MouseButton as IpcMouseButton, MouseEvent};
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,44 @@ use super::backend::FrontendBackend;
 
 /// Minimum interval between mouse move events sent to webview (throttling)
 pub const MOUSE_MOVE_THROTTLE: Duration = Duration::from_millis(16); // ~60fps max
+
+/// Observe native chronology without changing forwarding or capture. Qualification
+/// enables this module's debug logs to compare origin with the old final-coordinate path.
+pub fn trace_pointer_origin(
+    mut events: MessageReader<WindowEvent>,
+    mut cursor: Local<Vec2>,
+    windows: Query<Entity, With<Window>>,
+    layout: Res<pentimento_scene::FrontendUiLayout>,
+) {
+    let Ok(window) = windows.single() else {
+        events.clear();
+        return;
+    };
+    for event in events.read() {
+        match event {
+            WindowEvent::CursorMoved(event) if event.window == window => {
+                *cursor = event.position;
+                debug!(
+                    "Native pointer order: move ({:.1}, {:.1})",
+                    cursor.x, cursor.y
+                );
+            }
+            WindowEvent::MouseButtonInput(event) if event.window == window => {
+                let over_ui = layout.regions.iter().any(|r| {
+                    cursor.x >= r.x
+                        && cursor.y >= r.y
+                        && cursor.x < r.x + r.width
+                        && cursor.y < r.y + r.height
+                });
+                debug!(
+                    "Native pointer order: {:?} {:?} origin ({:.1}, {:.1}) layout_received={} over_ui={}",
+                    event.button, event.state, cursor.x, cursor.y, layout.received, over_ui
+                );
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Track mouse cursor position and forward mouse move events (throttled)
 /// This system MUST run before forward_mouse_buttons and forward_mouse_scroll
@@ -56,6 +94,19 @@ pub fn track_mouse_position(
         let pressed = buttons.get_just_pressed().next().is_some();
         input_blocks.block_pointer =
             layout.update_pointer(mouse_state.webview_x, mouse_state.webview_y, down, pressed);
+        if buttons.get_just_pressed().next().is_some()
+            || buttons.get_just_released().next().is_some()
+        {
+            debug!(
+                "Native capture after batch: last ({:.1}, {:.1}) down={} just_pressed={} blocked={} latched={}",
+                mouse_state.webview_x,
+                mouse_state.webview_y,
+                down,
+                pressed,
+                input_blocks.block_pointer,
+                layout.pointer_captured
+            );
+        }
     }
 
     // Only send mouse move to webview if there was cursor movement AND throttle allows

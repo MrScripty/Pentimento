@@ -40,6 +40,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const command = (name, args, options = {}) => execFileSync(name, args.map(String), { cwd: root, maxBuffer: 20 * 1024 * 1024, ...options });
 const xdo = (...args) => { nativeInputs++; return command('xdotool', args).toString().trim(); };
 const log = () => { try { return readFileSync(appLog, 'utf8'); } catch { return ''; } };
+const pointerTrace = () => log().split('\n').filter(line => /Native pointer order:|Native capture after batch:|Click at webview|Sculpt stroke started:/.test(line)).slice(-120);
 const starts = () => ({ paint: (log().match(/StrokeStart: plane=/g) ?? []).length, sculpt: (log().match(/Sculpt stroke started:/g) ?? []).length });
 const record = (name, evidence = {}) => {
     const item = { type: 'pentimento.cef.check', name, status: 'passed', native_inputs: nativeInputs, ...evidence };
@@ -184,7 +185,7 @@ try {
     // binds loopback only; verify that at runtime before using the endpoint.
     app = spawn('./launcher.sh', ['--run', '--frontend', 'cef', '--', '--remote-debugging-port=0'], {
         cwd: root, detached: true, stdio: ['ignore', logFd, logFd],
-        env: { ...process.env, RUST_LOG: 'info', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
+        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
     });
     const endpoint = await until(() => log().match(/DevTools listening on (ws:\/\/(?:127\.0\.0\.1|\[::1\]):\d+\/\S+)/)?.[1], 'ephemeral CEF DevTools endpoint', 120000);
     const url = new URL(endpoint);
@@ -240,7 +241,7 @@ try {
     const afterControl = await capture('sculpt-after-widget');
     const controlDelta = difference(beforeControl, afterControl);
     assert.ok(controlDelta.mean_max_channel_difference < 2, 'Sculpt geometry changed during UI drag');
-    record('sculpt_widget_no_stroke', { ...controlDelta, stroke_starts: starts(), screenshot: afterControl.screenshot });
+    record('sculpt_widget_no_stroke', { ...controlDelta, stroke_starts: starts(), screenshot: afterControl.screenshot, native_pointer_trace: pointerTrace() });
     await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '0.8');
     await clickAt(35, height - 35);
     const beforeSculpt = await capture('sculpt-before-stroke'); const beforeStarts = starts();
@@ -306,7 +307,8 @@ try {
     if (windowId && width && height) { try { await capture('failure'); } catch {} }
     let diagnostics = null;
     try { diagnostics = await failureDiagnostics(); } catch {}
-    const result = { type: 'pentimento.cef.result', status: 'failed', stage, error: String(error), records, diagnostics };
+    const nativePointerTrace = pointerTrace();
+    const result = { type: 'pentimento.cef.result', status: 'failed', stage, error: String(error), records, diagnostics, native_pointer_trace: nativePointerTrace };
     writeFileSync(`${out}/result.json`, JSON.stringify(result, null, 2)); console.error(JSON.stringify(result)); process.exitCode = 1;
 } finally {
     if (browser) await browser.close().catch(() => {});
