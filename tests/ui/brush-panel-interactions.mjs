@@ -87,6 +87,20 @@ assert.deepEqual((await lastCommand('SculptCommand')).data, { SetFalloff: { fall
 sculpt = { tool: 'Grab', radius: 1.7, strength: 0.4, hardness: 0.25, falloff: 'Sharp' };
 await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
 assert.equal(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue(), '1.7');
+// Both controls show the same draft while backend acknowledgement is pending.
+// This uses a real pointer event, not programmatic value assignment.
+const sculptRadius = page.locator('#sculpt-radius');
+const radiusBox = await sculptRadius.boundingBox();
+await page.mouse.click(radiusBox.x + radiusBox.width / 2, radiusBox.y + radiusBox.height / 2);
+const requestedRadius = Number(await sculptRadius.inputValue());
+assert.equal(Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue()), requestedRadius);
+assert.deepEqual((await lastCommand('SculptCommand')).data, { SetRadius: { radius: requestedRadius } });
+sculpt.radius = Math.fround(requestedRadius); await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+assert.equal(Number(await sculptRadius.inputValue()), Number(sculpt.radius.toFixed(2)));
+await receive({ type: 'EditModeChanged', data: { mode: 'None' } });
+await receive({ type: 'EditModeChanged', data: { mode: 'Sculpt' } });
+assert.equal(Number(await page.locator('#sculpt-radius').inputValue()), Number(sculpt.radius.toFixed(2)));
+assert.equal(Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue()), Number(sculpt.radius.toFixed(2)));
 await page.screenshot({ path: `${output}/sculpt-brush-controls.jpg`, type: 'jpeg', quality: 85 });
 // History availability comes from the native owner; buttons emit real protocol commands.
 const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });

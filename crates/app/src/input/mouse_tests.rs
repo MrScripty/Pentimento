@@ -1,6 +1,6 @@
 use super::*;
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
-use bevy::input::{ButtonState, InputPlugin, InputSystems};
+use bevy::input::{ButtonState, InputPlugin};
 use bevy::render::render_resource::TextureFormat;
 use bevy::window::CursorMoved;
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
@@ -53,6 +53,9 @@ fn fixture() -> (App, Entity, Rc<RefCell<Vec<Recorded>>>) {
             composite_mode: crate::config::CompositeMode::Capture,
         })
         .init_resource::<FrontendInputBlockState>()
+        .init_resource::<pentimento_scene::PaintMode>()
+        .init_resource::<pentimento_scene::ActiveCanvasPlane>()
+        .init_resource::<pentimento_scene::OutboundUiMessages>()
         .insert_resource(FrontendUiLayout {
             regions: vec![LayoutRegion {
                 id: "brush-panel".into(),
@@ -66,7 +69,7 @@ fn fixture() -> (App, Entity, Rc<RefCell<Vec<Recorded>>>) {
             received: true,
             pointer_captured: false,
         })
-        .add_systems(PreUpdate, forward_native_input.after(InputSystems));
+        .add_plugins(super::super::InputPlugin);
     let window = app.world_mut().spawn(Window::default()).id();
     let recorded = Rc::new(RefCell::new(Vec::new()));
     app.insert_non_send_resource(crate::render::FrontendResource {
@@ -98,6 +101,10 @@ fn native_batch(app: &mut App, events: &[WindowEvent]) {
     for event in events {
         match event.clone() {
             WindowEvent::CursorMoved(event) => {
+                app.world_mut()
+                    .get_mut::<Window>(event.window)
+                    .unwrap()
+                    .set_cursor_position(Some(event.position));
                 app.world_mut().write_message(event);
             }
             WindowEvent::MouseButtonInput(event) => {
@@ -111,6 +118,12 @@ fn native_batch(app: &mut App, events: &[WindowEvent]) {
             }
             WindowEvent::KeyboardFocusLost(event) => {
                 app.world_mut().write_message(event);
+            }
+            WindowEvent::WindowFocused(event) => {
+                app.world_mut()
+                    .get_mut::<Window>(event.window)
+                    .unwrap()
+                    .focused = event.focused;
             }
             _ => {}
         }
@@ -713,4 +726,223 @@ fn viewport_focus_loss_blocks_held_scene_input_until_window_focus_returns() {
                 .blocks_pointer()
         );
     }
+}
+
+// Full production Bevy reducer -> native forwarding plugin -> paint mode plugin
+// -> painting plugin. The recording UI backend observes forwarding only; it
+// neither fabricates PaintEvents nor replaces the CPU painting pipeline.
+fn native_paint_fixture() -> (App, Entity) {
+    use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
+    use pentimento_scene::{
+        ActiveCanvasPlane, CanvasPlane, MainCamera, PaintModePlugin, PaintingSystemPlugin,
+    };
+    let (mut app, window, _) = fixture();
+    app.add_plugins(MinimalPlugins)
+        .init_resource::<Assets<Image>>()
+        .init_resource::<Assets<StandardMaterial>>()
+        .init_resource::<pentimento_scene::EditModeState>()
+        .add_plugins((PaintModePlugin, PaintingSystemPlugin));
+    app.world_mut()
+        .entity_mut(window)
+        .insert(bevy::window::PrimaryWindow);
+    app.world_mut().spawn((
+        Camera {
+            computed: ComputedCameraValues {
+                clip_from_view: Mat4::perspective_infinite_reverse_rh(
+                    std::f32::consts::FRAC_PI_4,
+                    1.,
+                    0.1,
+                ),
+                target_info: Some(RenderTargetInfo {
+                    physical_size: UVec2::splat(1000),
+                    scale_factor: 1.,
+                }),
+                ..default()
+            },
+            ..default()
+        },
+        GlobalTransform::from(Transform::from_xyz(0., 0., 4.).looking_at(Vec3::ZERO, Vec3::Y)),
+        MainCamera,
+    ));
+    let material = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let plane = app
+        .world_mut()
+        .spawn((
+            CanvasPlane::new(7, 128, 128, 4., 4.),
+            GlobalTransform::IDENTITY,
+            MeshMaterial3d(material),
+        ))
+        .id();
+    app.world_mut().resource_mut::<ActiveCanvasPlane>().entity = Some(plane);
+    app.world_mut()
+        .resource_mut::<pentimento_scene::PaintMode>()
+        .active = true;
+    app.update();
+    (app, window)
+}
+fn native_paint_gesture(window: Entity) -> Vec<WindowEvent> {
+    vec![
+        moved(window, 300., 300.),
+        button(window, bevy::input::mouse::MouseButton::Left, true),
+        moved(window, 350., 310.),
+        moved(window, 400., 320.),
+        moved(window, 450., 330.),
+        button(window, bevy::input::mouse::MouseButton::Left, false),
+    ]
+}
+fn native_paint_pixels(app: &App) -> Vec<u8> {
+    app.world()
+        .resource::<pentimento_scene::PaintingResource>()
+        .get_pipeline(7)
+        .unwrap()
+        .surface_as_bytes()
+        .to_vec()
+}
+fn assert_native_paint_complete(app: &App, count: usize) {
+    let p = app
+        .world()
+        .resource::<pentimento_scene::PaintingResource>()
+        .get_pipeline(7)
+        .unwrap();
+    assert_eq!(p.undo_count(), count, "actual undo entries");
+    assert_eq!(
+        p.log().total_packet_count(),
+        count,
+        "actual completed packets"
+    );
+    assert!(!p.is_stroking(), "pipeline must release ownership");
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::PaintMode>()
+            .current_stroke
+            .is_none()
+    );
+}
+fn native_paint_control() -> Vec<u8> {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    for event in native_paint_gesture(window) {
+        native_batch(&mut app, &[event]);
+    }
+    assert_native_paint_complete(&app, 1);
+    let after = native_paint_pixels(&app);
+    assert_ne!(after, before);
+    after
+}
+#[test]
+fn native_paint_separate_frame_positive_control() {
+    native_paint_control();
+}
+#[test]
+fn native_paint_complete_gesture_then_focus_loss_preserves_valid_prefix() {
+    let expected = native_paint_control();
+    let (mut app, window) = native_paint_fixture();
+    let mut events = native_paint_gesture(window);
+    events.push(WindowEvent::WindowFocused(bevy::window::WindowFocused {
+        window,
+        focused: false,
+    }));
+    native_batch(&mut app, &events);
+    assert_native_paint_complete(&app, 1);
+    assert!(
+        native_paint_pixels(&app) == expected,
+        "pixels must match real separate-frame control"
+    );
+}
+#[test]
+fn native_paint_complete_gesture_then_ui_hover_preserves_valid_prefix() {
+    let expected = native_paint_control();
+    let (mut app, window) = native_paint_fixture();
+    let mut events = native_paint_gesture(window);
+    events.push(moved(window, 700., 180.));
+    native_batch(&mut app, &events);
+    assert_native_paint_complete(&app, 1);
+    assert!(
+        native_paint_pixels(&app) == expected,
+        "pixels must match real separate-frame control"
+    );
+}
+#[test]
+fn native_paint_ui_click_then_complete_gesture_preserves_valid_suffix() {
+    let expected = native_paint_control();
+    let (mut app, window) = native_paint_fixture();
+    let mut events = vec![
+        moved(window, 700., 180.),
+        button(window, bevy::input::mouse::MouseButton::Left, true),
+        button(window, bevy::input::mouse::MouseButton::Left, false),
+    ];
+    events.extend(native_paint_gesture(window));
+    native_batch(&mut app, &events);
+    assert_native_paint_complete(&app, 1);
+    assert!(
+        native_paint_pixels(&app) == expected,
+        "pixels must match real separate-frame control"
+    );
+}
+fn escape(window: Entity) -> WindowEvent {
+    WindowEvent::KeyboardInput(KeyboardInput {
+        window,
+        key_code: KeyCode::Escape,
+        logical_key: Key::Escape,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+    })
+}
+#[test]
+fn native_paint_same_frame_escape_cancels_the_chronological_gesture() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    let mut events = native_paint_gesture(window);
+    events.insert(events.len() - 1, escape(window));
+    native_batch(&mut app, &events);
+    assert_native_paint_complete(&app, 0);
+    assert!(
+        native_paint_pixels(&app) == before,
+        "Escape must restore painted tiles"
+    );
+}
+#[test]
+fn native_paint_prior_stroke_end_then_escape_cancels_only_the_new_gesture() {
+    let expected = native_paint_control();
+    let (mut app, window) = native_paint_fixture();
+    let mut first = native_paint_gesture(window);
+    let release = first.pop().unwrap();
+    native_batch(&mut app, &first);
+    let mut events = vec![release];
+    let mut second = native_paint_gesture(window);
+    second.insert(second.len() - 1, escape(window));
+    events.extend(second);
+    native_batch(&mut app, &events);
+    assert_native_paint_complete(&app, 1);
+    assert!(
+        native_paint_pixels(&app) == expected,
+        "pixels must match real separate-frame control"
+    );
+}
+#[test]
+fn native_paint_ui_drag_cannot_paint_after_leaving_panel_or_replay_later() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 700., 180.),
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+            moved(window, 350., 310.),
+            moved(window, 400., 320.),
+            button(window, bevy::input::mouse::MouseButton::Left, false),
+        ],
+    );
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_native_paint_complete(&app, 0);
+    assert!(
+        native_paint_pixels(&app) == before,
+        "UI input must leave pixels unchanged"
+    );
 }
