@@ -47,7 +47,7 @@ Keep components thin and bridge-driven: interaction state stays local, while bac
 
 ## Usage Examples
 ```svelte
-<Toolbar {renderStats} />
+<Toolbar {renderStats} mode={editMode} />
 <SidePanel />
 <AddObjectMenu {show} {position} onClose={closeMenu} />
 ```
@@ -63,3 +63,9 @@ Keep components thin and bridge-driven: interaction state stays local, while bac
 - Revisit trigger: a component starts generating saved layouts, presets, or other machine-consumed data.
 
 Brush controls never reset backend settings on mount. `RequestBrushState` restores current values after reload; authoritative snapshots also reflect keyboard adjustments. See [brush panels](../../../../docs/brush_panels.md) for support scope and testing.
+
+The Edit menu consumes the same authoritative edit mode and history availability
+as the brush panels. Undo/Redo emit one existing paint or sculpt command and are
+disabled for unsupported modes, empty history and active sculpt transactions.
+Paint availability already includes the backend's active-transaction refusal.
+Native shortcuts remain native; the menu adds no browser shortcut handler.

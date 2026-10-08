@@ -62,7 +62,7 @@
 <svelte:window onkeydown={handleAddMenuKeydown} onmousemove={handleMousemove} />
 
 <div class="app">
-    <Toolbar {renderStats} />
+    <Toolbar {renderStats} mode={editMode} />
     <div hidden={editMode === 'Paint' || editMode === 'Sculpt'}><SidePanel /></div>
     <AddObjectMenu
         show={showAddMenu}

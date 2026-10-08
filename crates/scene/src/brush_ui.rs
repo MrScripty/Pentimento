@@ -519,6 +519,86 @@ mod tests {
     }
 
     #[test]
+    fn stale_history_ui_commands_cannot_restore_during_active_paint_transaction() {
+        fn surface(world: &mut World) -> Vec<u8> {
+            let mut painting = world.resource_mut::<PaintingResource>();
+            let pipeline = painting.get_pipeline_mut(7).unwrap();
+            // Match the production presentation step after a history command.
+            pipeline.layers.composite();
+            pipeline.surface_as_bytes().to_vec()
+        }
+        let mut world = world_with_canvas();
+        stamp(&mut world);
+        let committed = surface(&mut world);
+        paint(&mut world, PaintCommand::Undo);
+        let baseline = surface(&mut world);
+        assert!(
+            committed != baseline,
+            "the committed stroke must change actual pixels"
+        );
+        {
+            let mut painting = world.resource_mut::<PaintingResource>();
+            let pipeline = painting.get_pipeline_mut(7).unwrap();
+            pipeline.begin_stroke(7, 2, 0);
+            pipeline.stroke_to(32., 32., 1.);
+            pipeline.layers.composite();
+        }
+        let active = surface(&mut world);
+        assert!(
+            active != baseline,
+            "the active stroke must change actual pixels"
+        );
+        // A menu can still hold an older enabled receipt while native work starts.
+        // Dispatch those actual protocol commands; backend ownership must win.
+        for command in [PaintCommand::Undo, PaintCommand::Redo] {
+            paint(&mut world, command);
+            assert!(
+                surface(&mut world) == active,
+                "history must not overwrite an active stroke"
+            );
+            let pipeline = world
+                .resource::<PaintingResource>()
+                .get_pipeline(7)
+                .unwrap();
+            assert!(pipeline.is_stroking());
+            assert_eq!((pipeline.undo_count(), pipeline.redo_count()), (0, 1));
+            assert_eq!(pipeline.log().total_packet_count(), 1);
+            assert!(matches!(
+                paint_message(&world),
+                Some(BevyToUi::PaintBrushStateChanged {
+                    can_undo: false,
+                    can_redo: false,
+                    ..
+                })
+            ));
+        }
+        {
+            let mut painting = world.resource_mut::<PaintingResource>();
+            let pipeline = painting.get_pipeline_mut(7).unwrap();
+            pipeline.cancel_stroke();
+            pipeline.layers.composite();
+        }
+        assert!(
+            surface(&mut world) == baseline,
+            "cancel must restore the complete baseline"
+        );
+        paint(&mut world, PaintCommand::Redo);
+        assert!(
+            surface(&mut world) == committed,
+            "Redo must restore the complete committed surface"
+        );
+        let pipeline = world
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap();
+        assert_eq!(
+            pipeline.log().total_packet_count(),
+            1,
+            "restoration must not replay input"
+        );
+    }
+
+    #[test]
     fn radius_controls_actual_dab_coverage_and_survives_new_canvas() {
         let mut world = world_with_canvas();
         paint(&mut world, PaintCommand::SetBrushHardness { hardness: 1.0 });

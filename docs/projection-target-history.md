@@ -74,3 +74,21 @@ independent review passes all 35 input tests and 15 native readiness tests.
 The publication commit skips hosted CI under the owner's spending constraint.
 Skipped checks are pending; this does not qualify the native shortcut or make
 the successor's hosted checks green.
+
+Parent image inspection confirms the pre-fix hidden-source receiver, layered
+paint, cancel, Undo/button Redo and repeated Apply. All 29 sphere receipts retain
+geometry fingerprint `a4c4af569911275c`; the native artifact digest matches.
+The pixel counts above come from raw captures before compression. Independently
+viewed JPEG85 images establish visible behavior; their compressed color values
+must not be substituted into the strict raw-pixel thresholds. The old native
+keyboard failure and the successor's pending native qualification remain.
+
+The global Edit menu uses the authoritative current mode and history receipts
+to route Undo/Redo through the existing paint or sculpt commands. Unsupported
+modes and unavailable history are disabled. It adds no browser shortcuts and
+does not change backend active-transaction or geometry admission checks.
+Rendered browser tests record exactly one command for mouse or Enter activation;
+an actual pipeline test also sends stale history commands during an active paint
+stroke and checks full pixel bytes, ownership, cursors and packet count through
+cancel and subsequent Redo. Native menu qualification remains pending: the local
+CEF runtime download was rejected by the configured proxy with HTTP 403/403.
