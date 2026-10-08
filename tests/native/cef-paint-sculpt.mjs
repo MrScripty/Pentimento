@@ -543,7 +543,8 @@ try {
     let diagnostics = null;
     try { diagnostics = await failureDiagnostics(); } catch {}
     const nativePointerTrace = pointerTrace();
-    const result = { type: 'pentimento.cef.result', status: 'failed', stage, error: String(error), records, diagnostics, native_pointer_trace: nativePointerTrace };
+    const result = { type: 'pentimento.cef.result', status: 'failed', stage, error: String(error), records, diagnostics,
+        receiver_receipts: projectionReceipts(log()).slice(-8), native_pointer_trace: nativePointerTrace };
     writeFileSync(`${out}/result.json`, JSON.stringify(result, null, 2)); console.error(JSON.stringify(result)); process.exitCode = 1;
 } finally {
     if (browser) await browser.close().catch(() => {});

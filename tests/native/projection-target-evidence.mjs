@@ -16,7 +16,9 @@ export function assertRenderedTarget(before, after, width, height, receipt) {
     assert.ok(receipt.texture_bound && receipt.painted_texels > 100, 'Actual receiver atlas/image must contain bound paint');
     assert.ok(receipt.target_bounds, 'Receiver must be visible in the inspection camera');
     const [x0, y0, x1, y1] = receipt.target_bounds;
-    let changed = 0, sampled = 0;
+    let changed = 0, sampled = 0, changedAnyColor = 0, differenceSum = 0;
+    let strongestChange = null, strongestDifference = 0;
+    let maxRedOverGreen = -255, maxBlueOverGreen = -255;
     for (let y = Math.max(70, Math.floor(y0)); y < Math.min(height - 40, Math.ceil(y1)); y++) {
         for (let x = Math.max(30, Math.floor(x0)); x < Math.min(width - 335, Math.ceil(x1)); x++) {
             const source = receipt.source_bounds;
@@ -24,9 +26,24 @@ export function assertRenderedTarget(before, after, width, height, receipt) {
             sampled++;
             const i = (y * width + x) * 3;
             const [r, g, b] = after.pixels.subarray(i, i + 3);
-            if (r > g + 25 && b > g + 25 && Math.max(...[0, 1, 2].map(c => Math.abs(after.pixels[i + c] - before.pixels[i + c]))) > 20) changed++;
+            const difference = Math.max(...[0, 1, 2].map(c => Math.abs(after.pixels[i + c] - before.pixels[i + c])));
+            differenceSum += difference;
+            if (difference > strongestDifference) {
+                strongestDifference = difference;
+                strongestChange = { x, y, before: [...before.pixels.subarray(i, i + 3)], after: [r, g, b], difference };
+            }
+            if (difference > 20) {
+                changedAnyColor++;
+                maxRedOverGreen = Math.max(maxRedOverGreen, r - g);
+                maxBlueOverGreen = Math.max(maxBlueOverGreen, b - g);
+            }
+            if (r > g + 25 && b > g + 25 && difference > 20) changed++;
         }
     }
+    // Diagnostic only: the strict receiver pass condition below is unchanged.
+    console.log(JSON.stringify({ type: 'pentimento.cef.receiver_pixels', receipt, sampled_pixels: sampled, changed_any_color_pixels: changedAnyColor,
+        changed_magenta_pixels: changed, mean_max_difference: differenceSum / sampled, strongest_change: strongestChange,
+        max_changed_red_over_green: maxRedOverGreen, max_changed_blue_over_green: maxBlueOverGreen }));
     assert.ok(changed > 100, `Target surface lacks independent rendered paint: ${changed}/${sampled} magenta pixels outside source bounds`);
     return { receiver_changed_magenta_pixels: changed, receiver_sampled_pixels: sampled };
 }
