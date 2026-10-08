@@ -337,6 +337,10 @@ fn handle_paint_command(
             let presets = painting::brush::builtin_presets();
             if let Some(preset) = presets.into_iter().find(|preset| preset.id == preset_id) {
                 painting.set_brush_preset(preset);
+                drop(painting);
+                if let Some(mut mode) = world.get_resource_mut::<crate::PaintMode>() {
+                    mode.sample_color = false;
+                }
             }
         }
         PaintCommand::SetBrushColor { color } => {

@@ -257,9 +257,9 @@ fn restoring_a_saved_sculpt_brush_changes_guarded_pipeline_geometry_and_keeps_hi
     assert!(after.same_authoritative_state(&mesh));
 }
 
-struct Fixture(PathBuf);
+pub(crate) struct Fixture(PathBuf);
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -270,6 +270,9 @@ impl Fixture {
         ));
         std::fs::create_dir_all(&path).unwrap();
         Self(path.join("brushes.json"))
+    }
+    pub(crate) fn install(&self, world: &mut World) {
+        world.insert_resource(Catalog::load(Some(self.0.clone())));
     }
     fn world(&self) -> World {
         let mut world = World::new();
@@ -658,6 +661,27 @@ fn sculpt_presets_restart_keep_modes_separate_and_preserve_grab_override() {
         restarted.resource::<crate::SculptState>().brush_autosmooth,
         Some(0.17)
     );
+    // A stored Grab override becomes effective again on a stamped brush.
+    sculpt(
+        &mut restarted,
+        SculptCommand::SetTool {
+            tool: pentimento_ipc::SculptTool::Push,
+        },
+    );
+    assert_eq!(
+        restarted
+            .resource::<crate::sculpt_mode::SculptingData>()
+            .pipeline
+            .as_ref()
+            .unwrap()
+            .brush_preset()
+            .autosmooth,
+        0.17
+    );
+    assert_eq!(
+        restarted.resource::<crate::SculptState>().brush_autosmooth,
+        Some(0.17)
+    );
     restarted
         .resource_mut::<crate::SculptState>()
         .current_stroke_id = Some(77);
@@ -681,4 +705,69 @@ fn sculpt_presets_restart_keep_modes_separate_and_preserve_grab_override() {
         Some(77)
     );
     assert_eq!(restarted.resource::<Catalog>().document.sculpt.len(), 2);
+}
+
+#[test]
+fn integrated_preset_selection_disarms_only_on_success_and_external_edits_stay_blocked() {
+    let fixture = Fixture::new();
+    let mut world = fixture.world();
+    paint(
+        &mut world,
+        PaintCommand::SaveBrushPreset {
+            name: "Paint".into(),
+        },
+    );
+    world.resource_mut::<crate::PaintMode>().sample_color = true;
+    paint(
+        &mut world,
+        PaintCommand::SelectSavedBrushPreset {
+            preset_id: u32::MAX,
+        },
+    );
+    assert!(world.resource::<crate::PaintMode>().sample_color);
+    paint(
+        &mut world,
+        PaintCommand::SelectBrushPreset {
+            preset_id: u32::MAX,
+        },
+    );
+    assert!(world.resource::<crate::PaintMode>().sample_color);
+    world.resource_mut::<crate::PaintMode>().current_stroke = Some(crate::StrokeState {
+        stroke_id: 99,
+        space_id: 7,
+        start_time: 0,
+        last_world_pos: None,
+        last_time: 0.,
+    });
+    paint(
+        &mut world,
+        PaintCommand::SelectSavedBrushPreset { preset_id: 1 },
+    );
+    paint(&mut world, PaintCommand::SelectBrushPreset { preset_id: 0 });
+    assert!(world.resource::<crate::PaintMode>().sample_color);
+    world.resource_mut::<crate::PaintMode>().current_stroke = None;
+    paint(&mut world, PaintCommand::SelectBrushPreset { preset_id: 0 });
+    assert!(!world.resource::<crate::PaintMode>().sample_color);
+    world.resource_mut::<crate::PaintMode>().sample_color = true;
+    let original = world.resource::<PaintingResource>().brush_preset.clone();
+    let mut external: Document =
+        serde_json::from_slice(&std::fs::read(&fixture.0).unwrap()).unwrap();
+    external.paint[0].brush.max_size = 99.;
+    let external_bytes = serde_json::to_vec(&external).unwrap();
+    std::fs::write(&fixture.0, &external_bytes).unwrap();
+    // Existing policy detects external edits while saving, then blocks recall.
+    paint(
+        &mut world,
+        PaintCommand::SaveBrushPreset {
+            name: "Paint".into(),
+        },
+    );
+    assert_eq!(std::fs::read(&fixture.0).unwrap(), external_bytes);
+    paint(
+        &mut world,
+        PaintCommand::SelectSavedBrushPreset { preset_id: 1 },
+    );
+    assert!(world.resource::<crate::PaintMode>().sample_color);
+    assert_eq!(world.resource::<PaintingResource>().brush_preset, original);
+    assert!(world.resource::<Catalog>().blocked);
 }

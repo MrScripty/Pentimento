@@ -13,7 +13,7 @@
         "lint": "./scripts/rustfmt-active.sh --check",
         "test": "node --test --experimental-strip-types tests/contracts/*.test.mjs tests/ui/*.test.ts tests/ui/*.test.mjs",
         "verify": "npm run lint && npm run lint:a11y && npm run typecheck && npm run test",
-        "test:ui:browser": "node tests/ui/brush-panel-interactions.mjs && node tests/ui/history-menu-interactions.mjs && node tests/ui/custom-brush-presets.mjs && node tests/ui/canvas-color-sampling.mjs"
+        "test:ui:browser": "node tests/ui/brush-panel-interactions.mjs && node tests/ui/history-menu-interactions.mjs && node tests/ui/custom-brush-presets.mjs && node tests/ui/canvas-color-sampling.mjs && node tests/ui/brush-features-integration.mjs"
     },
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.0",

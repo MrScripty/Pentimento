@@ -8,7 +8,7 @@ try {
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(() => { window.commands = []; window.__PENTIMENTO_IPC__ = { postMessage: message => window.commands.push(JSON.parse(message)) }; });
-    await page.goto(process.env.PENTIMENTO_UI_URL ?? 'http://127.0.0.1:5195');
+    await page.goto(process.env.PENTIMENTO_UI_URL ?? 'http://127.0.0.1:5187');
     await page.waitForFunction(() => window.commands.some(m => m.type === 'RequestBrushState'));
     const receive = message => page.evaluate(m => window.__PENTIMENTO_RECEIVE__(JSON.stringify(m)), message);
     const last = () => page.evaluate(() => window.commands.filter(m => m.type === 'PaintCommand').at(-1)?.data);

@@ -89,7 +89,11 @@ history snapshots or projection settings are stored in a brush preset.
 Saving and restoring are refused whenever the scene or a brush pipeline owns a
 stroke, including stale enabled frontend commands. The panel disables preset
 actions and reconciles the accepted choice. Restoring changes current brush
-parameters without clearing undo/redo or replaying input.
+parameters without clearing undo/redo or replaying input. Successful paint recall
+and built-in tip selection also disarm the one-click sampler, so the next fresh
+click paints with the selected brush. A consumed sampler press stays consumed
+until release. Saving or refused selection leaves sampler state unchanged; source
+selection stays session-local and is not stored in the brush catalog.
 
 One versioned backend-owned JSON catalog stores both modes. On Linux it is under
 `$XDG_CONFIG_HOME/pentimento/brush-presets.json` (absolute XDG paths only), falling
@@ -106,6 +110,16 @@ engine preserve the other mode's catalog and validate numeric/schema bounds;
 sculpt effective tool defaults are additionally validated when that engine is
 available. WASM/browser storage is unavailable and shown as such; there is no
 separate frontend preset database, cloud sync or cross-frontend panel parity claim.
+
+The combined brush feature branch retains the original auto-smoothing, custom
+preset and sampler checkpoints through a normal merge. Its integrated input test
+samples actual layered paint, saves that RGB, restores it from the real catalog,
+then paints with the recalled brush and verifies exact layer/composite Undo/Redo
+and Escape rollback. Recall preserves existing redo until a new accepted stroke.
+A saved Grab smoothing override resumes on returning to a stamped brush. The
+Chromium suite additionally exercises all three panels' controls together and
+reloads authoritative state; it continues to distinguish UI protocol tests from
+native renderer acceptance.
 
 Local qualification includes actual saved/reloaded paint pixels and eraser undo,
 saved sculpt parameters affecting guarded pipeline geometry with exact history,

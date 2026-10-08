@@ -699,3 +699,217 @@ fn sampling_preserves_redo_and_rejects_pipeline_only_stroke_and_inactive_mode() 
     paint_command(&mut app, C::SetColorSampling { enabled: true });
     assert!(!app.world().resource::<PaintMode>().sample_color);
 }
+
+#[test]
+fn integrated_sampled_preset_recall_paints_with_exact_history_and_consumed_press() {
+    use pentimento_ipc::{BevyToUi, BlendMode, ColorSampleSource, PaintCommand as C};
+    let (mut app, window) = fixture();
+    let catalog = crate::brush_presets::tests::Fixture::new();
+    catalog.install(app.world_mut());
+    batch(&mut app, gesture(window));
+    paint_command(&mut app, C::AddLayer { name: "top".into() });
+    paint_command(
+        &mut app,
+        C::SetBrushColor {
+            color: [0., 0., 1., 0.7],
+        },
+    );
+    paint_command(&mut app, C::SetBrushOpacity { opacity: 0.5 });
+    batch(&mut app, gesture(window));
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    batch(&mut app, vec![movement(window, 500.), button(window, true)]);
+    let sampled = app.world().resource::<PaintingResource>().brush_color;
+    assert!(sampled[0] > 0. && sampled[2] > 0.);
+    // Save while the sampler owns a held press: no stroke exists and saving is
+    // allowed. Recalling must never turn this held press into painting.
+    paint_command(
+        &mut app,
+        C::SaveBrushPreset {
+            name: "Layer sample".into(),
+        },
+    );
+    paint_command(
+        &mut app,
+        C::SetBrushColor {
+            color: [0., 1., 0., 1.],
+        },
+    );
+    paint_command(&mut app, C::SetBrushOpacity { opacity: 0.9 });
+    paint_command(
+        &mut app,
+        C::SetBlendMode {
+            mode: BlendMode::Erase,
+        },
+    );
+    paint_command(
+        &mut app,
+        C::SetColorSampleSource {
+            source: ColorSampleSource::ActiveLayer,
+        },
+    );
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    let before = layer_pixels(&app);
+    paint_command(&mut app, C::SelectSavedBrushPreset { preset_id: 1 });
+    assert!(!app.world().resource::<PaintMode>().sample_color);
+    assert!(app.world().resource::<PaintMode>().sample_press_owned);
+    assert_eq!(
+        app.world().resource::<PaintMode>().sample_source,
+        ColorSampleSource::ActiveLayer
+    );
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        sampled
+    );
+    assert_eq!(
+        app.world()
+            .resource::<PaintingResource>()
+            .brush_preset
+            .opacity,
+        0.5
+    );
+    assert_eq!(
+        app.world().resource::<PaintingResource>().blend_mode,
+        painting::BlendMode::Normal
+    );
+    let messages = app
+        .world_mut()
+        .resource_mut::<crate::OutboundUiMessages>()
+        .drain();
+    assert!(matches!(
+        messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m, BevyToUi::PaintColorSamplingChanged { .. })),
+        Some(BevyToUi::PaintColorSamplingChanged {
+            enabled: false,
+            source: ColorSampleSource::ActiveLayer,
+            active: false
+        })
+    ));
+    assert!(matches!(
+        messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m, BevyToUi::SavedBrushPresetsChanged { .. })),
+        Some(BevyToUi::SavedBrushPresetsChanged {
+            selected_paint: Some(1),
+            ..
+        })
+    ));
+    batch(
+        &mut app,
+        vec![
+            movement(window, 700.),
+            button(window, true),
+            button(window, false),
+        ],
+    );
+    completed(&app, 2);
+    assert_eq!(layer_pixels(&app), before);
+    // Neither recall nor a refused restore clears the outstanding redo stack.
+    paint_command(&mut app, C::Undo);
+    app.update();
+    let endpoint = layer_pixels(&app);
+    let composite_endpoint = pixels(&app);
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    paint_command(
+        &mut app,
+        C::SelectSavedBrushPreset {
+            preset_id: u32::MAX,
+        },
+    );
+    assert!(app.world().resource::<PaintMode>().sample_color);
+    paint_command(
+        &mut app,
+        C::SaveBrushPreset {
+            name: "Layer sample".into(),
+        },
+    );
+    assert!(
+        app.world().resource::<PaintMode>().sample_color,
+        "saving is not selecting a tool"
+    );
+    paint_command(&mut app, C::SelectSavedBrushPreset { preset_id: 1 });
+    assert!(!app.world().resource::<PaintMode>().sample_color);
+    assert!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .can_redo()
+    );
+    assert_eq!(layer_pixels(&app), endpoint);
+    batch(&mut app, gesture(window));
+    let after = layer_pixels(&app);
+    let composite_after = pixels(&app);
+    assert_ne!(
+        after, endpoint,
+        "fresh click paints with recalled sampled RGB"
+    );
+    let pipeline = app
+        .world()
+        .resource::<PaintingResource>()
+        .get_pipeline(7)
+        .unwrap();
+    assert_eq!(pipeline.log().total_packet_count(), 3);
+    assert_eq!(pipeline.undo_count(), 2);
+    assert!(!pipeline.can_redo());
+    paint_command(&mut app, C::Undo);
+    app.update();
+    assert_eq!(layer_pixels(&app), endpoint);
+    assert_eq!(pixels(&app), composite_endpoint);
+    paint_command(&mut app, C::Redo);
+    app.update();
+    assert_eq!(layer_pixels(&app), after);
+    assert_eq!(pixels(&app), composite_after);
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            movement(window, 600.),
+            escape(window),
+            button(window, false),
+        ],
+    );
+    assert_eq!(layer_pixels(&app), after);
+    assert_eq!(pixels(&app), composite_after);
+    assert_eq!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .log()
+            .total_packet_count(),
+        3
+    );
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        sampled
+    );
+    // A new editor loads the actual file; sampler source/arming are transient.
+    let (mut restarted, _) = fixture();
+    catalog.install(restarted.world_mut());
+    paint_command(&mut restarted, C::SelectSavedBrushPreset { preset_id: 1 });
+    assert_eq!(
+        restarted.world().resource::<PaintingResource>().brush_color,
+        sampled
+    );
+    assert_eq!(
+        restarted
+            .world()
+            .resource::<PaintingResource>()
+            .brush_preset
+            .opacity,
+        0.5
+    );
+    assert_eq!(
+        restarted.world().resource::<PaintingResource>().blend_mode,
+        painting::BlendMode::Normal
+    );
+    assert!(!restarted.world().resource::<PaintMode>().sample_color);
+    assert_eq!(
+        restarted.world().resource::<PaintMode>().sample_source,
+        ColorSampleSource::VisibleLayers
+    );
+}

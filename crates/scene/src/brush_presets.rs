@@ -16,7 +16,7 @@ const LIMIT: usize = 64;
 const FILE_LIMIT: u64 = 1024 * 1024;
 #[cfg(test)]
 #[path = "brush_preset_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct PaintEntry {
@@ -494,6 +494,11 @@ fn select(world: &mut World, id: u32, sculpt: bool) -> Result<(), String> {
         paint.set_brush_preset(entry.brush);
         paint.set_brush_color(entry.color);
         paint.set_blend_mode_ipc(entry.blend);
+        drop(paint);
+        // A recalled brush is ready to paint; retain consumed-press ownership.
+        if let Some(mut mode) = world.get_resource_mut::<crate::PaintMode>() {
+            mode.sample_color = false;
+        }
     }
     let mut catalog = world.resource_mut::<Catalog>();
     if sculpt {
