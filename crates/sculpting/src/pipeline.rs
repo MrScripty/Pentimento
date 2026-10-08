@@ -14,19 +14,24 @@ use crate::budget::VertexBudget;
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
 use crate::deformation::{DabInfo, apply_autosmooth, apply_deformation};
 use crate::gpu::{DirtyVertices, update_normals_after_deformation};
+use crate::safety::{GeometryWitness, SafetyError, Surface};
 use crate::spatial::{Aabb as SpatialAabb, VertexOctree};
 use crate::tessellation::{
-    ScreenSpaceConfig, TessellationStats, tessellate_at_brush, tessellate_at_brush_budget,
+    ScreenSpaceConfig, TessellationStats, tessellate_at_brush_budget_checked,
+    tessellate_at_brush_checked,
 };
 use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig, TessellationMode};
 use glam::Vec3;
 use painting::half_edge::VertexId;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tracing::{debug, error, trace};
 
 /// Result of processing a single dab through the pipeline.
 #[derive(Debug, Default)]
 pub struct DabProcessResult {
+    /// A rejected dab rolls the complete active stroke back to its initial mesh.
+    pub rejected: Option<SafetyError>,
     /// Number of vertices modified by deformation.
     pub vertices_modified: usize,
     /// Chunks that were modified.
@@ -38,6 +43,8 @@ pub struct DabProcessResult {
 /// Result of ending a stroke.
 #[derive(Debug, Default)]
 pub struct StrokeEndResult {
+    /// Rejected strokes never produce replay/sync packets.
+    pub rejected: Option<SafetyError>,
     /// Completed stroke packets for recording/sync.
     pub packets: Vec<SculptStrokePacket>,
     /// Chunks that were split during rebalancing.
@@ -79,6 +86,12 @@ impl Default for PipelineConfig {
 /// State tracked during an active stroke.
 #[derive(Debug, Clone)]
 struct ActiveStrokeState {
+    mesh_id: u32,
+    checkpoint: Option<ChunkedMesh>,
+    admitted_surface: Option<Surface>,
+    admitted_witness: Option<Arc<GeometryWitness>>,
+    budget_checkpoint: Option<VertexBudget>,
+    rejected: Option<SafetyError>,
     /// All chunks modified during this stroke.
     affected_chunks: HashSet<ChunkId>,
     /// Previous dab position for stroke direction calculation.
@@ -90,6 +103,12 @@ struct ActiveStrokeState {
 impl Default for ActiveStrokeState {
     fn default() -> Self {
         Self {
+            mesh_id: 0,
+            checkpoint: None,
+            admitted_surface: None,
+            admitted_witness: None,
+            budget_checkpoint: None,
+            rejected: None,
             affected_chunks: HashSet::new(),
             last_dab_position: None,
             first_dab_position: None,
@@ -115,6 +134,9 @@ pub struct SculptingPipeline {
     active_stroke_state: Option<ActiveStrokeState>,
     /// Per-chunk octrees for spatial queries (lazily built).
     chunk_octrees: HashMap<ChunkId, VertexOctree>,
+    /// Last admitted geometry across strokes, keyed to the explicit mesh owner.
+    /// Incoming mesh content is compared to it; this is never a blind validity flag.
+    last_admitted_surface: Option<(u32, Surface, Arc<GeometryWitness>)>,
 }
 
 impl SculptingPipeline {
@@ -127,6 +149,7 @@ impl SculptingPipeline {
             budget: VertexBudget::default(),
             active_stroke_state: None,
             chunk_octrees: HashMap::new(),
+            last_admitted_surface: None,
         }
     }
 
@@ -139,6 +162,7 @@ impl SculptingPipeline {
             budget: VertexBudget::default(),
             active_stroke_state: None,
             chunk_octrees: HashMap::new(),
+            last_admitted_surface: None,
         }
     }
 
@@ -170,6 +194,12 @@ impl SculptingPipeline {
     /// Returns the stroke ID.
     pub fn begin_stroke(&mut self, mesh_id: u32, input: BrushInput) -> u64 {
         self.active_stroke_state = Some(ActiveStrokeState {
+            mesh_id,
+            checkpoint: None,
+            admitted_surface: None,
+            admitted_witness: None,
+            budget_checkpoint: None,
+            rejected: None,
             affected_chunks: HashSet::new(),
             last_dab_position: Some(input.position),
             first_dab_position: Some(input.position),
@@ -189,6 +219,45 @@ impl SculptingPipeline {
         debug!("process_input: START pos={:?}", input.position);
         let mut result = DabProcessResult::default();
 
+        let Some(state) = &self.active_stroke_state else {
+            return result;
+        };
+        if let Some(error) = &state.rejected {
+            result.rejected = Some(error.clone());
+            return result;
+        }
+        if state.checkpoint.is_none() {
+            let mesh_id = state.mesh_id;
+            let cached = self
+                .last_admitted_surface
+                .as_ref()
+                .filter(|(owner, _, _)| *owner == mesh_id);
+            let (surface, witness) = if let Some((_, previous, witness)) =
+                cached.filter(|(_, _, witness)| witness.matches(chunked_mesh))
+            {
+                (previous.clone(), witness.clone())
+            } else {
+                let surface = match Surface::read(chunked_mesh).and_then(|surface| {
+                    match cached {
+                        Some((_, previous, _)) => surface.validate_change(previous)?,
+                        None => surface.validate()?,
+                    }
+                    Ok(surface)
+                }) {
+                    Ok(surface) => surface,
+                    Err(error) => return self.reject_stroke(chunked_mesh, error),
+                };
+                (surface, Arc::new(GeometryWitness::capture(chunked_mesh)))
+            };
+            let state = self.active_stroke_state.as_mut().unwrap();
+            state.checkpoint = Some(chunked_mesh.clone());
+            state.admitted_surface = Some(surface);
+            state.admitted_witness = Some(witness);
+            state.budget_checkpoint = Some(self.budget.clone());
+        } else if let Err(error) = self.admit_current_mesh(chunked_mesh) {
+            return self.reject_stroke(chunked_mesh, error);
+        }
+
         // Generate dabs from brush input
         debug!("process_input: generating dabs");
         let dabs = self.brush_engine.update_stroke(input);
@@ -204,6 +273,9 @@ impl SculptingPipeline {
         for dab in dabs {
             let dab_result = self.apply_dab_internal(&dab, last_pos, first_pos, chunked_mesh);
 
+            if dab_result.rejected.is_some() {
+                return dab_result;
+            }
             result.vertices_modified += dab_result.vertices_modified;
             result
                 .chunks_affected
@@ -216,6 +288,7 @@ impl SculptingPipeline {
                     .get_or_insert(TessellationStats::default());
                 existing.edges_split += tess.edges_split;
                 existing.edges_collapsed += tess.edges_collapsed;
+                existing.edges_flipped += tess.edges_flipped;
             }
 
             // Track affected chunks
@@ -240,22 +313,116 @@ impl SculptingPipeline {
     pub fn end_stroke(&mut self, chunked_mesh: &mut ChunkedMesh) -> StrokeEndResult {
         let mut result = StrokeEndResult::default();
 
-        // Get stroke packets from brush engine
+        if self
+            .active_stroke_state
+            .as_ref()
+            .is_some_and(|state| state.checkpoint.is_some() && state.rejected.is_none())
+        {
+            if let Err(error) = self.admit_current_mesh(chunked_mesh) {
+                self.reject_stroke(chunked_mesh, error);
+            }
+        }
+
+        if self
+            .active_stroke_state
+            .as_ref()
+            .is_some_and(|state| state.checkpoint.is_some() && state.rejected.is_none())
+            && self.config.rebalance_after_stroke
+        {
+            match self.rebalance_chunks(chunked_mesh) {
+                Ok((split, merged)) => {
+                    result.chunks_split = split;
+                    result.chunks_merged = merged;
+                }
+                Err(error) => {
+                    self.reject_stroke(chunked_mesh, error);
+                }
+            }
+        }
+        result.rejected = self
+            .active_stroke_state
+            .as_ref()
+            .and_then(|state| state.rejected.clone());
         if let Some(packets) = self.brush_engine.end_stroke() {
-            result.packets = packets;
+            if result.rejected.is_none() {
+                result.packets = packets;
+            }
         }
-
-        // Perform chunk rebalancing if enabled
-        if self.config.rebalance_after_stroke {
-            let (split, merged) = self.rebalance_chunks(chunked_mesh);
-            result.chunks_split = split;
-            result.chunks_merged = merged;
+        if result.rejected.is_none() && (result.chunks_split > 0 || result.chunks_merged > 0) {
+            if let Some(state) = &self.active_stroke_state {
+                self.last_admitted_surface = Surface::read(chunked_mesh).ok().map(|surface| {
+                    (
+                        state.mesh_id,
+                        surface,
+                        Arc::new(GeometryWitness::capture(chunked_mesh)),
+                    )
+                });
+            }
         }
-
-        // Clear stroke state
         self.active_stroke_state = None;
 
         result
+    }
+
+    /// The public mesh can be edited by other callers between input events.
+    /// Reuse a prior admission only after exact equality, including hidden
+    /// half-edge maps. This also covers zero-dab inputs and stroke completion.
+    fn admit_current_mesh(&mut self, mesh: &ChunkedMesh) -> Result<(), SafetyError> {
+        let state = self
+            .active_stroke_state
+            .as_ref()
+            .ok_or_else(|| SafetyError::Topology("missing stroke state".into()))?;
+        if state
+            .admitted_witness
+            .as_ref()
+            .is_some_and(|witness| witness.matches(mesh))
+        {
+            return Ok(());
+        }
+        let previous = state
+            .admitted_surface
+            .as_ref()
+            .ok_or_else(|| SafetyError::Topology("missing admitted stroke state".into()))?;
+        let surface = Surface::read(mesh)?;
+        surface.validate_change(previous)?;
+        surface.validate_orientation(previous)?;
+        let witness = Arc::new(GeometryWitness::capture(mesh));
+        let state = self.active_stroke_state.as_mut().unwrap();
+        self.last_admitted_surface = Some((state.mesh_id, surface.clone(), witness.clone()));
+        state.admitted_surface = Some(surface);
+        state.admitted_witness = Some(witness);
+        Ok(())
+    }
+
+    fn reject_stroke(&mut self, mesh: &mut ChunkedMesh, error: SafetyError) -> DabProcessResult {
+        tracing::warn!("Sculpt stroke rejected; preserving pre-stroke geometry: {error}");
+        if let Some(state) = &mut self.active_stroke_state {
+            if let Some(checkpoint) = state.checkpoint.take() {
+                *mesh = checkpoint;
+                self.last_admitted_surface = Surface::read(mesh).ok().map(|surface| {
+                    (
+                        state.mesh_id,
+                        surface,
+                        Arc::new(GeometryWitness::capture(mesh)),
+                    )
+                });
+                // Earlier dabs may already have been uploaded. A rollback is a
+                // full topology upload, including vertices removed by this stroke.
+                for chunk in mesh.chunks.values_mut() {
+                    chunk.mark_topology_changed();
+                }
+            }
+            if let Some(budget) = state.budget_checkpoint.take() {
+                self.budget = budget;
+            }
+            state.rejected = Some(error.clone());
+        }
+        self.chunk_octrees.clear();
+        DabProcessResult {
+            rejected: Some(error),
+            chunks_affected: mesh.chunks.keys().copied().collect(),
+            ..Default::default()
+        }
     }
 
     /// Cancel the current stroke without applying final operations.
@@ -308,8 +475,9 @@ impl SculptingPipeline {
 
         // Find affected chunks
         debug!("apply_dab_internal: finding chunks in sphere");
-        let affected_chunk_ids =
+        let mut affected_chunk_ids =
             chunked_mesh.chunks_intersecting_sphere(brush_center, influence_radius);
+        affected_chunk_ids.sort_by_key(|id| id.0);
         debug!(
             "apply_dab_internal: found {} affected chunks",
             affected_chunk_ids.len()
@@ -336,26 +504,48 @@ impl SculptingPipeline {
         // vertices exist before the brush tries to deform them. Without this,
         // new vertices from pass-through edge splits would be placed on the
         // un-deformed surface, creating dents and discontinuities.
+        // Incoming admission ran once for this process_input call. No external
+        // caller can mutate the exclusively borrowed mesh between these dabs.
+        let committed_before = self
+            .active_stroke_state
+            .as_ref()
+            .and_then(|state| state.admitted_surface.clone())
+            .expect("active stroke admitted before dabs");
+        let mut candidate_surface = committed_before.clone();
+
+        // Adaptive work is bounded per dab. Local mutation checks run after
+        // each edit; one global collision check admits the whole transaction.
+        // Dense meshes refine progressively instead of blocking on many edits.
+        let mut edit_budget = (10_000 / chunked_mesh.total_face_count().max(1)).clamp(1, 4);
         if self.config.tessellation_enabled {
             for &chunk_id in &affected_chunk_ids {
+                if edit_budget == 0 {
+                    break;
+                }
+                let mut before = candidate_surface.chunk(chunk_id);
+                let mut safety_error = None;
+                let mut check = |chunk: &MeshChunk| {
+                    if safety_error.is_some() {
+                        return false;
+                    }
+                    match Surface::read_chunk(chunk).and_then(|surface| {
+                        surface.validate_orientation(&before)?;
+                        Ok(surface)
+                    }) {
+                        Ok(surface) => {
+                            before = surface;
+                            true
+                        }
+                        Err(error) => {
+                            safety_error = Some(error);
+                            false
+                        }
+                    }
+                };
                 let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
                     Some(c) => c,
                     None => continue,
                 };
-
-                // Validate mesh BEFORE tessellation in debug builds.
-                // Gated behind env var to allow skipping during interactive testing:
-                //   PENTIMENTO_SKIP_MESH_VALIDATION=1 cargo run
-                #[cfg(debug_assertions)]
-                if std::env::var("PENTIMENTO_SKIP_MESH_VALIDATION").is_err() {
-                    if let Err(e) = chunk.mesh.validate_connectivity() {
-                        error!("MESH CORRUPT BEFORE tessellation: {}", e);
-                        panic!(
-                            "Mesh corrupted before tessellation - bug is in chunk split: {}",
-                            e
-                        );
-                    }
-                }
 
                 let tess_start = std::time::Instant::now();
                 debug!(
@@ -364,23 +554,32 @@ impl SculptingPipeline {
                     chunk.mesh.vertex_count()
                 );
                 let tess_stats = match self.config.tessellation_config.mode {
-                    TessellationMode::BudgetCurvature => tessellate_at_brush_budget(
+                    TessellationMode::BudgetCurvature => tessellate_at_brush_budget_checked(
                         chunk,
                         brush_center,
                         brush_radius,
                         &self.config.tessellation_config,
                         &mut self.budget,
                         &mut next_original_vertex_id,
+                        &mut check,
+                        &mut edit_budget,
                     ),
-                    TessellationMode::ScreenSpace => tessellate_at_brush(
+                    TessellationMode::ScreenSpace => tessellate_at_brush_checked(
                         chunk,
                         brush_center,
                         brush_radius,
                         &self.config.tessellation_config,
                         &self.screen_config,
                         &mut next_original_vertex_id,
+                        &mut check,
+                        &mut edit_budget,
                     ),
                 };
+                if let Some(error) = safety_error {
+                    return self.reject_stroke(chunked_mesh, error);
+                }
+                candidate_surface.replace_chunk_geometry(chunk_id, before);
+                let chunk = chunked_mesh.get_chunk_mut(chunk_id).unwrap();
                 debug!(
                     "apply_dab_internal: tessellation done in {:?} - split={}, collapsed={}, faces={}",
                     tess_start.elapsed(),
@@ -389,15 +588,6 @@ impl SculptingPipeline {
                     chunk.mesh.face_count(),
                 );
 
-                // Validate mesh after tessellation in debug builds
-                #[cfg(debug_assertions)]
-                if std::env::var("PENTIMENTO_SKIP_MESH_VALIDATION").is_err() {
-                    if let Err(e) = chunk.mesh.validate_connectivity() {
-                        error!("MESH CORRUPTION after tessellation: {}", e);
-                        panic!("Mesh corrupted by tessellation: {}", e);
-                    }
-                }
-
                 debug!(
                     "SCULPT TESS: split={}, collapsed={}, chunk_faces={}",
                     tess_stats.edges_split,
@@ -405,7 +595,10 @@ impl SculptingPipeline {
                     chunk.mesh.face_count()
                 );
 
-                if tess_stats.edges_split > 0 || tess_stats.edges_collapsed > 0 {
+                if tess_stats.edges_split > 0
+                    || tess_stats.edges_collapsed > 0
+                    || tess_stats.edges_flipped > 0
+                {
                     chunk.mark_topology_changed();
 
                     // CRITICAL: Recalculate normals after tessellation changed topology.
@@ -434,14 +627,24 @@ impl SculptingPipeline {
                     .get_or_insert(TessellationStats::default());
                 existing.edges_split += tess_stats.edges_split;
                 existing.edges_collapsed += tess_stats.edges_collapsed;
+                existing.edges_flipped += tess_stats.edges_flipped;
 
                 // Track this chunk as affected (tessellation happened)
-                if tess_stats.edges_split > 0 || tess_stats.edges_collapsed > 0 {
+                if tess_stats.edges_split > 0
+                    || tess_stats.edges_collapsed > 0
+                    || tess_stats.edges_flipped > 0
+                {
                     result.chunks_affected.push(chunk_id);
                     // Invalidate octree since topology changed
                     self.chunk_octrees.remove(&chunk_id);
                 }
             }
+        }
+
+        // Compaction changes local IDs. Refresh every neighbor's reverse
+        // reference before synchronization can write to an unrelated vertex.
+        if !result.chunks_affected.is_empty() {
+            chunked_mesh.rebuild_boundary_relationships();
         }
 
         // ===== BOUNDARY SYNC between tessellation and deformation =====
@@ -451,6 +654,11 @@ impl SculptingPipeline {
             trace!("apply_dab_internal: post-tessellation boundary sync");
             self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
         }
+
+        let before_deformation = match candidate_surface.deformed(chunked_mesh) {
+            Ok(surface) => surface,
+            Err(error) => return self.reject_stroke(chunked_mesh, error),
+        };
 
         // ===== PASS 2: DEFORM all affected chunks =====
         // Now deformation operates on the refined mesh, including any new vertices
@@ -536,6 +744,32 @@ impl SculptingPipeline {
         // Final boundary sync: propagate deformation positions across chunks
         trace!("apply_dab_internal: final boundary sync");
         self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
+
+        let validation = before_deformation
+            .deformed(chunked_mesh)
+            .and_then(|surface| {
+                surface.validate_change(&committed_before)?;
+                surface.validate_motion(&before_deformation)?;
+                Ok(surface)
+            });
+        match validation {
+            Ok(surface) => {
+                if let Some(state) = &mut self.active_stroke_state {
+                    let witness = Arc::new(GeometryWitness::capture(chunked_mesh));
+                    self.last_admitted_surface =
+                        Some((state.mesh_id, surface.clone(), witness.clone()));
+                    state.admitted_surface = Some(surface);
+                    state.admitted_witness = Some(witness);
+                }
+            }
+            Err(error) => return self.reject_stroke(chunked_mesh, error),
+        }
+        // Spatial membership must follow accepted deformation, including seam
+        // neighbors moved by synchronization, rather than retaining stale AABBs.
+        for chunk in chunked_mesh.chunks.values_mut() {
+            chunk.recalculate_bounds();
+        }
+        chunked_mesh.rebuild_spatial_grid();
 
         trace!("apply_dab_internal: END");
         result
@@ -649,7 +883,10 @@ impl SculptingPipeline {
     /// Rebalance chunks after a stroke ends.
     ///
     /// Returns (chunks_split, chunks_merged).
-    fn rebalance_chunks(&mut self, chunked_mesh: &mut ChunkedMesh) -> (usize, usize) {
+    fn rebalance_chunks(
+        &mut self,
+        chunked_mesh: &mut ChunkedMesh,
+    ) -> Result<(usize, usize), SafetyError> {
         let config = &self.config.chunk_config;
 
         let mut chunks_split = 0;
@@ -668,12 +905,21 @@ impl SculptingPipeline {
                 break;
             }
 
+            let before = Surface::read(chunked_mesh)?;
+            let mut progressed = false;
             for chunk_id in oversized {
                 if crate::chunking::partition::split_chunk(chunked_mesh, chunk_id).is_some() {
+                    progressed = true;
+                    let surface = Surface::read(chunked_mesh)?;
+                    surface.validate()?;
+                    surface.validate_orientation(&before)?;
                     chunks_split += 1;
                     // Invalidate octree for split chunks
                     self.chunk_octrees.remove(&chunk_id);
                 }
+            }
+            if !progressed {
+                break;
             }
         }
 
@@ -681,11 +927,17 @@ impl SculptingPipeline {
         loop {
             let merge_pair = self.find_mergeable_pair(chunked_mesh, config);
             if let Some((a, b)) = merge_pair {
+                let before = Surface::read(chunked_mesh)?;
                 if crate::chunking::merge::merge_two_chunks(chunked_mesh, a, b).is_some() {
+                    let surface = Surface::read(chunked_mesh)?;
+                    surface.validate()?;
+                    surface.validate_orientation(&before)?;
                     chunks_merged += 1;
                     // Invalidate octrees for merged chunks
                     self.chunk_octrees.remove(&a);
                     self.chunk_octrees.remove(&b);
+                } else {
+                    break;
                 }
             } else {
                 break;
@@ -697,7 +949,7 @@ impl SculptingPipeline {
             chunked_mesh.rebuild_spatial_grid();
         }
 
-        (chunks_split, chunks_merged)
+        Ok((chunks_split, chunks_merged))
     }
 
     /// Find a pair of adjacent chunks that can be merged.
@@ -747,6 +999,7 @@ impl SculptingPipeline {
     /// Call this when the mesh changes outside of the pipeline.
     pub fn invalidate_caches(&mut self) {
         self.chunk_octrees.clear();
+        self.last_admitted_surface = None;
     }
 
     /// Check if a stroke is currently active.

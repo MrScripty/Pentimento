@@ -169,7 +169,7 @@ impl MeshChunk {
 /// Manages all chunks for a sculpted mesh.
 ///
 /// Coordinates chunk creation, updates, and merging.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChunkedMesh {
     /// All chunks indexed by ID.
     pub chunks: HashMap<ChunkId, MeshChunk>,
@@ -473,6 +473,12 @@ impl ChunkedMesh {
         }
     }
 
+    /// Refresh both sides of every boundary reference after local compaction.
+    /// Global IDs survive topology edits; cached neighbor-local IDs do not.
+    pub fn rebuild_boundary_relationships(&mut self) {
+        boundary::build_boundary_relationships(self);
+    }
+
     /// Synchronize a vertex position change to all chunks sharing this boundary vertex.
     ///
     /// Call this after modifying a vertex that may be shared across chunk boundaries.
@@ -497,10 +503,13 @@ impl ChunkedMesh {
         // Update in neighboring chunks
         for boundary_ref in boundary_refs {
             if let Some(neighbor) = self.chunks.get_mut(&boundary_ref.chunk_id) {
-                neighbor
-                    .mesh
-                    .set_vertex_position(boundary_ref.vertex_id, new_position);
-                neighbor.mark_dirty();
+                if let Some(&local_id) = neighbor
+                    .original_to_local
+                    .get(&boundary_ref.original_vertex_id)
+                {
+                    neighbor.mesh.set_vertex_position(local_id, new_position);
+                    neighbor.mark_dirty();
+                }
             }
         }
     }

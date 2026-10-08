@@ -22,7 +22,7 @@ use types::Vertex as VertexInternal;
 /// Half-edge mesh data structure
 ///
 /// Provides efficient topology queries for mesh editing operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HalfEdgeMesh {
     pub(crate) vertices: Vec<VertexInternal>,
     pub(crate) half_edges: Vec<HalfEdgeInternal>,

@@ -28,6 +28,7 @@ pub mod chunking;
 pub mod deformation;
 pub mod gpu;
 pub mod pipeline;
+pub mod safety;
 pub mod spatial;
 pub mod tessellation;
 pub mod types;
@@ -51,6 +52,7 @@ pub use gpu::{
 #[cfg(feature = "bevy")]
 pub use gpu::{create_chunk_meshes, remove_chunk_meshes, sync_chunk_to_gpu, sync_chunks_to_gpu};
 pub use pipeline::{DabProcessResult, PipelineConfig, SculptingPipeline, StrokeEndResult};
+pub use safety::{SafetyError, validate_sculpt_surface};
 pub use spatial::{OctreeConfig, VertexOctree};
 pub use tessellation::{
     CollapseResult, CurvatureEvaluation, EdgeEvaluation, ScreenSpaceConfig, SplitResult,
