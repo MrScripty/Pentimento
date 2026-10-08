@@ -117,3 +117,35 @@ capture; logs alone cannot establish correct visible output.
 A native failure is a release blocker even if the mocked browser harness or CPU
 suites pass. Report exact failing step, input sequence, expected/actual behavior,
 and the inspected image or log. Do not merge temporary visualization branches.
+
+## Native pointer and keyboard ordering
+
+Native forwarding consumes Bevy's ordered `WindowEvent` stream. Typed messages
+remain available to scene and egui readers. Consecutive pointer moves coalesce,
+but each button, wheel, keyboard or focus-loss event flushes its preceding move.
+Buttons and scroll packets therefore use their chronological coordinates;
+keyboard events retain their position relative to focus-changing clicks.
+Idle hover remains throttled to 16 ms; held drags and event barriers flush sooner.
+
+A button pressed in a reported UI rectangle owns capture until that same button
+releases. Other button releases cannot clear it. Capture blocks the entire frame
+containing a UI gesture, including a complete down/up followed by viewport moves.
+Hover alone does not latch a later viewport-origin press. Focus loss releases
+held frontend buttons, clears local ownership/AltGraph state, and blocks browser
+scene pointer input until window focus returns. egui retains
+ownership of its own pointer/keyboard flags.
+
+CEF/Capture/Overlay block scene pointer input during layout bootstrap. The shared
+UI sends initial rectangles immediately and coalesces later RAF/timer refreshes;
+the bridge sends the latest pending rectangles within its 16 ms timer without
+continually restarting that timer. Teardown cancels both refresh paths and guards
+queued focus callbacks. Native diagnostics identify receipt of the first layout.
+Dioxus and egui do not wait for the Svelte reporter.
+
+Focused Bevy input regressions cover sliders, buttons, text focus, fast movement,
+panel-boundary drags, independent buttons, release-frame capture, wheel origins,
+DPI scaling, focus loss, typed-reader preservation and duplicate forwarding.
+JavaScript tests cover stalled RAF, fallback races, latest-layout delivery,
+bootstrap replay and cleanup. These regressions supplement the actual native
+CEF suite; its original assertions and input sequence remain the qualification
+criteria. Passing focused tests does not establish a complete native CEF pass.

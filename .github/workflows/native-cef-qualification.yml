@@ -26,6 +26,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '1'
       CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
       # Official CEF documentation links this recognized binary distributor.
       # cef-dll-sys selects and verifies the archive matching its binding version.
@@ -67,6 +68,16 @@ jobs:
           unset CEF_PATH CARGO_TARGET_DIR
           ./launcher.sh --build --frontend cef 2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/build.log"
           cp Cargo.lock "$PENTIMENTO_EVIDENCE_DIR/Cargo.lock"
+      - name: Test native event ordering and UI capture regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          unset CARGO_TARGET_DIR
+          cef_input_lib_dir="$(find target/debug/build -type d -name cef_linux_x86_64 -print -quit)"
+          test -f "$cef_input_lib_dir/libcef.so"
+          export LD_LIBRARY_PATH="$cef_input_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo test --locked -p pentimento --features cef input:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/input-tests.log"
       - name: Exercise actual native input, panels, painting and sculpting
         shell: bash
         run: |

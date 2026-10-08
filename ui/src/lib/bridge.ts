@@ -61,6 +61,7 @@ function getNativeIpc(): { postMessage: (msg: string) => void } | null {
 
 class BevyBridge {
     private handlers: Set<MessageHandler> = new Set();
+    private pendingLayout: LayoutInfo | null = null;
     private layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly wasmMode: boolean;
     private disposed = false;
@@ -167,18 +168,22 @@ class BevyBridge {
      * Update layout info for input routing (debounced)
      */
     updateLayout(layout: LayoutInfo): void {
-        if (this.layoutDebounceTimer) {
-            clearTimeout(this.layoutDebounceTimer);
-        }
+        if (this.disposed) return;
+        this.pendingLayout = layout;
+        if (this.layoutDebounceTimer !== null) return;
+        // Keep the latest rectangles without postponing delivery indefinitely.
         this.layoutDebounceTimer = setTimeout(() => {
-            this.send({ type: 'LayoutUpdate', data: layout });
             this.layoutDebounceTimer = null;
+            const pending = this.pendingLayout;
+            this.pendingLayout = null;
+            if (pending) this.send({ type: 'LayoutUpdate', data: pending });
         }, 16); // ~60fps max
     }
 
     dispose(): void {
         this.disposed = true;
         this.pendingNativeState.clear();
+        this.pendingLayout = null;
         if (this.nativeReadyListener) {
             window.removeEventListener('pentimento:ipc-ready', this.nativeReadyListener);
         }

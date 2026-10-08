@@ -5,34 +5,13 @@
 //! - Modifier key tracking (shift, ctrl, alt, meta)
 //! - Bevy KeyCode to web key string conversion
 
-use bevy::input::keyboard::{Key, KeyboardFocusLost, KeyboardInput};
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use pentimento_ipc::{KeyboardEvent, Modifiers};
 
-use super::backend::FrontendBackend;
-
-/// Forward keyboard events to the webview
-pub fn forward_keyboard(
-    mut key_events: MessageReader<KeyboardInput>,
-    mut focus_lost: MessageReader<KeyboardFocusLost>,
-    key_input: Res<ButtonInput<KeyCode>>,
-    mut alt_graph_keys: Local<ButtonInput<KeyCode>>,
-    mut backend: FrontendBackend,
-) {
-    let events: Vec<_> = key_events.read().cloned().collect();
-    for event in translate_keyboard_events(
-        &events,
-        &key_input,
-        &mut alt_graph_keys,
-        focus_lost.read().count() != 0,
-    ) {
-        backend.send_keyboard_event(event);
-    }
-}
-
 /// Reconstruct the state before this batch from Bevy's final pressed state,
 /// then advance it for each event. A complete Ctrl+A chord can fit in one frame.
-fn translate_keyboard_events(
+pub(super) fn translate_keyboard_events(
     events: &[KeyboardInput],
     final_pressed: &ButtonInput<KeyCode>,
     alt_graph_keys: &mut ButtonInput<KeyCode>,
@@ -219,6 +198,7 @@ pub fn bevy_keycode_to_web_key(key_code: KeyCode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::keyboard::KeyboardFocusLost;
     use bevy::input::{ButtonState, InputPlugin};
 
     fn key(code: KeyCode, logical: Key, pressed: bool, text: Option<&str>) -> KeyboardInput {

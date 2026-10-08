@@ -40,7 +40,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const command = (name, args, options = {}) => execFileSync(name, args.map(String), { cwd: root, maxBuffer: 20 * 1024 * 1024, ...options });
 const xdo = (...args) => { nativeInputs++; return command('xdotool', args).toString().trim(); };
 const log = () => { try { return readFileSync(appLog, 'utf8'); } catch { return ''; } };
-const pointerTrace = () => log().split('\n').filter(line => /Native pointer order:|Native capture after batch:|Click at webview|Sculpt stroke started:/.test(line)).slice(-120);
+const pointerTrace = () => log().split('\n').filter(line => /Native pointer order:|Native capture after batch:|Native input layout received:|Failed to parse.*IPC|Click at webview|Sculpt stroke started:/.test(line)).slice(-120);
 const starts = () => ({ paint: (log().match(/StrokeStart: plane=/g) ?? []).length, sculpt: (log().match(/Sculpt stroke started:/g) ?? []).length });
 const record = (name, evidence = {}) => {
     const item = { type: 'pentimento.cef.check', name, status: 'passed', native_inputs: nativeInputs, ...evidence };

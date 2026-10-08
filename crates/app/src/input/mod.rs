@@ -44,19 +44,10 @@ impl Plugin for InputPlugin {
                 (
                     clear_motion_events,
                     mouse::trace_pointer_origin,
-                    mouse::track_mouse_position,
+                    mouse::forward_native_input,
                 )
                     .chain()
                     .after(InputSystems),
-            )
-            .add_systems(
-                PreUpdate,
-                (
-                    mouse::forward_mouse_buttons,
-                    mouse::forward_mouse_scroll,
-                    keyboard::forward_keyboard,
-                )
-                    .after(mouse::track_mouse_position),
             );
 
         // CEF DevTools hotkey (Ctrl+Shift+I)
@@ -75,7 +66,7 @@ impl Plugin for InputPlugin {
         // Add object menu hotkey (Shift+A)
         app.add_systems(
             PreUpdate,
-            hotkeys::handle_add_menu_hotkey.after(InputSystems),
+            hotkeys::handle_add_menu_hotkey.after(mouse::forward_native_input),
         );
 
         info!("Input plugin initialized");

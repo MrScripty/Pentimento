@@ -315,3 +315,38 @@ test('fresh direct bootstrap state supersedes older pending state before ready e
     ]);
     bridge.dispose();
 });
+
+test('continuous layout changes deliver latest rectangles without restarting the timer', async (context) => {
+    const { events } = setupDom();
+    const { bridge } = await importBridgeModule();
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const layout = (x: number) => ({ regions: [{ id: 'brush', x, y: 0, width: 100, height: 100, z_index: 1, accepts_keyboard: true }] });
+    bridge.updateLayout(layout(0));
+    for (let x = 1; x <= 3; x++) {
+        context.mock.timers.tick(4);
+        bridge.updateLayout(layout(x));
+    }
+    context.mock.timers.tick(4);
+    const sent = events.map(message => JSON.parse(message)).filter(message => message.type === 'LayoutUpdate');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].data.regions[0].x, 3);
+    bridge.updateLayout(layout(4));
+    bridge.dispose();
+    context.mock.timers.tick(32);
+    assert.equal(events.map(message => JSON.parse(message)).filter(message => message.type === 'LayoutUpdate').length, 1);
+});
+
+test('IPC readiness preserves a newer layout waiting behind an older bootstrap report', async (context) => {
+    const { fakeWindow, events } = setupDom('native');
+    const { bridge } = await importBridgeModule();
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const layout = (x: number) => ({ regions: [{ id: 'brush', x, y: 0, width: 100, height: 100, z_index: 1, accepts_keyboard: true }] });
+    bridge.updateLayout(layout(1));
+    context.mock.timers.tick(16); // Old report queued while IPC is unavailable.
+    bridge.updateLayout(layout(2));
+    bootstrapNative(fakeWindow, events); // Readiness flushes old report mid-timer.
+    context.mock.timers.tick(16);
+    const sent = events.map(message => JSON.parse(message)).filter(message => message.type === 'LayoutUpdate');
+    assert.equal(sent.at(-1).data.regions[0].x, 2);
+    bridge.dispose();
+});
