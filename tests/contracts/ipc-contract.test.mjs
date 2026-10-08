@@ -63,6 +63,11 @@ function assertBevyToUiMessage(message) {
       assert.ok(Array.isArray(message.data.layers));
       message.data.layers.forEach(assertLayerInfo);
       return;
+    case 'PaintColorSamplingChanged':
+      assert.equal(typeof message.data.enabled, 'boolean');
+      assert.equal(typeof message.data.active, 'boolean');
+      assert.match(message.data.source, /^(VisibleLayers|ActiveLayer)$/);
+      return;
     case 'PaintBrushStateChanged':
       assertTuple(message.data.settings.color, 4, 'paint color');
       for (const field of ['size', 'opacity', 'hardness', 'spacing', 'preset_id']) assert.equal(typeof message.data.settings[field], 'number');
@@ -73,11 +78,21 @@ function assertBevyToUiMessage(message) {
       assert.equal(typeof message.data.can_redo, 'boolean');
       assert.equal(typeof message.data.source_visible, 'boolean');
       return;
+    case 'SavedBrushPresetsChanged':
+      for (const mode of ['paint', 'sculpt']) {
+        assert.ok(Array.isArray(message.data[mode]));
+        for (const preset of message.data[mode]) { assert.equal(typeof preset.id, 'number'); assert.equal(typeof preset.name, 'string'); }
+        assert.ok(message.data[`selected_${mode}`] === null || typeof message.data[`selected_${mode}`] === 'number');
+      }
+      assert.equal(typeof message.data.active, 'boolean');
+      assert.equal(typeof message.data.available, 'boolean');
+      assert.ok(message.data.notice === null || typeof message.data.notice === 'string');
+      return;
     case 'SculptBrushStateChanged':
       if (message.data.settings !== null) {
         assert.match(message.data.settings.tool, /^(Push|Pull|Grab|Smooth|Flatten|Inflate|Pinch|Crease)$/);
         assert.match(message.data.settings.falloff, /^(Linear|Smooth|Sharp|Constant|Sphere)$/);
-        for (const field of ['radius', 'strength', 'hardness']) assert.equal(typeof message.data.settings[field], 'number');
+        for (const field of ['radius', 'strength', 'hardness', 'autosmooth']) assert.equal(typeof message.data.settings[field], 'number');
       }
       return;
     case 'SculptHistoryChanged':
@@ -127,7 +142,7 @@ function assertUiToBevyMessage(message) {
     case 'SculptCommand':
       if (typeof message.data === 'string') { assert.ok(['Undo', 'Redo'].includes(message.data)); return; }
       assert.equal(typeof message.data, 'object');
-      assert.ok(['SetTool', 'SetRadius', 'SetStrength', 'SetHardness', 'SetFalloff'].includes(Object.keys(message.data)[0]));
+      assert.ok(['SetTool', 'SetRadius', 'SetStrength', 'SetHardness', 'SetFalloff', 'SetAutoSmooth', 'SaveBrushPreset', 'SelectSavedBrushPreset'].includes(Object.keys(message.data)[0]));
       return;
     case 'RequestBrushState':
       assert.equal(message.data, undefined);
@@ -190,3 +205,11 @@ test('native keyboard samples preserve physical keys, native text, and additive 
   }
   assert.equal(native_keyboard[0].modifiers.shift, true);
 });
+
+ test('color sampling commands carry explicit native source and enabled state', () => {
+  const samples = loadSamples();
+  assert.ok(samples.bevy_to_ui.some(m => m.type === 'PaintColorSamplingChanged'));
+  const paint = samples.ui_to_bevy.filter(m => m.type === 'PaintCommand').map(m => m.data);
+  assert.deepEqual(paint.find(m => m.SetColorSampling), { SetColorSampling: { enabled: true } });
+  assert.deepEqual(paint.find(m => m.SetColorSampleSource), { SetColorSampleSource: { source: 'ActiveLayer' } });
+ });

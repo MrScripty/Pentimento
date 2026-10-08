@@ -1,8 +1,9 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
-    import type { SculptBrushSettings, SculptTool, SculptFalloff, SculptHistoryState } from '$lib/types';
+    import type { SculptBrushSettings, SculptTool, SculptFalloff, SculptHistoryState, SavedBrushPresetsState } from '$lib/types';
+    import SavedBrushPresets from './SavedBrushPresets.svelte';
     import BrushControl from './BrushControl.svelte';
-    let { settings, history }: { settings: SculptBrushSettings; history: SculptHistoryState } = $props();
+    let { settings, history, saved }: { settings: SculptBrushSettings; history: SculptHistoryState; saved: SavedBrushPresetsState } = $props();
     const tools: { name: SculptTool; description: string }[] = [
         { name: 'Push', description: 'Move along the hit surface normal' },
         { name: 'Pull', description: 'Draw vertices toward the brush center' },
@@ -17,6 +18,7 @@
 </script>
 <section aria-labelledby="sculpt-heading">
     <header><span class="eyebrow">MESH SCULPTING</span><h2 id="sculpt-heading">Sculpt brushes</h2></header>
+    <SavedBrushPresets mode="Sculpt" catalog={saved} />
     <div class="sculpt-tools" aria-label="Sculpt tool">
         {#each tools as tool}<button type="button" aria-pressed={settings.tool === tool.name} title={tool.description} onclick={() => bridge.sculptCommand({ SetTool: { tool: tool.name } })}>{tool.name}</button>{/each}
     </div>
@@ -28,6 +30,8 @@
     <label class="select-label" for="sculpt-falloff">Falloff curve</label>
     <select id="sculpt-falloff" value={settings.falloff} onchange={(e) => bridge.sculptCommand({ SetFalloff: { falloff: e.currentTarget.value as SculptFalloff } })}>{#each falloffs as falloff}<option>{falloff}</option>{/each}</select>
     <p class="hint">Hardness defines the full-strength center. The curve controls the edge.</p>
+    <BrushControl id="sculpt-autosmooth" label="Auto smoothing" value={Math.round((settings.autosmooth ?? (settings.tool === 'Grab' || settings.tool === 'Smooth' ? 0 : 0.5)) * 100)} min={0} max={100} unit="%" disabled={history.active || settings.tool === 'Grab'} onchange={(amount) => bridge.sculptCommand({ SetAutoSmooth: { amount: amount / 100 } })} />
+    <p class="hint">{settings.tool === 'Grab' ? 'Grab stays continuous without post-dab smoothing. Your amount returns with stamped brushes.' : 'Smooths fine surface ripples after each dab. Set 0% to preserve sharper details. Your amount stays selected across stamped brushes.'}</p>
     <div class="divider"></div>
     <div class="sculpt-tools" aria-label="Sculpt history">
         <button type="button" disabled={history.active || history.undo_strokes === 0} title="Undo sculpt stroke (Ctrl+Z)" onclick={() => bridge.sculptCommand('Undo')}>Undo sculpt stroke</button>

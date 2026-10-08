@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{
-    AddPaintCanvasRequest, CameraCommand, EditMode, GizmoCommand, GizmoMode, LayerInfo,
-    MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
+    AddPaintCanvasRequest, CameraCommand, ColorSampleSource, EditMode, GizmoCommand, GizmoMode,
+    LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
     PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, SculptBrushSettings, SculptCommand,
 };
 use crate::types::{
@@ -91,10 +91,25 @@ pub enum BevyToUi {
         can_redo: bool,
         source_visible: bool,
     },
+    PaintColorSamplingChanged {
+        enabled: bool,
+        source: ColorSampleSource,
+        active: bool,
+    },
 
     /// None means sculpting is unavailable in this build.
     SculptBrushStateChanged {
         settings: Option<SculptBrushSettings>,
+    },
+    /// Device-local named presets; paint and sculpt IDs are separate namespaces.
+    SavedBrushPresetsChanged {
+        paint: Vec<PaintBrushPresetInfo>,
+        sculpt: Vec<PaintBrushPresetInfo>,
+        selected_paint: Option<u32>,
+        selected_sculpt: Option<u32>,
+        active: bool,
+        available: bool,
+        notice: Option<String>,
     },
 
     /// Authoritative local sculpt history availability, including transaction lock.

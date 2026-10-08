@@ -358,7 +358,7 @@ The simple `BrushEngine` uses basic spacing interpolation. For production:
 - [ ] Brush preset loading
 
 #### Polish
-- [ ] Color picker in paint toolbar
+- [x] Color input plus one-click source canvas sampling (visible layers / active layer); local engine/browser qualified, native CEF pending. See `docs/brush_panels.md`.
 - [ ] Brush size adjustment
 - [ ] Eraser tool
 - [ ] Undo/redo (deferred per plan)

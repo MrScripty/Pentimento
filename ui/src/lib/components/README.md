@@ -10,7 +10,7 @@ This directory holds the active Svelte components that make up Pentimento's brow
 | `SidePanel.svelte` | Material, lighting, and ambient-occlusion controls. |
 | `AddObjectMenu.svelte` | Keyboard-accessible add-object dialog used by the active viewport workflows. |
 | `BrushPanels.svelte` | Persistent backend brush subscriptions and mode-specific panel composition. |
-| `PaintBrushPanel.svelte` | Round brush/eraser, presets, tip parameters, canvas undo and UV projection actions. |
+| `PaintBrushPanel.svelte` | Round brush/eraser, one-click canvas color sampling, presets, tip parameters, canvas undo and UV projection actions. |
 | `SculptBrushPanel.svelte` | Supported deformation tools, radius, strength, hardness and falloff. |
 | `BrushControl.svelte` | Accessible bounded slider plus exact numeric input. |
 | `PaintToolbar.svelte` | Legacy shortcut component, no longer mounted by the active Svelte app. |

@@ -25,6 +25,7 @@ fn fixture() -> (App, Entity) {
         .insert_resource(PaintMode {
             active: true,
             current_stroke: None,
+            ..default()
         })
         .add_message::<CursorMoved>()
         .add_message::<WindowEvent>()
@@ -127,6 +128,9 @@ fn batch(app: &mut App, events: Vec<WindowEvent>) {
             }
             WindowEvent::WindowFocused(e) => {
                 app.world_mut().get_mut::<Window>(e.window).unwrap().focused = e.focused;
+            }
+            WindowEvent::KeyboardInput(e) => {
+                app.world_mut().write_message(e.clone());
             }
             _ => unreachable!(),
         }
@@ -311,4 +315,387 @@ fn focus_regain_hover_supplies_next_press_origin_without_replaying_input() {
     batch(&mut app, gesture(window).into_iter().skip(1).collect());
     completed(&app, 1);
     assert_eq!(pixels(&app), expected);
+}
+
+fn paint_command(app: &mut App, command: pentimento_ipc::PaintCommand) {
+    assert!(crate::dispatch_brush_ui_command(
+        app.world_mut(),
+        &pentimento_ipc::UiToBevy::PaintCommand(command)
+    ));
+}
+fn escape(window: Entity) -> WindowEvent {
+    WindowEvent::KeyboardInput(bevy::input::keyboard::KeyboardInput {
+        key_code: KeyCode::Escape,
+        logical_key: bevy::input::keyboard::Key::Escape,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    })
+}
+fn layer_pixels(app: &App) -> Vec<Vec<u8>> {
+    let layers = &app
+        .world()
+        .resource::<PaintingResource>()
+        .get_pipeline(7)
+        .unwrap()
+        .layers;
+    layers
+        .layer_info()
+        .iter()
+        .map(|l| {
+            layers
+                .layer(l.id)
+                .unwrap()
+                .surface
+                .surface()
+                .as_bytes()
+                .to_vec()
+        })
+        .collect()
+}
+
+#[test]
+fn sampled_layered_color_paints_and_history_restores_exactly() {
+    use pentimento_ipc::{ColorSampleSource, PaintCommand as C};
+    let (mut app, window) = fixture();
+    batch(&mut app, gesture(window));
+    paint_command(&mut app, C::AddLayer { name: "top".into() });
+    paint_command(
+        &mut app,
+        C::SetBrushColor {
+            color: [0., 0., 1., 0.7],
+        },
+    );
+    paint_command(&mut app, C::SetBrushOpacity { opacity: 0.5 });
+    batch(&mut app, gesture(window));
+    let before = layer_pixels(&app);
+    let composite_before = pixels(&app);
+    let pixel = app
+        .world()
+        .resource::<PaintingResource>()
+        .get_pipeline(7)
+        .unwrap()
+        .layers
+        .composited_surface()
+        .surface()
+        .get_pixel(64, 64)
+        .unwrap();
+    let expected = [
+        pixel[0] / pixel[3],
+        pixel[1] / pixel[3],
+        pixel[2] / pixel[3],
+        0.7,
+    ];
+    assert!(expected[0] > 0. && expected[2] > 0.);
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    batch(&mut app, vec![movement(window, 500.), button(window, true)]);
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        expected
+    );
+    assert_eq!(
+        app.world()
+            .resource::<PaintingResource>()
+            .brush_preset
+            .opacity,
+        0.5
+    );
+    assert!(!app.world().resource::<PaintMode>().sample_color);
+    batch(
+        &mut app,
+        vec![
+            movement(window, 750.),
+            button(window, true),
+            button(window, false),
+        ],
+    );
+    completed(&app, 2);
+    assert_eq!(layer_pixels(&app), before);
+    assert_eq!(pixels(&app), composite_before);
+    // Successful sampling consumed the press; only a fresh press paints.
+    batch(&mut app, gesture(window));
+    completed(&app, 3);
+    let after = layer_pixels(&app);
+    let composite_after = pixels(&app);
+    assert_ne!(after, before);
+    paint_command(&mut app, C::Undo);
+    app.update();
+    assert_eq!(layer_pixels(&app), before);
+    assert_eq!(pixels(&app), composite_before);
+    paint_command(&mut app, C::Redo);
+    app.update();
+    assert_eq!(layer_pixels(&app), after);
+    assert_eq!(pixels(&app), composite_after);
+    paint_command(
+        &mut app,
+        C::SetColorSampleSource {
+            source: ColorSampleSource::ActiveLayer,
+        },
+    );
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            button(window, false),
+        ],
+    );
+    let raw = app
+        .world()
+        .resource::<PaintingResource>()
+        .get_pipeline(7)
+        .unwrap()
+        .layers
+        .active_layer()
+        .unwrap()
+        .surface
+        .surface()
+        .get_pixel(64, 64)
+        .unwrap();
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        [raw[0], raw[1], raw[2], 0.7]
+    );
+    completed(&app, 3);
+    // Cancel a real subsequent stroke; all layer pixels and history survive.
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            movement(window, 600.),
+            escape(window),
+            button(window, false),
+        ],
+    );
+    assert_eq!(layer_pixels(&app), after);
+    assert_eq!(pixels(&app), composite_after);
+    completed(&app, 3);
+}
+
+#[test]
+fn transparent_sampling_and_escape_never_paint_or_change_history() {
+    use pentimento_ipc::PaintCommand as C;
+    let (mut app, window) = fixture();
+    let before = layer_pixels(&app);
+    let color = app.world().resource::<PaintingResource>().brush_color;
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            button(window, false),
+        ],
+    );
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        color
+    );
+    assert!(app.world().resource::<PaintMode>().sample_color);
+    completed(&app, 0);
+    assert_eq!(layer_pixels(&app), before);
+    // Transparent read is rejected; Escape disarms before any later paint.
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            escape(window),
+            button(window, false),
+        ],
+    );
+    assert!(!app.world().resource::<PaintMode>().sample_color);
+    completed(&app, 0);
+    assert_eq!(layer_pixels(&app), before);
+}
+
+#[test]
+fn sampling_commands_reject_active_strokes_and_preserve_eraser() {
+    use pentimento_ipc::{BlendMode, ColorSampleSource, PaintCommand as C};
+    let (mut app, window) = fixture();
+    batch(&mut app, vec![movement(window, 500.), button(window, true)]);
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    paint_command(
+        &mut app,
+        C::SetColorSampleSource {
+            source: ColorSampleSource::ActiveLayer,
+        },
+    );
+    assert!(!app.world().resource::<PaintMode>().sample_color);
+    assert_eq!(
+        app.world().resource::<PaintMode>().sample_source,
+        ColorSampleSource::VisibleLayers
+    );
+    batch(&mut app, vec![button(window, false)]);
+    paint_command(
+        &mut app,
+        C::SetBlendMode {
+            mode: BlendMode::Erase,
+        },
+    );
+    let before = layer_pixels(&app);
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            button(window, false),
+        ],
+    );
+    assert_eq!(
+        app.world().resource::<PaintingResource>().blend_mode,
+        painting::BlendMode::Erase
+    );
+    assert_eq!(layer_pixels(&app), before);
+    assert_eq!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .undo_count(),
+        1
+    );
+}
+
+#[test]
+fn sampling_resolves_before_fresh_click_or_focus_loss_in_same_batch() {
+    use pentimento_ipc::PaintCommand as C;
+    let (mut app, window) = fixture();
+    batch(&mut app, gesture(window));
+    paint_command(
+        &mut app,
+        C::SetBrushColor {
+            color: [0., 1., 0., 1.],
+        },
+    );
+    let pixel = app
+        .world()
+        .resource::<PaintingResource>()
+        .get_pipeline(7)
+        .unwrap()
+        .layers
+        .composited_surface()
+        .surface()
+        .get_pixel(64, 64)
+        .unwrap();
+    let expected = [
+        pixel[0] / pixel[3],
+        pixel[1] / pixel[3],
+        pixel[2] / pixel[3],
+        1.,
+    ];
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    let mut events = vec![
+        movement(window, 500.),
+        button(window, true),
+        button(window, false),
+    ];
+    events.extend(gesture(window));
+    batch(&mut app, events);
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        expected
+    );
+    completed(&app, 2);
+    // Already accepted RGB survives a later focus loss in the same frame.
+    paint_command(
+        &mut app,
+        C::SetBrushColor {
+            color: [0., 1., 0., 1.],
+        },
+    );
+    let pixel = app
+        .world()
+        .resource::<PaintingResource>()
+        .get_pipeline(7)
+        .unwrap()
+        .layers
+        .composited_surface()
+        .surface()
+        .get_pixel(64, 64)
+        .unwrap();
+    let expected = [
+        pixel[0] / pixel[3],
+        pixel[1] / pixel[3],
+        pixel[2] / pixel[3],
+        1.,
+    ];
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    let before = layer_pixels(&app);
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            button(window, false),
+            WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window,
+                focused: false,
+            }),
+        ],
+    );
+    assert_eq!(
+        app.world().resource::<PaintingResource>().brush_color,
+        expected
+    );
+    completed(&app, 2);
+    assert_eq!(layer_pixels(&app), before);
+}
+
+#[test]
+fn sampling_preserves_redo_and_rejects_pipeline_only_stroke_and_inactive_mode() {
+    use pentimento_ipc::{ColorSampleSource, PaintCommand as C};
+    let (mut app, window) = fixture();
+    batch(&mut app, gesture(window));
+    batch(&mut app, gesture(window));
+    paint_command(&mut app, C::Undo);
+    app.update();
+    let before = layer_pixels(&app);
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    batch(
+        &mut app,
+        vec![
+            movement(window, 500.),
+            button(window, true),
+            button(window, false),
+        ],
+    );
+    assert_eq!(layer_pixels(&app), before);
+    assert!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .can_redo()
+    );
+    paint_command(&mut app, C::Redo);
+    app.update();
+    {
+        let mut painting = app.world_mut().resource_mut::<PaintingResource>();
+        painting.get_pipeline_mut(7).unwrap().begin_stroke(7, 99, 0);
+    }
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    assert!(!app.world().resource::<PaintMode>().sample_color);
+    paint_command(
+        &mut app,
+        C::SetColorSampleSource {
+            source: ColorSampleSource::ActiveLayer,
+        },
+    );
+    assert_eq!(
+        app.world().resource::<PaintMode>().sample_source,
+        ColorSampleSource::VisibleLayers
+    );
+    app.world_mut()
+        .resource_mut::<PaintingResource>()
+        .get_pipeline_mut(7)
+        .unwrap()
+        .cancel_stroke();
+    app.world_mut().resource_mut::<PaintMode>().active = false;
+    paint_command(&mut app, C::SetColorSampling { enabled: true });
+    assert!(!app.world().resource::<PaintMode>().sample_color);
 }

@@ -62,6 +62,8 @@ pub struct SculptState {
     pub brush_strength: f32,
     /// Brush hardness (0.0 - 1.0). Defines the inner zone of full strength.
     pub brush_hardness: f32,
+    /// Explicit post-dab smoothing override; None preserves existing tool defaults.
+    pub brush_autosmooth: Option<f32>,
     /// Falloff curve type for the brush
     pub brush_falloff: FalloffCurve,
     /// Tessellation configuration
@@ -93,6 +95,7 @@ impl Default for SculptState {
             brush_radius: 0.5,
             brush_strength: 1.0,
             brush_hardness: 0.5,
+            brush_autosmooth: None,
             brush_falloff: FalloffCurve::Smooth,
             tessellation_config: TessellationConfig::default(),
             chunk_config: ChunkConfig::default(),
@@ -902,11 +905,7 @@ fn handle_sculpt_events(
                     }
                 };
 
-                let mut preset = sculpt_preset(sculpt_state.deformation_type);
-                preset.radius = sculpt_state.brush_radius;
-                preset.strength = sculpt_state.brush_strength;
-                preset.hardness = sculpt_state.brush_hardness;
-                preset.falloff = sculpt_state.brush_falloff;
+                let preset = configured_sculpt_preset(&sculpt_state);
                 let pipeline_config = PipelineConfig {
                     tessellation_enabled: true,
                     tessellation_config: sculpt_state.tessellation_config.clone(),
@@ -1693,6 +1692,253 @@ mod sculpt_geometry_sync_tests {
             pressure: 1.,
         });
         app.update();
+    }
+
+    #[test]
+    fn autosmooth_changes_committed_geometry_and_history_restores_exact_snapshots() {
+        fn stamped_stroke(app: &mut App) {
+            app.world_mut().write_message(SculptEvent::StrokeStart {
+                world_pos: Vec3::Z,
+                normal: Vec3::Z,
+                stroke_id: 9,
+            });
+            app.update();
+            app.world_mut().write_message(SculptEvent::StrokeMove {
+                world_pos: Vec3::new(0.2, 0., 1.),
+                normal: Vec3::Z,
+                pressure: 1.,
+            });
+            app.update();
+        }
+        let mut app = entered_history_app();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Push,
+            },
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetStrength { strength: 0.15 },
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 0.0 },
+        );
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        stamped_stroke(&mut app);
+        app.world_mut().write_message(SculptEvent::StrokeEnd);
+        app.update();
+        let unsmoothed = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(!before.same_authoritative_state(&unsmoothed));
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        assert!(
+            before.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 1.0 },
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .redo_strokes,
+            1,
+            "A brush setting does not discard redo"
+        );
+        stamped_stroke(&mut app);
+        let active = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 0.0 },
+        );
+        assert_eq!(
+            sculpt_snapshot(app.world().resource::<SculptState>()).autosmooth,
+            1.0
+        );
+        assert!(
+            active.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        assert!(app.world().resource::<OutboundUiMessages>().messages.iter().any(|message| matches!(message, BevyToUi::Error { code, .. } if code == "sculpt_autosmooth_unavailable")));
+        app.world_mut().write_message(SculptEvent::StrokeEnd);
+        app.update();
+        let smoothed = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(
+            !unsmoothed.same_authoritative_state(&smoothed),
+            "The engine must actually apply the customized smoothing amount"
+        );
+        assert_eq!(
+            unsmoothed.next_original_vertex_id,
+            smoothed.next_original_vertex_id
+        );
+        let mut changed_positions = 0;
+        for (id, chunk) in &unsmoothed.chunks {
+            let smooth_chunk = &smoothed.chunks[id];
+            assert_eq!(chunk.local_to_original, smooth_chunk.local_to_original);
+            assert_eq!(chunk.original_to_local, smooth_chunk.original_to_local);
+            assert_eq!(chunk.boundary_vertices, smooth_chunk.boundary_vertices);
+            assert_eq!(
+                chunk.mesh.half_edges(),
+                smooth_chunk.mesh.half_edges(),
+                "Connectivity and face-corner UVs must remain intact"
+            );
+            assert_eq!(
+                chunk.mesh.vertices().len(),
+                smooth_chunk.mesh.vertices().len()
+            );
+            for (plain, smooth) in chunk
+                .mesh
+                .vertices()
+                .iter()
+                .zip(smooth_chunk.mesh.vertices())
+            {
+                assert_eq!(plain.id, smooth.id);
+                assert_eq!(plain.uv, smooth.uv);
+                assert_eq!(plain.source_index, smooth.source_index);
+                changed_positions += usize::from(plain.position != smooth.position);
+            }
+        }
+        assert!(
+            changed_positions > 0,
+            "Smoothing must change vertex positions, not only derived normals"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .redo_strokes,
+            0
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        assert!(
+            before.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Redo);
+        app.update();
+        assert!(
+            smoothed.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        stamped_stroke(&mut app);
+        app.world_mut().write_message(SculptEvent::StrokeCancel);
+        app.update();
+        assert!(
+            smoothed.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+    }
+
+    #[test]
+    fn autosmooth_customization_survives_real_sculpt_exit_and_reentry() {
+        let mut app = entered_history_app();
+        let entity = app.world().resource::<SculptState>().target_entity.unwrap();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Push,
+            },
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 0.27 },
+        );
+        app.world_mut().write_message(SculptEvent::Exit);
+        app.update();
+        assert!(!app.world().resource::<SculptState>().active);
+        app.world_mut().write_message(SculptEvent::Enter { entity });
+        app.update();
+        assert!(app.world().resource::<SculptState>().active);
+        assert_eq!(
+            sculpt_snapshot(app.world().resource::<SculptState>()).autosmooth,
+            0.27
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .brush_preset()
+                .autosmooth,
+            0.27
+        );
     }
 
     #[test]
@@ -2670,6 +2916,7 @@ pub(crate) fn sculpt_snapshot(state: &SculptState) -> SculptBrushSettings {
         radius: state.brush_radius,
         strength: state.brush_strength,
         hardness: state.brush_hardness,
+        autosmooth: configured_sculpt_preset(state).autosmooth,
         falloff: match state.brush_falloff {
             FalloffCurve::Linear => SculptFalloff::Linear,
             FalloffCurve::Smooth => SculptFalloff::Smooth,
@@ -2693,7 +2940,106 @@ fn sculpt_preset(tool: DeformationType) -> BrushPreset {
     }
 }
 
+fn configured_sculpt_preset(state: &SculptState) -> BrushPreset {
+    let mut preset = sculpt_preset(state.deformation_type);
+    preset.radius = state.brush_radius;
+    preset.strength = state.brush_strength;
+    preset.hardness = state.brush_hardness;
+    preset.falloff = state.brush_falloff;
+    // Grab's continuous deformation bypasses stamped-dab smoothing.
+    if state.deformation_type != DeformationType::Grab {
+        if let Some(amount) = state.brush_autosmooth {
+            preset.autosmooth = amount;
+        }
+    }
+    preset
+}
+
+pub(crate) fn preset_from_saved_settings(
+    settings: &SculptBrushSettings,
+    autosmooth_override: Option<f32>,
+) -> Result<BrushPreset, String> {
+    let mut candidate = SculptState::default();
+    candidate.deformation_type = match settings.tool {
+        SculptTool::Push => DeformationType::Push,
+        SculptTool::Pull => DeformationType::Pull,
+        SculptTool::Grab => DeformationType::Grab,
+        SculptTool::Smooth => DeformationType::Smooth,
+        SculptTool::Flatten => DeformationType::Flatten,
+        SculptTool::Inflate => DeformationType::Inflate,
+        SculptTool::Pinch => DeformationType::Pinch,
+        SculptTool::Crease => DeformationType::Crease,
+    };
+    candidate.brush_radius = settings.radius;
+    candidate.brush_strength = settings.strength;
+    candidate.brush_hardness = settings.hardness;
+    candidate.brush_autosmooth = autosmooth_override;
+    candidate.brush_falloff = match settings.falloff {
+        SculptFalloff::Linear => FalloffCurve::Linear,
+        SculptFalloff::Smooth => FalloffCurve::Smooth,
+        SculptFalloff::Sharp => FalloffCurve::Sharp,
+        SculptFalloff::Constant => FalloffCurve::Constant,
+        SculptFalloff::Sphere => FalloffCurve::Sphere,
+    };
+    if sculpt_snapshot(&candidate) != *settings {
+        return Err("The saved sculpt brush disagrees with its effective tool settings.".into());
+    }
+    Ok(configured_sculpt_preset(&candidate))
+}
+
+pub(crate) fn restore_saved_brush(
+    world: &mut World,
+    settings: &SculptBrushSettings,
+    autosmooth_override: Option<f32>,
+) -> Result<(), String> {
+    if crate::brush_presets::active(world) {
+        return Err("Finish or cancel the active stroke before restoring a sculpt brush.".into());
+    }
+    let preset = preset_from_saved_settings(settings, autosmooth_override)?;
+    let mut state = world
+        .get_resource_mut::<SculptState>()
+        .ok_or("Sculpt brushes are unavailable.")?;
+    state.deformation_type = preset.deformation_type;
+    state.brush_radius = preset.radius;
+    state.brush_strength = preset.strength;
+    state.brush_hardness = preset.hardness;
+    state.brush_autosmooth = autosmooth_override;
+    state.brush_falloff = preset.falloff;
+    if let Some(mut data) = world.get_resource_mut::<SculptingData>() {
+        if let Some(pipeline) = data.pipeline.as_mut() {
+            pipeline.set_brush_preset(preset);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
+    if matches!(command, SculptCommand::SetAutoSmooth { .. }) {
+        let active_stroke = world
+            .get_resource::<SculptState>()
+            .is_some_and(|state| state.current_stroke_id.is_some())
+            || world
+                .get_resource::<SculptingData>()
+                .and_then(|data| data.pipeline.as_ref())
+                .is_some_and(|pipeline| pipeline.is_stroke_active());
+        let grab = world
+            .get_resource::<SculptState>()
+            .is_some_and(|state| state.deformation_type == DeformationType::Grab);
+        if active_stroke || grab {
+            if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+                outbound.send(BevyToUi::Error {
+                    code: "sculpt_autosmooth_unavailable".into(),
+                    message: if active_stroke {
+                        "Finish or cancel the active sculpt stroke before changing auto smoothing."
+                    } else {
+                        "Auto smoothing applies to stamped sculpt brushes; Grab stays continuous."
+                    }
+                    .into(),
+                });
+            }
+            return;
+        }
+    }
     if matches!(command, SculptCommand::Undo | SculptCommand::Redo) {
         if world
             .get_resource::<SculptState>()
@@ -2736,6 +3082,9 @@ pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
         SculptCommand::SetHardness { hardness } if hardness.is_finite() => {
             state.brush_hardness = hardness.clamp(0.0, 1.0)
         }
+        SculptCommand::SetAutoSmooth { amount } if amount.is_finite() => {
+            state.brush_autosmooth = Some(amount.clamp(0.0, 1.0));
+        }
         SculptCommand::SetFalloff { falloff } => {
             state.brush_falloff = match falloff {
                 SculptFalloff::Linear => FalloffCurve::Linear,
@@ -2749,11 +3098,7 @@ pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
     }
     // Tool-specific engine behavior (e.g. continuous Grab) is preserved, while the
     // user's radius/strength/hardness/falloff survive tool and mode switches.
-    let mut preset = sculpt_preset(state.deformation_type);
-    preset.radius = state.brush_radius;
-    preset.strength = state.brush_strength;
-    preset.hardness = state.brush_hardness;
-    preset.falloff = state.brush_falloff;
+    let preset = configured_sculpt_preset(&state);
     if let Some(mut data) = world.get_resource_mut::<SculptingData>() {
         if let Some(pipeline) = data.pipeline.as_mut() {
             pipeline.set_brush_preset(preset);
@@ -2777,6 +3122,97 @@ pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
 #[cfg(test)]
 mod brush_control_tests {
     use super::*;
+
+    #[test]
+    fn autosmooth_preserves_defaults_bounds_and_customization_without_changing_grab() {
+        let mut world = World::new();
+        world.init_resource::<SculptState>();
+        world.init_resource::<OutboundUiMessages>();
+        world.insert_resource(SculptingData {
+            pipeline: Some(SculptingPipeline::new(BrushPreset::push())),
+            ..default()
+        });
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.5
+        );
+        apply_sculpt_command(
+            &mut world,
+            &SculptCommand::SetTool {
+                tool: SculptTool::Smooth,
+            },
+        );
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.0
+        );
+        apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: 0.2 });
+        for tool in [SculptTool::Push, SculptTool::Crease, SculptTool::Smooth] {
+            apply_sculpt_command(&mut world, &SculptCommand::SetTool { tool });
+            assert_eq!(
+                sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+                0.2
+            );
+            assert_eq!(
+                world
+                    .resource::<SculptingData>()
+                    .pipeline
+                    .as_ref()
+                    .unwrap()
+                    .brush_preset()
+                    .autosmooth,
+                0.2
+            );
+        }
+        apply_sculpt_command(
+            &mut world,
+            &SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        );
+        apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: 0.9 });
+        assert_eq!(world.resource::<SculptState>().brush_autosmooth, Some(0.2));
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.0
+        );
+        assert_eq!(
+            world
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .brush_preset()
+                .spacing,
+            0.0
+        );
+        apply_sculpt_command(
+            &mut world,
+            &SculptCommand::SetTool {
+                tool: SculptTool::Push,
+            },
+        );
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.2
+        );
+        for (input, expected) in [
+            (-2.0, 0.0),
+            (2.0, 1.0),
+            (f32::NAN, 1.0),
+            (f32::INFINITY, 1.0),
+        ] {
+            apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: input });
+            assert_eq!(
+                sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+                expected
+            );
+        }
+        world.resource_mut::<SculptState>().current_stroke_id = Some(13);
+        apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: 0.1 });
+        assert_eq!(world.resource::<SculptState>().current_stroke_id, Some(13));
+        assert_eq!(world.resource::<SculptState>().brush_autosmooth, Some(1.0));
+    }
 
     #[test]
     fn sculpt_controls_update_the_active_pipeline_and_preserve_user_settings() {

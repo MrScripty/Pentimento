@@ -24,8 +24,8 @@ pub use types::{
 
 // Commands
 pub use commands::{
-    AddPaintCanvasRequest, BlendMode, CameraCommand, CoordinateSpace, EditMode, GizmoAxis,
-    GizmoCommand, GizmoMode, LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool,
+    AddPaintCanvasRequest, BlendMode, CameraCommand, ColorSampleSource, CoordinateSpace, EditMode,
+    GizmoAxis, GizmoCommand, GizmoMode, LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool,
     MeshSelectionMode, ObjectCommand, PaintBrushPresetInfo, PaintBrushSettings, PaintCommand,
     SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool,
 };

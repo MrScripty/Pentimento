@@ -47,6 +47,29 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
             }
         }
         UiToBevy::PaintCommand(command) => {
+            if color_sampling_command(world, command) {
+                send_brush_state(world);
+                return true;
+            }
+            if matches!(command, PaintCommand::SetBlendMode { .. }) {
+                if let Some(mut mode) = world.get_resource_mut::<crate::PaintMode>() {
+                    mode.sample_color = false;
+                }
+            }
+            if crate::brush_presets::paint_command(world, command) {
+                send_brush_state(world);
+                return true;
+            }
+            if matches!(command, PaintCommand::SelectBrushPreset { .. })
+                && crate::brush_presets::active(world)
+            {
+                crate::brush_presets::reject(
+                    world,
+                    "Finish or cancel the active stroke before selecting a brush preset.",
+                );
+                send_brush_state(world);
+                return true;
+            }
             match command {
                 PaintCommand::SetSourceVisible { visible } => {
                     if let Some(entity) = world
@@ -88,6 +111,10 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
             send_brush_state(world);
         }
         UiToBevy::SculptCommand(command) => {
+            if crate::brush_presets::sculpt_command(world, command) {
+                send_brush_state(world);
+                return true;
+            }
             #[cfg(feature = "sculpting")]
             crate::sculpt_mode::apply_sculpt_command(world, command);
             #[cfg(not(feature = "sculpting"))]
@@ -107,6 +134,46 @@ fn active_plane_id(world: &World) -> Option<u32> {
         .and_then(|active| active.entity)
         .and_then(|entity| world.get::<CanvasPlane>(entity))
         .map(|canvas| canvas.plane_id)
+}
+
+fn color_sampling_command(world: &mut World, command: &PaintCommand) -> bool {
+    if !matches!(
+        command,
+        PaintCommand::SetColorSampling { .. } | PaintCommand::SetColorSampleSource { .. }
+    ) {
+        return false;
+    }
+    let ready = world
+        .get_resource::<crate::PaintMode>()
+        .is_some_and(|m| m.active)
+        && active_plane_id(world).is_some_and(|id| {
+            world
+                .get_resource::<PaintingResource>()
+                .is_some_and(|p| p.get_pipeline(id).is_some())
+        });
+    if crate::brush_presets::active(world) || !ready {
+        if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+            outbound.send(BevyToUi::Error { code: "color_sample_rejected".into(), message: "Enter paint mode and finish or cancel the active stroke before sampling a color.".into() });
+        }
+    } else if let Some(mut mode) = world.get_resource_mut::<crate::PaintMode>() {
+        match command {
+            PaintCommand::SetColorSampling { enabled } => mode.sample_color = *enabled,
+            PaintCommand::SetColorSampleSource { source } => mode.sample_source = *source,
+            _ => unreachable!(),
+        }
+    }
+    true
+}
+
+fn sampling_message(world: &World) -> BevyToUi {
+    let mode = world.get_resource::<crate::PaintMode>();
+    BevyToUi::PaintColorSamplingChanged {
+        enabled: mode.is_some_and(|m| m.sample_color),
+        source: mode.map_or(pentimento_ipc::ColorSampleSource::default(), |m| {
+            m.sample_source
+        }),
+        active: crate::brush_presets::active(world),
+    }
 }
 
 pub(crate) fn paint_snapshot(painting: &PaintingResource) -> PaintBrushSettings {
@@ -188,6 +255,8 @@ fn sculpt_history_message(world: &World) -> BevyToUi {
 }
 
 fn send_brush_state(world: &mut World) {
+    crate::brush_presets::ensure(world);
+    let saved = crate::brush_presets::message(world);
     let paint = paint_message(world);
     let live_projection = world
         .get_resource::<ProjectionMode>()
@@ -199,8 +268,13 @@ fn send_brush_state(world: &mut World) {
     #[cfg(not(feature = "sculpting"))]
     let sculpt = None;
     let history = sculpt_history_message(world);
+    let sampling = sampling_message(world);
     if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+        if let Some(saved) = saved {
+            outbound.send(saved);
+        }
         outbound.send(history);
+        outbound.send(sampling);
         if let Some(paint) = paint {
             outbound.send(paint);
         }
@@ -211,6 +285,7 @@ fn send_brush_state(world: &mut World) {
 
 /// Publish only changed values, including undo availability after strokes and hotkey adjustments.
 pub(crate) fn sync_brush_ui_state(world: &mut World, mut previous: Local<String>) {
+    crate::brush_presets::ensure(world);
     let paint = paint_message(world);
     let projection = world
         .get_resource::<ProjectionMode>()
@@ -223,11 +298,13 @@ pub(crate) fn sync_brush_ui_state(world: &mut World, mut previous: Local<String>
     let sculpt: Option<pentimento_ipc::SculptBrushSettings> = None;
     // Tiny settings payload; serialization is stable and avoids keeping duplicate state resources.
     let key = format!(
-        "{:?}|{:?}|{}|{:?}",
+        "{:?}|{:?}|{}|{:?}|{:?}|{:?}",
         paint,
         sculpt,
         projection,
-        sculpt_history_message(world)
+        sculpt_history_message(world),
+        crate::brush_presets::message(world),
+        sampling_message(world)
     );
     if *previous != key {
         *previous = key;
@@ -254,6 +331,8 @@ fn handle_paint_command(
     };
 
     match command {
+        PaintCommand::SetColorSampling { .. } | PaintCommand::SetColorSampleSource { .. } => {}
+        PaintCommand::SaveBrushPreset { .. } | PaintCommand::SelectSavedBrushPreset { .. } => {}
         PaintCommand::SelectBrushPreset { preset_id } => {
             let presets = painting::brush::builtin_presets();
             if let Some(preset) = presets.into_iter().find(|preset| preset.id == preset_id) {

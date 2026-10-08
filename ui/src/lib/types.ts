@@ -49,9 +49,17 @@ export type BevyToUi =
     | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
     | { type: 'CloseMenus' }
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
+    | { type: 'PaintColorSamplingChanged'; data: PaintColorSamplingState }
     | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean; can_redo: boolean; source_visible: boolean } }
     | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } }
-    | { type: 'SculptHistoryChanged'; data: SculptHistoryState };
+    | { type: 'SculptHistoryChanged'; data: SculptHistoryState }
+    | { type: 'SavedBrushPresetsChanged'; data: SavedBrushPresetsState };
+// Backend-owned device-local custom presets share metadata, never parameters.
+export interface SavedBrushPresetsState {
+    paint: PaintBrushPresetInfo[]; sculpt: PaintBrushPresetInfo[];
+    selected_paint: number | null; selected_sculpt: number | null;
+    active: boolean; available: boolean; notice: string | null;
+}
 
 // Messages from UI to Bevy
 export type UiToBevy =
@@ -260,6 +268,8 @@ export type GizmoCommand =
     | { Confirm: null };
 
 export type PaintCommand =
+    | { SetColorSampling: { enabled: boolean } }
+    | { SetColorSampleSource: { source: ColorSampleSource } }
     | { SetBrushColor: { color: [number, number, number, number] } }
     | { SetBrushSize: { size: number } }
     | { SetBrushOpacity: { opacity: number } }
@@ -267,6 +277,8 @@ export type PaintCommand =
     | { SetBrushSpacing: { spacing: number } }
     | { SetBlendMode: { mode: 'Normal' | 'Erase' } }
     | { SelectBrushPreset: { preset_id: number } }
+    | { SaveBrushPreset: { name: string } }
+    | { SelectSavedBrushPreset: { preset_id: number } }
     | 'Undo'
     | 'Redo'
     | { SetSourceVisible: { visible: boolean } }
@@ -306,14 +318,21 @@ export interface SculptBrushSettings {
     radius: number;
     strength: number;
     hardness: number;
+    autosmooth: number;
     falloff: SculptFalloff;
 }
 export interface SculptHistoryState { undo_strokes: number; redo_strokes: number; active: boolean; notice: string | null }
 export type SculptCommand =
+    | { SaveBrushPreset: { name: string } }
+    | { SelectSavedBrushPreset: { preset_id: number } }
     | 'Undo'
     | 'Redo'
     | { SetTool: { tool: SculptTool } }
     | { SetRadius: { radius: number } }
     | { SetStrength: { strength: number } }
     | { SetHardness: { hardness: number } }
+    | { SetAutoSmooth: { amount: number } }
     | { SetFalloff: { falloff: SculptFalloff } };
+
+export type ColorSampleSource = 'VisibleLayers' | 'ActiveLayer';
+export interface PaintColorSamplingState { enabled: boolean; source: ColorSampleSource; active: boolean }
