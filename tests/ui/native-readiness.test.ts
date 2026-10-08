@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
+test('open modal capture requires four UI-owned idle frames without relaxing scene capture', () => {
+    const frame = (blocked = true, latched = false, received = true) =>
+        `Native capture after batch: last (20.0, 1050.0) blocked=${blocked} latched=${latched} layout_received=${received}\n`;
+    const modal = frame().repeat(4);
+    assert.equal(parkedPointerFrames(modal, 20, 1050), null);
+    assert.deepEqual(parkedPointerFrames(modal, 20, 1050, { uiOwned: true }), { x: 20, y: 1050, consecutive_updates: 4 });
+    assert.equal(parkedPointerFrames(frame().repeat(3), 20, 1050, { uiOwned: true }), null);
+    assert.equal(parkedPointerFrames(frame(false).repeat(4), 20, 1050, { uiOwned: true }), null);
+    assert.equal(parkedPointerFrames(frame(true, true).repeat(4), 20, 1050, { uiOwned: true }), null);
+    assert.equal(parkedPointerFrames(frame(true, false, false).repeat(4), 20, 1050, { uiOwned: true }), null);
+    assert.equal(parkedPointerFrames(modal, 21, 1050, { uiOwned: true }), null);
+});
+
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
     assert.equal(cefFramebufferReceipt('CEF webview ready'), null);

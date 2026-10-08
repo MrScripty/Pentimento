@@ -66,12 +66,12 @@ async function waitForStrokeCompletion(offset, description) {
     assert.notEqual(completed.outcome, 'rejected', `${description}: transaction ${started.id} was rejected`);
     return completed;
 }
-async function capture(name, { synchronize = true } = {}) {
+async function capture(name, { synchronize = true, uiOwned = false } = {}) {
     // Move to empty viewport so brush gizmos/hover highlights cannot masquerade
     // as a geometry change in before/after viewport comparisons.
     const parkedLogOffset = log().length;
     xdo('mousemove', '--window', windowId, 20, height - 30);
-    if (synchronize) await until(() => parkedPointerFrames(log().slice(parkedLogOffset), 20, height - 30),
+    if (synchronize) await until(() => parkedPointerFrames(log().slice(parkedLogOffset), 20, height - 30, { uiOwned }),
         `${name}: off-target hover through gizmo/presentation update frames`, 30000);
     const pixels = command('import', ['-window', windowId, '-depth', '8', 'rgb:-']);
     assert.equal(pixels.length, width * height * 3, 'Unexpected X11 capture dimensions');
@@ -382,7 +382,10 @@ try {
     stage = 'paint_entry';
     await clickAt(35, height - 35); await key('shift+a');
     await page.getByRole('dialog', { name: 'Add Object', exact: true }).waitFor();
-    const menuFrame = await capture('native-add-menu-open');
+    // The modal backdrop intentionally owns the parked pointer across the whole
+    // viewport. Require that ownership for this UI frame; geometry captures
+    // retain the original unblocked scheduling barrier.
+    const menuFrame = await capture('native-add-menu-open', { uiOwned: true });
     const menuBounds = await page.locator('.add-menu').boundingBox();
     assertNativeClickBounds(menuBounds, width, height);
     record('native_open_menu', { ...assertPaintedUiRegion(menuFrame, width, height, menuBounds, 'Add Object menu'), bounds: menuBounds, screenshot: menuFrame.screenshot });

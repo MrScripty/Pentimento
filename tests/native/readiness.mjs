@@ -66,10 +66,10 @@ export async function waitForSculptPresentation(wait, { historyReady, capture, m
 // Four fresh parked-pointer updates span input acknowledgement, Last gizmo mesh
 // changes, the next PostUpdate asset event flush, and pipelined render turnover.
 // This is a scheduling barrier, not a substitute for native pixel assertions.
-export function parkedPointerFrames(log, x, y) {
+export function parkedPointerFrames(log, x, y, { uiOwned = false } = {}) {
     let consecutive = 0;
     for (const match of log.matchAll(/Native capture after batch: last \(([-\d.]+), ([-\d.]+)\) blocked=(true|false) latched=(true|false) layout_received=(true|false)\r?\n/g)) {
-        if (Number(match[1]) === x && Number(match[2]) === y && match[3] === 'false' && match[4] === 'false' && match[5] === 'true') consecutive++;
+        if (Number(match[1]) === x && Number(match[2]) === y && match[3] === String(uiOwned) && match[4] === 'false' && match[5] === 'true') consecutive++;
         else consecutive = 0;
     }
     return consecutive >= 4 ? { x, y, consecutive_updates: consecutive } : null;
