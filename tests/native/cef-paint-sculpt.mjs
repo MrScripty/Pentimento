@@ -8,7 +8,7 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -263,18 +263,24 @@ try {
     await clickAt(35, height - 35);
     const beforeSculpt = await capture('sculpt-before-stroke'); const beforeStarts = starts();
     const beforeSculptFrames = [beforeSculpt, await capture('sculpt-before-noise-1'), await capture('sculpt-before-noise-2')];
+    stage = 'sculpt_stroke';
+    const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });
+    const sculptRedo = page.getByRole('button', { name: 'Redo sculpt stroke', exact: true });
     const sculptLogOffset = log().length;
     await drag(sx, sy, 24, -12);
     await until(() => starts().sculpt > beforeStarts.sculpt, 'native sculpt stroke start');
     const sculptCompletion = assertAcceptedStroke(await waitForStrokeCompletion(sculptLogOffset, 'visible sculpt'), 'visible sculpt');
-    const afterSculpt = await capture('sculpt-after-stroke'); const sculptDelta = difference(beforeSculpt, afterSculpt);
+    const { frame: afterSculpt, delta: sculptDelta } = await waitForSculptPresentation(until, {
+        historyReady: () => sculptUndo.isEnabled(),
+        capture: () => capture('sculpt-after-stroke'),
+        measure: frame => difference(beforeSculpt, frame),
+        description: `visible sculpt transaction ${sculptCompletion.id}`,
+    });
     assert.ok(sculptDelta.changed_pixels > 25, 'Sculpt stroke produced no visible viewport change');
     const afterSculptFrames = [afterSculpt, await capture('sculpt-after-noise-1'), await capture('sculpt-after-noise-2')];
     const sculptRegion = deformationRegion(beforeSculptFrames, afterSculptFrames, width, height);
     record('sculpt_stroke', { ...sculptDelta, completion: sculptCompletion, stroke_starts: starts(), screenshot: afterSculpt.screenshot });
     stage = 'sculpt_history';
-    const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });
-    const sculptRedo = page.getByRole('button', { name: 'Redo sculpt stroke', exact: true });
     await until(() => sculptUndo.isEnabled(), 'native sculpt history acceptance');
     const historyStarts = starts();
     await nativeClick(sculptUndo);
@@ -326,7 +332,12 @@ try {
     await drag(sx, sy, -16, 8);
     assertAcceptedStroke(await waitForStrokeCompletion(branchLogOffset, 'new history branch'), 'new history branch');
     await until(async () => (await sculptUndo.isEnabled()) && (await sculptRedo.isDisabled()), 'new accepted sculpt branch clears redo');
-    const branchedSculpt = await capture('sculpt-new-branch');
+    const { frame: branchedSculpt } = await waitForSculptPresentation(until, {
+        historyReady: async () => (await sculptUndo.isEnabled()) && (await sculptRedo.isDisabled()),
+        capture: () => capture('sculpt-new-branch'),
+        measure: frame => difference(beforeSculpt, frame),
+        description: 'new accepted history branch',
+    });
     assert.ok(difference(beforeSculpt, branchedSculpt).changed_pixels > 25, 'New sculpt branch has no visible deformation');
     record('sculpt_new_branch', { screenshot: branchedSculpt.screenshot });
 

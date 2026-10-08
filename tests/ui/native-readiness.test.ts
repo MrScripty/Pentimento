@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
@@ -50,4 +50,34 @@ test('transparent initial capture waits for the first nonempty uploaded capture'
     assert.equal(cefFramebufferReceipt(initial), null);
     assert.equal(cefFramebufferReceipt(`${initial}\nFirst painted capture (Cef mode): 1920x1080, non-transparent pixels: 0`), null);
     assert.deepEqual(cefFramebufferReceipt(`${initial}\nFirst painted capture (Cef mode): 1920x1080, non-transparent pixels: 410000`), { width: 1920, height: 1080, painted_pixels: 410000 });
+});
+
+
+test('presentation waits for backend history and native pixels under the original threshold', async () => {
+    let attempt = 0;
+    const wait = async (observe, _description, timeout) => {
+        assert.equal(timeout, 30000);
+        for (attempt = 0; attempt < 4; attempt++) {
+            const result = await observe();
+            if (result) return result;
+        }
+        throw new Error('deadline reached');
+    };
+    let captures = 0;
+    const result = await waitForSculptPresentation(wait, {
+        historyReady: async () => attempt > 0,
+        capture: async () => { captures++; return { sequence: attempt }; },
+        measure: frame => ({ changed_pixels: frame.sequence === 1 ? 25 : 26 }),
+        description: 'accepted stroke 7',
+    });
+    assert.equal(result.frame.sequence, 2);
+    assert.equal(captures, 2);
+    for (const ready of [false, true]) {
+        await assert.rejects(waitForSculptPresentation(wait, {
+            historyReady: async () => ready,
+            capture: async () => ({}),
+            measure: () => ({ changed_pixels: ready ? 0 : 100 }),
+            description: 'never presented',
+        }), /deadline reached/);
+    }
 });

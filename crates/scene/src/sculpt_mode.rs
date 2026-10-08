@@ -1940,6 +1940,169 @@ mod sculpt_geometry_sync_tests {
     }
 
     #[test]
+    fn native_dense_sphere_batch_publishes_moved_asset_and_history() {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
+        let mut app = sculpt_event_app();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<StrokeIdGenerator>()
+            .init_resource::<FrontendInputBlockState>()
+            .add_message::<CursorMoved>()
+            .add_message::<WindowEvent>()
+            .add_systems(
+                Update,
+                update_sculpt_screen_config.before(handle_sculpt_input),
+            )
+            .add_systems(Update, handle_sculpt_input.before(handle_sculpt_events))
+            .add_systems(
+                Update,
+                sync_sculpt_chunks_to_gpu.after(handle_sculpt_events),
+            )
+            .add_systems(PostUpdate, crate::brush_ui::sync_brush_ui_state);
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: (1920, 1080).into(),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.world_mut().spawn((
+            Camera {
+                computed: ComputedCameraValues {
+                    clip_from_view: Mat4::perspective_infinite_reverse_rh(
+                        std::f32::consts::FRAC_PI_4,
+                        1920. / 1080.,
+                        0.1,
+                    ),
+                    target_info: Some(RenderTargetInfo {
+                        physical_size: UVec2::new(1920, 1080),
+                        scale_factor: 1.,
+                    }),
+                    ..default()
+                },
+                ..default()
+            },
+            GlobalTransform::from(
+                Transform::from_xyz(5.0015483, 4.996461, 5.0015483).looking_at(Vec3::ZERO, Vec3::Y),
+            ),
+            MainCamera,
+        ));
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Sphere::new(0.5).mesh().uv(32, 18));
+        let target = app
+            .world_mut()
+            .spawn((
+                Mesh3d(handle.clone()),
+                GlobalTransform::from_translation(Vec3::new(2., 0.5, 0.)),
+            ))
+            .id();
+        app.world_mut()
+            .write_message(SculptEvent::Enter { entity: target });
+        app.update();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::SetRadius { radius: 0.8 });
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let before_asset = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .unwrap()
+            .clone();
+        app.world_mut()
+            .resource_mut::<OutboundUiMessages>()
+            .messages
+            .clear();
+        let mut batch = vec![
+            pointer_move(window, 1215., 614.),
+            pointer_button(window, true),
+        ];
+        batch.extend((1..=16).map(|step| {
+            pointer_move(
+                window,
+                (1215. + 24. * step as f32 / 16.).round(),
+                (614. - 12. * step as f32 / 16.).round(),
+            )
+        }));
+        run_pointer_batch(&mut app, batch);
+        // Release arrives as the next batch, exactly as in native run 37751926323.
+        run_pointer_batch(&mut app, vec![pointer_button(window, false)]);
+        let data = app.world().resource::<SculptingData>();
+        let chunks = data.chunked_mesh.as_ref().unwrap();
+        let positions_moved = before.chunks.iter().any(|(id, old)| {
+            chunks.get_chunk(*id).is_some_and(|new| {
+                old.mesh.vertices().iter().any(|vertex| {
+                    new.mesh
+                        .vertex(vertex.id)
+                        .is_some_and(|next| next.position.distance(vertex.position) > 1e-5)
+                })
+            })
+        });
+        assert!(
+            positions_moved,
+            "accepted processing must actually move original positions"
+        );
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        assert!(
+            chunks.dirty_chunks().is_empty(),
+            "asset sync must consume dirty chunks only after export"
+        );
+        let expected = half_edge_to_bevy_mesh(&sculpting::merge_chunks(chunks).mesh)
+            .unwrap()
+            .0;
+        let assets = app.world().resource::<Assets<Mesh>>();
+        let published = assets.get(&handle).unwrap();
+        assert_ne!(
+            published.attribute(Mesh::ATTRIBUTE_POSITION),
+            before_asset.attribute(Mesh::ATTRIBUTE_POSITION)
+        );
+        assert_eq!(
+            published.attribute(Mesh::ATTRIBUTE_POSITION),
+            expected.attribute(Mesh::ATTRIBUTE_POSITION)
+        );
+        assert_eq!(
+            published.indices().unwrap().len(),
+            expected.indices().unwrap().len()
+        );
+        assert!(
+            app.world()
+                .resource::<OutboundUiMessages>()
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    BevyToUi::SculptHistoryChanged {
+                        undo_strokes: 1,
+                        redo_strokes: 0,
+                        active: false,
+                        ..
+                    }
+                )),
+            "history publication must reflect the completed transaction"
+        );
+    }
+
+    #[test]
     fn release_batch_processes_motion_before_end_and_ignores_later_hover() {
         let (mut app, window) = batched_input_app();
         run_pointer_batch(

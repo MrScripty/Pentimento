@@ -51,3 +51,14 @@ export function cefRenderingArguments(mode) {
     if (mode === 'software') return ['--disable-gpu', '--disable-gpu-compositing'];
     throw new Error(`Unsupported CEF qualification rendering mode: ${mode}`);
 }
+
+// Observe production-owned history and the actual native framebuffer within one
+// deadline. Never infer presentation from an accepted CPU transaction alone.
+export async function waitForSculptPresentation(wait, { historyReady, capture, measure, description }) {
+    return wait(async () => {
+        if (!(await historyReady())) return null;
+        const frame = await capture();
+        const delta = measure(frame);
+        return delta.changed_pixels > 25 ? { frame, delta } : null;
+    }, `${description}: backend history and visible native deformation`, 30000);
+}
