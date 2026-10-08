@@ -107,6 +107,7 @@ fn main() {
                     radius: 0.5,
                     strength: 1.0,
                     hardness: 0.5,
+                    autosmooth: 0.5,
                     falloff: SculptFalloff::Smooth,
                 }),
             },
@@ -154,6 +155,7 @@ fn main() {
             UiToBevy::SculptCommand(SculptCommand::SetRadius { radius: 0.8 }),
             UiToBevy::SculptCommand(SculptCommand::SetStrength { strength: 0.25 }),
             UiToBevy::SculptCommand(SculptCommand::SetHardness { hardness: 0.3 }),
+            UiToBevy::SculptCommand(SculptCommand::SetAutoSmooth { amount: 0.2 }),
             UiToBevy::SculptCommand(SculptCommand::SetFalloff {
                 falloff: SculptFalloff::Sharp,
             }),

@@ -306,6 +306,7 @@ export interface SculptBrushSettings {
     radius: number;
     strength: number;
     hardness: number;
+    autosmooth: number;
     falloff: SculptFalloff;
 }
 export interface SculptHistoryState { undo_strokes: number; redo_strokes: number; active: boolean; notice: string | null }
@@ -316,4 +317,5 @@ export type SculptCommand =
     | { SetRadius: { radius: number } }
     | { SetStrength: { strength: number } }
     | { SetHardness: { hardness: number } }
+    | { SetAutoSmooth: { amount: number } }
     | { SetFalloff: { falloff: SculptFalloff } };

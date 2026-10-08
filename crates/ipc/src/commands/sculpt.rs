@@ -26,11 +26,25 @@ pub enum SculptFalloff {
 pub enum SculptCommand {
     Undo,
     Redo,
-    SetTool { tool: SculptTool },
-    SetRadius { radius: f32 },
-    SetStrength { strength: f32 },
-    SetHardness { hardness: f32 },
-    SetFalloff { falloff: SculptFalloff },
+    SetTool {
+        tool: SculptTool,
+    },
+    SetRadius {
+        radius: f32,
+    },
+    SetStrength {
+        strength: f32,
+    },
+    SetHardness {
+        hardness: f32,
+    },
+    /// Tangent-plane smoothing applied after each stamped dab (0 = off, 1 = full).
+    SetAutoSmooth {
+        amount: f32,
+    },
+    SetFalloff {
+        falloff: SculptFalloff,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,5 +54,7 @@ pub struct SculptBrushSettings {
     pub radius: f32,
     pub strength: f32,
     pub hardness: f32,
+    /// Effective post-dab smoothing amount. Grab always reports zero.
+    pub autosmooth: f32,
     pub falloff: SculptFalloff,
 }

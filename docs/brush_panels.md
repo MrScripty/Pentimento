@@ -20,6 +20,16 @@ not upgraded here.
 - Sculpt: Push, Pull, Grab, Smooth, Flatten, Inflate, Pinch and Crease, with mesh-local
   radius, strength, hardness and five supported falloff curves. Tool-specific
   engine behavior is retained; customization survives tool and mode changes.
+- Sculpt auto smoothing: 0–100% tangent-plane smoothing after stamped dabs.
+  Existing defaults remain 50% for Push/Pull/Flatten/Inflate/Pinch/Crease and 0%
+  for Smooth until customized. One custom amount then follows stamped brushes
+  across tool and mode changes. Grab stays continuous with smoothing disabled;
+  returning to a stamped brush restores the custom amount.
+- Auto smoothing cannot change during an owned sculpt stroke. The native
+  dispatcher refuses stale commands, and disabling the control resets pending
+  drafts to the accepted value. Changing an amount leaves redo available;
+  a new accepted stroke clears redo. History restores geometry snapshots and
+  does not rewind current brush settings or claim self-contained input replay.
 - A backend snapshot updates the panel after hotkeys, reload and mode changes.
 - Browser rectangles block viewport pointer input; dragging a widget remains
   captured until release. Widget focus blocks viewport keyboard shortcuts.
@@ -56,3 +66,8 @@ canvas; paint small/large and soft/hard strokes; erase/undo; apply/live-project 
 a UV mesh; select a mesh and Ctrl+Tab into sculpt; compare tools and falloff;
 change F/Shift+F values; exit/re-enter; drag every slider across the viewport and
 release over/outside the panel without producing an unintended stroke.
+
+The auto-smoothing successor has local guarded scene/pipeline and Chromium
+control coverage. Native auto-smoothing qualification remains pending: the
+matching official CEF download is blocked by the executor's proxy (HTTP 403).
+Browser controls and CPU geometry tests do not constitute native acceptance.

@@ -77,7 +77,7 @@ function assertBevyToUiMessage(message) {
       if (message.data.settings !== null) {
         assert.match(message.data.settings.tool, /^(Push|Pull|Grab|Smooth|Flatten|Inflate|Pinch|Crease)$/);
         assert.match(message.data.settings.falloff, /^(Linear|Smooth|Sharp|Constant|Sphere)$/);
-        for (const field of ['radius', 'strength', 'hardness']) assert.equal(typeof message.data.settings[field], 'number');
+        for (const field of ['radius', 'strength', 'hardness', 'autosmooth']) assert.equal(typeof message.data.settings[field], 'number');
       }
       return;
     case 'SculptHistoryChanged':
@@ -127,7 +127,7 @@ function assertUiToBevyMessage(message) {
     case 'SculptCommand':
       if (typeof message.data === 'string') { assert.ok(['Undo', 'Redo'].includes(message.data)); return; }
       assert.equal(typeof message.data, 'object');
-      assert.ok(['SetTool', 'SetRadius', 'SetStrength', 'SetHardness', 'SetFalloff'].includes(Object.keys(message.data)[0]));
+      assert.ok(['SetTool', 'SetRadius', 'SetStrength', 'SetHardness', 'SetFalloff', 'SetAutoSmooth'].includes(Object.keys(message.data)[0]));
       return;
     case 'RequestBrushState':
       assert.equal(message.data, undefined);

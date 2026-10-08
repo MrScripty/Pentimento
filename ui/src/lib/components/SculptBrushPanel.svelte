@@ -28,6 +28,8 @@
     <label class="select-label" for="sculpt-falloff">Falloff curve</label>
     <select id="sculpt-falloff" value={settings.falloff} onchange={(e) => bridge.sculptCommand({ SetFalloff: { falloff: e.currentTarget.value as SculptFalloff } })}>{#each falloffs as falloff}<option>{falloff}</option>{/each}</select>
     <p class="hint">Hardness defines the full-strength center. The curve controls the edge.</p>
+    <BrushControl id="sculpt-autosmooth" label="Auto smoothing" value={Math.round((settings.autosmooth ?? (settings.tool === 'Grab' || settings.tool === 'Smooth' ? 0 : 0.5)) * 100)} min={0} max={100} unit="%" disabled={history.active || settings.tool === 'Grab'} onchange={(amount) => bridge.sculptCommand({ SetAutoSmooth: { amount: amount / 100 } })} />
+    <p class="hint">{settings.tool === 'Grab' ? 'Grab stays continuous without post-dab smoothing. Your amount returns with stamped brushes.' : 'Smooths fine surface ripples after each dab. Set 0% to preserve sharper details. Your amount stays selected across stamped brushes.'}</p>
     <div class="divider"></div>
     <div class="sculpt-tools" aria-label="Sculpt history">
         <button type="button" disabled={history.active || history.undo_strokes === 0} title="Undo sculpt stroke (Ctrl+Z)" onclick={() => bridge.sculptCommand('Undo')}>Undo sculpt stroke</button>
