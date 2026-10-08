@@ -250,6 +250,9 @@ try {
     assert.ok(sculptDelta.changed_pixels > 25, 'Sculpt stroke produced no visible viewport change');
     record('sculpt_stroke', { ...sculptDelta, stroke_starts: starts(), screenshot: afterSculpt.screenshot });
     await key('Tab'); assert.equal(await page.getByRole('heading', { name: 'Sculpt brushes' }).count(), 1);
+    // Tab may focus a browser widget. Return keyboard ownership to the viewport
+    // before its Ctrl+Tab shortcut; a miss in sculpt mode preserves selection.
+    await clickAt(35, height - 35);
     await key('ctrl+Tab'); await until(() => page.getByRole('heading', { name: 'Sculpt brushes' }).count().then(n => n === 0), 'sculpt exit');
     await key('ctrl+Tab'); await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
     await key('ctrl+Tab');

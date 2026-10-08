@@ -168,3 +168,16 @@ test('rust ipc samples satisfy the JavaScript consumer expectations', () => {
   samples.bevy_to_ui.forEach(assertBevyToUiMessage);
   samples.ui_to_bevy.forEach(assertUiToBevyMessage);
 });
+
+test('native keyboard samples preserve physical keys, native text, and additive modifiers', () => {
+  const { native_keyboard } = loadSamples();
+  assert.deepEqual(native_keyboard.map(({ key, code, text }) => ({ key, code, text })), [
+    { key: '3', code: 'Digit3', text: '#' },
+    { key: 'Enter', code: 'Enter', text: null }
+  ]);
+  for (const event of native_keyboard) {
+    assert.equal(event.pressed, true);
+    for (const name of ['shift', 'ctrl', 'alt', 'meta', 'alt_graph']) assert.equal(typeof event.modifiers[name], 'boolean');
+  }
+  assert.equal(native_keyboard[0].modifiers.shift, true);
+});

@@ -1,9 +1,9 @@
 use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, AppSettings, BevyToUi,
-    BlendMode, DiffusionRequest, EditMode, GizmoCommand, GizmoMode, LayerInfo, LightingSettings,
-    MeshEditCommand, MeshEditTool, MeshSelectionMode, PaintBrushPresetInfo, PaintBrushSettings,
-    PaintCommand, PrimitiveType, SceneInfo, SceneObject, SculptBrushSettings, SculptCommand,
-    SculptFalloff, SculptTool, Transform3D, UiToBevy,
+    BlendMode, DiffusionRequest, EditMode, GizmoCommand, GizmoMode, KeyboardEvent, LayerInfo,
+    LightingSettings, MeshEditCommand, MeshEditTool, MeshSelectionMode, Modifiers,
+    PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PrimitiveType, SceneInfo, SceneObject,
+    SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool, Transform3D, UiToBevy,
 };
 use serde::Serialize;
 
@@ -11,10 +11,30 @@ use serde::Serialize;
 struct ContractSamples {
     bevy_to_ui: Vec<BevyToUi>,
     ui_to_bevy: Vec<UiToBevy>,
+    native_keyboard: Vec<KeyboardEvent>,
 }
 
 fn main() {
     let samples = ContractSamples {
+        native_keyboard: vec![
+            KeyboardEvent {
+                key: "3".into(),
+                code: "Digit3".into(),
+                text: Some("#".into()),
+                pressed: true,
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                },
+            },
+            KeyboardEvent {
+                key: "Enter".into(),
+                code: "Enter".into(),
+                text: None,
+                pressed: true,
+                modifiers: Modifiers::default(),
+            },
+        ],
         bevy_to_ui: vec![
             BevyToUi::Initialize {
                 scene_info: SceneInfo {

@@ -596,67 +596,24 @@ impl LinuxCefWebview {
         let Some(browser) = &self.browser else { return };
         let Some(host) = browser.host() else { return };
 
-        // Get the character from the key string
-        let char_code = event.key.chars().next().unwrap_or('\0');
-
-        // For Windows virtual key codes, letter keys must use uppercase (VK_KEY_A = 65, not 97)
-        // This is how Windows virtual key codes work - they're always uppercase for letters
-        let vk_code = if char_code.is_ascii_lowercase() {
-            char_code.to_ascii_uppercase() as c_int
-        } else {
-            char_code as c_int
-        };
-
-        // The actual character that would be typed (depends on shift state)
-        let typed_char = if event.modifiers.shift && char_code.is_ascii_lowercase() {
-            char_code.to_ascii_uppercase()
-        } else {
-            char_code
-        };
-
-        // Build modifiers from the event
-        let mut modifiers: u32 = 0;
-        if event.modifiers.shift {
-            modifiers |= 1 << 1; // EVENTFLAG_SHIFT_DOWN
-        }
-        if event.modifiers.ctrl {
-            modifiers |= 1 << 2; // EVENTFLAG_CONTROL_DOWN
-        }
-        if event.modifiers.alt {
-            modifiers |= 1 << 3; // EVENTFLAG_ALT_DOWN
-        }
-
-        let key_event = KeyEvent {
-            size: size_of::<KeyEvent>(),
-            type_: if event.pressed {
-                KeyEventType::RAWKEYDOWN
-            } else {
-                KeyEventType::KEYUP
-            },
-            modifiers,
-            windows_key_code: vk_code,
-            native_key_code: 0, // Platform-specific, not needed for basic input
-            is_system_key: 0,
-            character: typed_char as u16,
-            unmodified_character: char_code as u16,
-            focus_on_editable_field: 0,
-        };
-        host.send_key_event(Some(&key_event));
-
-        // Also send char event for key presses (for text input)
-        if event.pressed && !event.key.is_empty() && char_code != '\0' {
-            let char_event = KeyEvent {
+        for encoded in pentimento_frontend_core::cef_keyboard::encode_keyboard(&event) {
+            use pentimento_frontend_core::cef_keyboard::KeyEventKind;
+            let key_event = KeyEvent {
                 size: size_of::<KeyEvent>(),
-                type_: KeyEventType::CHAR,
-                modifiers,
-                windows_key_code: vk_code,
+                type_: match encoded.kind {
+                    KeyEventKind::RawKeyDown => KeyEventType::RAWKEYDOWN,
+                    KeyEventKind::KeyUp => KeyEventType::KEYUP,
+                    KeyEventKind::Char => KeyEventType::CHAR,
+                },
+                modifiers: encoded.modifiers,
+                windows_key_code: encoded.windows_key_code,
                 native_key_code: 0,
                 is_system_key: 0,
-                character: typed_char as u16,
-                unmodified_character: char_code as u16,
+                character: encoded.character,
+                unmodified_character: encoded.unmodified_character,
                 focus_on_editable_field: 0,
             };
-            host.send_key_event(Some(&char_event));
+            host.send_key_event(Some(&key_event));
         }
     }
 

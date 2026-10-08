@@ -2,6 +2,22 @@
  * TypeScript types matching the Rust IPC protocol
  */
 
+// Native host input; separate from the browser DOM KeyboardEvent.
+export interface NativeKeyModifiers {
+    shift: boolean;
+    ctrl: boolean;
+    alt: boolean;
+    meta: boolean;
+    alt_graph?: boolean;
+}
+export interface NativeKeyboardEvent {
+    key: string;
+    code?: string;
+    text?: string | null;
+    pressed: boolean;
+    modifiers: NativeKeyModifiers;
+}
+
 // Edit mode
 export type EditMode = 'None' | 'Paint' | 'MeshEdit' | 'Sculpt';
 
