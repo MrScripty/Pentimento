@@ -115,12 +115,12 @@ async function nativeClick(locator) {
     assertNativeClickBounds(box, width, height);
     await clickAt(box.x + box.width / 2, box.y + box.height / 2);
 }
-async function fill(locator, value) {
+async function fill(locator, value, committedValue = value) {
     await nativeClick(locator);
     xdo('key', '--clearmodifiers', 'ctrl+a');
     xdo('type', '--clearmodifiers', '--delay', '20', value);
     xdo('key', '--clearmodifiers', 'Return');
-    await until(async () => await locator.inputValue() === value, `native field value ${value}`);
+    await until(async () => await locator.inputValue() === committedValue, `native field commit ${value} -> ${committedValue}`);
 }
 async function drag(x, y, dx, dy) {
     xdo('mousemove', '--window', windowId, Math.round(x), Math.round(y));
@@ -253,6 +253,15 @@ try {
     await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
     await nativeClick(page.getByRole('button', { name: 'Grab', exact: true }));
     await until(() => page.getByRole('button', { name: 'Grab', exact: true }).getAttribute('aria-pressed').then(value => value === 'true'), 'backend Grab selection');
+    stage = 'sculpt_clamped_number_commit';
+    const clampedRadius = page.getByRole('spinbutton', { name: 'Radius value', exact: true });
+    await fill(clampedRadius, '10');
+    const clampLogOffset = log().length;
+    await fill(clampedRadius, '100', '10');
+    await until(async () => Number(await page.locator('#sculpt-radius').inputValue()) === 10
+        && /Sculpt radius accepted: value=10(?:\.0)? pipeline=Some\(10(?:\.0)?\)/.test(log().slice(clampLogOffset)),
+    'clamped number, slider and actual sculpt preset radius agree');
+    record('sculpt_clamped_number_commit', { draft: 100, committed_number: 10, accepted_pipeline_radius: 10 });
     await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '0.8');
     await clickAt(35, height - 35); // Misses the sculpt target and clears widget focus.
     record('sculpt_panel_settings', { tool: 'Grab', radius: .8 });

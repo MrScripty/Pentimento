@@ -838,6 +838,67 @@ fn native_paint_separate_frame_positive_control() {
 }
 
 #[test]
+fn native_paint_stationary_press_after_ui_closes_uses_current_origin() {
+    let (mut control, control_window) = native_paint_fixture();
+    control
+        .world_mut()
+        .resource_mut::<FrontendUiLayout>()
+        .regions
+        .clear();
+    native_batch(
+        &mut control,
+        &[
+            moved(control_window, 700., 180.),
+            button(control_window, bevy::input::mouse::MouseButton::Left, true),
+            moved(control_window, 701., 181.),
+            button(control_window, bevy::input::mouse::MouseButton::Left, false),
+        ],
+    );
+    assert_native_paint_complete(&control, 1);
+    let expected = native_paint_pixels(&control);
+
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    native_batch(&mut app, &[moved(window, 350., 320.)]);
+    native_batch(&mut app, &[moved(window, 700., 180.)]);
+    assert!(
+        native_paint_pixels(&app) == before,
+        "UI hover must not paint"
+    );
+    app.world_mut()
+        .resource_mut::<FrontendUiLayout>()
+        .regions
+        .clear();
+    native_batch(&mut app, &[]);
+    // Native press has no new cursor event: the UI disappeared under the pointer.
+    native_batch(
+        &mut app,
+        &[
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+            moved(window, 701., 181.),
+            button(window, bevy::input::mouse::MouseButton::Left, false),
+        ],
+    );
+    assert_native_paint_complete(&app, 1);
+    assert!(
+        native_paint_pixels(&app) == expected,
+        "stationary press must match fresh current-position stroke, without a line from stale scene hover"
+    );
+    assert!(
+        app.world_mut()
+            .resource_mut::<pentimento_scene::PaintingResource>()
+            .get_pipeline_mut(7)
+            .unwrap()
+            .undo()
+    );
+    app.update();
+    assert!(
+        native_paint_pixels(&app) == before,
+        "undo restores the entire accepted stroke"
+    );
+}
+
+#[test]
 fn native_paint_fine_moves_cover_the_continuous_path_and_undo_exactly() {
     let (mut app, window) = native_paint_fixture();
     {
