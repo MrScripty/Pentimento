@@ -65,6 +65,7 @@ pub struct NativeInputState {
     buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     ui_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     scene_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
+    scene_cursor: Option<Vec2>,
     alt_graph: ButtonInput<KeyCode>,
     layout_reported: bool,
     focus_suspended: bool,
@@ -168,6 +169,7 @@ pub fn forward_native_input(
                     && state.ui_buttons.get_pressed().next().is_none()
                 {
                     scene_events.push(WindowEvent::CursorMoved(event.clone()));
+                    state.scene_cursor = Some(event.position);
                 } else {
                     close_scene_buttons(&mut state, window_id, &mut scene_events);
                 }
@@ -182,6 +184,20 @@ pub fn forward_native_input(
                         && !over_ui(&layout, position)
                         && state.ui_buttons.get_pressed().next().is_none()
                     {
+                        // UI-owned moves stay filtered. When a new scene press
+                        // acquires ownership, refresh its event-time origin so
+                        // disappearing UI cannot leave the brush at an old hover.
+                        let current = Vec2::new(mouse.window_x, mouse.window_y);
+                        if state.scene_cursor != Some(current) {
+                            scene_events.push(WindowEvent::CursorMoved(
+                                bevy::window::CursorMoved {
+                                    window: window_id,
+                                    position: current,
+                                    delta: None,
+                                },
+                            ));
+                            state.scene_cursor = Some(current);
+                        }
                         state.scene_buttons.press(event.button);
                         scene_events.push(WindowEvent::MouseButtonInput(*event));
                     }
@@ -328,6 +344,7 @@ fn release_on_focus_loss(
         }
     }
     state.focus_suspended = true;
+    state.scene_cursor = None;
     state.buttons.reset_all();
     state.ui_buttons.reset_all();
     state.alt_graph.reset_all();

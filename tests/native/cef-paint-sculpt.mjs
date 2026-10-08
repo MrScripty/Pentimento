@@ -433,6 +433,46 @@ try {
     const afterUndo = await capture('paint-after-undo'); const undoDelta = difference(beforePaint, afterUndo);
     assert.ok(undoDelta.mean_max_channel_difference < 2, 'Undo did not restore visible source canvas');
     record('paint_undo_and_ui_capture', { ...undoDelta, screenshot: afterUndo.screenshot });
+    stage = 'paint_stationary_press_after_ui_closes';
+    const currentPoint = { x: Math.round(width * .57), y: Math.round(height * .55) };
+    xdo('mousemove', '--window', windowId, Math.round(width * .43), Math.round(height * .52));
+    await pause(1000);
+    await key('shift+a');
+    await page.getByRole('dialog', { name: 'Add Object', exact: true }).waitFor();
+    const uiHoverOffset = log().length;
+    xdo('mousemove', '--window', windowId, currentPoint.x, currentPoint.y);
+    await until(() => parkedPointerFrames(log().slice(uiHoverOffset), currentPoint.x, currentPoint.y, { uiOwned: true }), 'modal owns pointer at future stroke origin');
+    const closedOffset = log().length;
+    await key('Escape');
+    await until(() => page.getByRole('dialog', { name: 'Add Object', exact: true }).count().then(n => n === 0), 'modal closes under stationary pointer');
+    await until(() => parkedPointerFrames(log().slice(closedOffset), currentPoint.x, currentPoint.y), 'stationary pointer released to scene after modal closes');
+    const stationaryStarts = starts();
+    // Deliberately no mousemove before the native press.
+    try {
+        xdo('mousedown', '1'); await pause(300);
+        xdo('mousemove', '--window', windowId, currentPoint.x + 1, currentPoint.y + 1);
+        await pause(300);
+    } finally { xdo('mouseup', '1'); }
+    await until(() => undo.isEnabled(), 'stationary-origin stroke committed');
+    assert.equal(starts().paint, stationaryStarts.paint + 1, 'modal hover must not replay a paint stroke');
+    const stationaryFrame = await capture('paint-stationary-origin');
+    let nearbyMagenta = 0, distantMagenta = 0;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const offset = (y * width + x) * 3;
+        const [r, g, b] = stationaryFrame.pixels.subarray(offset, offset + 3);
+        const changed = [0, 1, 2].some(c => Math.abs(stationaryFrame.pixels[offset + c] - afterUndo.pixels[offset + c]) > 20);
+        if (changed && r > g + 25 && b > g + 25) {
+            if (Math.hypot(x - currentPoint.x, y - currentPoint.y) <= 80) nearbyMagenta++;
+            else distantMagenta++;
+        }
+    }
+    assert.ok(nearbyMagenta > 100, 'stationary press must paint at the current pointer');
+    assert.ok(distantMagenta <= 20, 'stationary press painted a connecting line from stale scene hover');
+    await nativeClick(undo); await until(() => undo.isDisabled(), 'stationary-origin Undo');
+    const stationaryUndo = await capture('paint-stationary-origin-undo');
+    const stationaryUndoDelta = difference(afterUndo, stationaryUndo);
+    assert.ok(stationaryUndoDelta.mean_max_channel_difference < 2, 'stationary-origin Undo did not restore canvas');
+    record('paint_stationary_press_after_ui_closes', { current_point: currentPoint, nearby_magenta: nearbyMagenta, distant_magenta: distantMagenta, undo: stationaryUndoDelta, screenshot: stationaryFrame.screenshot, undo_screenshot: stationaryUndo.screenshot });
     // Project a nonempty real source stroke after proving actual canvas Undo.
     await drag(width * .43, height * .52, 90, -25);
     await until(() => undo.isEnabled(), 'second canvas stroke committed before projection');

@@ -35,6 +35,11 @@ three unchanged captures at both endpoints, compares the pixels that actually
 deformed, and requires both visible motion and restoration within measured frame
 noise. Escape is tested only after visible active-stroke deformation is established.
 The helper's synthetic negative tests cannot substitute for this native run.
+Input regressions also commit an out-of-range radius while the current value is
+already at its upper bound, checking the number, slider and actual preset receipt.
+After a modal closes under a stationary pointer, a native press and one-pixel
+move must paint locally at that pointer, with no line from the old scene hover;
+Undo must restore the preceding canvas. UI-owned hover is never replayed.
 It uses the default scene's sphere and default camera as a reproducible fixture.
 A failed stage produces a failure result and screenshot; it must not be reported
 as an interaction pass just because the window appeared.

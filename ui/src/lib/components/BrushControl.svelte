@@ -7,9 +7,12 @@
     let displayed = $state(0);
     $effect(() => { displayed = value; });
     function change(event: Event) {
-        const next = (event.currentTarget as HTMLInputElement).valueAsNumber;
+        const input = event.currentTarget as HTMLInputElement;
+        const next = input.valueAsNumber;
         if (Number.isFinite(next)) {
             displayed = Math.min(max, Math.max(min, next));
+            // Equal state assignments do not rewrite a one-way DOM value.
+            input.value = String(displayed);
             onchange(displayed);
         }
     }
