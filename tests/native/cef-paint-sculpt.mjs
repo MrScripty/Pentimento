@@ -148,6 +148,18 @@ async function failureDiagnostics() {
             return {
                 width: innerWidth, height: innerHeight, pixel_ratio: devicePixelRatio,
                 active_element: describe(document.activeElement),
+                active_input: document.activeElement instanceof HTMLInputElement ? {
+                    type: document.activeElement.type,
+                    value: document.activeElement.value,
+                    value_as_number: Number.isFinite(document.activeElement.valueAsNumber)
+                        ? document.activeElement.valueAsNumber : null,
+                    bad_input: document.activeElement.validity.badInput,
+                    range_overflow: document.activeElement.validity.rangeOverflow,
+                    range_underflow: document.activeElement.validity.rangeUnderflow,
+                    step_mismatch: document.activeElement.validity.stepMismatch,
+                    selection_start: document.activeElement.selectionStart,
+                    selection_end: document.activeElement.selectionEnd,
+                } : null,
                 sculpt_point: point,
                 sculpt_hit_element: point ? describe(document.elementFromPoint(point.x, point.y)) : null,
                 headings: [...document.querySelectorAll('h1,h2,h3')].map(element => element.textContent),
