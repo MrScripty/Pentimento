@@ -5,9 +5,10 @@ import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedSt
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
     assert.equal(cefFramebufferReceipt('CEF webview ready'), null);
-    assert.equal(cefFramebufferReceipt('First capture (Cef mode): 100x100, non-transparent pixels: 100'), null);
-    assert.equal(cefFramebufferReceipt('CEF webview ready\nFirst capture (Cef mode): 100x100, non-transparent pixels: 0'), null);
-    assert.deepEqual(cefFramebufferReceipt('CEF webview ready\nFirst capture (Cef mode): 100x100, non-transparent pixels: 100'), { width: 100, height: 100, painted_pixels: 100 });
+    assert.equal(cefFramebufferReceipt('CEF webview ready\nFirst capture (Cef mode): 100x100, non-transparent pixels: 100'), null);
+    assert.equal(cefFramebufferReceipt('First painted capture (Cef mode): 100x100, non-transparent pixels: 100'), null);
+    assert.equal(cefFramebufferReceipt('CEF webview ready\nFirst painted capture (Cef mode): 100x100, non-transparent pixels: 0'), null);
+    assert.deepEqual(cefFramebufferReceipt('CEF webview ready\nFirst painted capture (Cef mode): 100x100, non-transparent pixels: 100'), { width: 100, height: 100, painted_pixels: 100 });
 });
 
 test('completion waits for the exact transaction after finalization', () => {
@@ -42,4 +43,11 @@ test('visible sculpt and a new branch require accepted finalization', () => {
     for (const outcome of ['no_change', 'rejected', 'cancelled']) {
         assert.throws(() => assertAcceptedStroke({ ...accepted, outcome }, 'visible sculpt'), /must be accepted/);
     }
+});
+
+test('transparent initial capture waits for the first nonempty uploaded capture', () => {
+    const initial = 'CEF webview ready\nFirst capture (Cef mode): 1920x1080, non-transparent pixels: 0';
+    assert.equal(cefFramebufferReceipt(initial), null);
+    assert.equal(cefFramebufferReceipt(`${initial}\nFirst painted capture (Cef mode): 1920x1080, non-transparent pixels: 0`), null);
+    assert.deepEqual(cefFramebufferReceipt(`${initial}\nFirst painted capture (Cef mode): 1920x1080, non-transparent pixels: 410000`), { width: 1920, height: 1080, painted_pixels: 410000 });
 });

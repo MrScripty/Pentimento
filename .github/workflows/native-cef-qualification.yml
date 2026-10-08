@@ -82,6 +82,8 @@ jobs:
           export LD_LIBRARY_PATH="$cef_input_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cargo test --locked -p pentimento --features cef input:: -- --nocapture \
             2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/input-tests.log"
+          cargo test --locked -p pentimento --features cef render::framebuffer_receipt_tests:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/framebuffer-receipt-tests.log"
       - name: Exercise actual native input, panels, painting and sculpting
         shell: bash
         run: |

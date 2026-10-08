@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 export function cefFramebufferReceipt(log) {
     if (!log.includes('CEF webview ready')) return null;
-    const match = log.match(/First capture \(Cef mode\): (\d+)x(\d+), non-transparent pixels: (\d+)/);
+    const match = log.match(/First painted capture \(Cef mode\): (\d+)x(\d+), non-transparent pixels: (\d+)/);
     if (!match) return null;
     const [, width, height, painted] = match.map(Number);
     if (width <= 0 || height <= 0 || painted <= 0 || painted > width * height) return null;
