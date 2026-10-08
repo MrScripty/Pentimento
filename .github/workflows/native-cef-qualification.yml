@@ -91,10 +91,10 @@ jobs:
           unset WAYLAND_DISPLAY CARGO_TARGET_DIR
           export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name '*lvp*.json' -print -quit)"
           test -n "$VK_ICD_FILENAMES"
-          # Full history/capture checks take about five minutes on software OSR.
-          # Allow the remaining original toolset cases; per-condition limits stay 30s.
+          # The original software-OSR cases plus clamp and stationary-origin
+          # regressions exceed ten minutes; per-condition limits remain 30s.
           xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' \
-            timeout --signal=TERM --kill-after=10s 600s \
+            timeout --signal=TERM --kill-after=10s 900s \
             node tests/native/cef-paint-sculpt.mjs 2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/test.log"
       - name: Retain inspected evidence and exact resolved dependency graph
         if: always()
