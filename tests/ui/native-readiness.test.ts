@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
@@ -136,5 +136,49 @@ test('native clicks reject offscreen targets instead of letting X11 clamp to ano
     assert.doesNotThrow(() => assertNativeClickBounds({ x: 35, y: 700, width: 150, height: 34 }, 1920, 1080));
     for (const rect of [{ x: 35, y: 1300, width: 150, height: 34 }, { x: 1900, y: 100, width: 150, height: 34 }, { x: -1, y: 0, width: 150, height: 34 }]) {
         assert.throws(() => assertNativeClickBounds(rect, 1920, 1080), /outside the viewport/);
+    }
+});
+
+
+test('Ctrl+Tab emits one trigger tap and retains Ctrl through backend acknowledgement', async () => {
+    const calls = [];
+    await tapNativeShortcut('ctrl', 'Tab', () => true, 'exit', {
+        send: (action, key) => calls.push(`${action}:${key}`),
+        pause: async () => {},
+        wait: async observed => {
+            assert.deepEqual(calls, ['keydown:ctrl', 'keydown:Tab', 'keyup:Tab']);
+            assert.equal(observed(), true);
+            calls.push('acknowledged');
+        },
+        releaseFailed: () => assert.fail('unexpected release failure'),
+    });
+    assert.deepEqual(calls, ['keydown:ctrl', 'keydown:Tab', 'keyup:Tab', 'acknowledged', 'keyup:ctrl']);
+});
+
+test('every shortcut failure path attempts owned key release without hiding the original error', async () => {
+    for (const failure of ['modifier-down', 'trigger-down', 'trigger-up', 'receipt', 'modifier-up', 'receipt-and-modifier-up']) {
+        const calls = [];
+        const primary = new Error(failure);
+        await assert.rejects(tapNativeShortcut('ctrl', 'Tab', () => false, 'exit', {
+            send: (action, key) => {
+                const event = `${action}:${key}`;
+                calls.push(event);
+                if ((failure === 'modifier-down' && event === 'keydown:ctrl')
+                    || (failure === 'trigger-down' && event === 'keydown:Tab')
+                    || (failure === 'trigger-up' && event === 'keyup:Tab')
+                    || (failure === 'modifier-up' && event === 'keyup:ctrl')) throw primary;
+                if (failure === 'receipt-and-modifier-up' && event === 'keyup:ctrl') throw new Error('cleanup failure');
+            },
+            pause: async () => {},
+            wait: async () => { if (failure.startsWith('receipt')) throw primary; },
+            releaseFailed: () => calls.push('cleanup failure recorded'),
+        }), error => error === primary);
+        const releaseCtrl = calls.indexOf('keyup:ctrl');
+        assert.ok(releaseCtrl >= 0, failure);
+        if (failure !== 'modifier-down') {
+            assert.ok(calls.indexOf('keyup:Tab') >= 0 && releaseCtrl > calls.indexOf('keyup:Tab'), failure);
+            assert.equal(calls.filter(call => call === 'keydown:Tab').length, 1, failure);
+        }
+        if (failure === 'receipt-and-modifier-up') assert.ok(calls.includes('cleanup failure recorded'));
     }
 });

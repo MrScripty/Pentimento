@@ -8,7 +8,7 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -131,10 +131,12 @@ async function drag(x, y, dx, dy) {
     xdo('mouseup', '1'); await pause(400);
 }
 async function key(value, observed, description) {
-    return holdNativeKey(value, observed, description, {
+    const transport = {
         send: (action, key) => xdo(action, key), wait: until, pause,
         releaseFailed: error => console.error(JSON.stringify({ type: 'pentimento.cef.input_release_failed', key: value, error: String(error) })),
-    });
+    };
+    if (value === 'ctrl+Tab') return tapNativeShortcut('ctrl', 'Tab', observed, description, transport);
+    return holdNativeKey(value, observed, description, transport);
 }
 
 async function failureDiagnostics() {
@@ -148,6 +150,7 @@ async function failureDiagnostics() {
             } : null;
             return {
                 width: innerWidth, height: innerHeight, pixel_ratio: devicePixelRatio,
+                native_input_events: window.__PENTIMENTO_NATIVE_INPUT_EVIDENCE__ ?? null,
                 active_element: describe(document.activeElement),
                 active_input: document.activeElement instanceof HTMLInputElement ? {
                     type: document.activeElement.type,
@@ -203,6 +206,22 @@ try {
     browser = await chromium.connectOverCDP(endpoint);
     page = await until(() => browser.contexts().flatMap(context => context.pages()).find(page => page.url().startsWith('data:text/html')), 'actual CEF UI page');
     await page.getByRole('button', { name: 'Reset Camera', exact: true }).waitFor();
+    // Read-only trace: no input dispatch, focus changes, or backend commands.
+    await page.evaluate(() => {
+        const evidence = { keys: [], focus: [] };
+        window.__PENTIMENTO_NATIVE_INPUT_EVIDENCE__ = evidence;
+        for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
+            evidence.keys.push({ type, key: event.key, code: event.code, ctrl: event.ctrlKey,
+                shift: event.shiftKey, alt: event.altKey, meta: event.metaKey, repeat: event.repeat,
+                target: event.target?.tagName ?? null, time: performance.now() });
+            if (evidence.keys.length > 128) evidence.keys.shift();
+        });
+        document.addEventListener('focusin', event => {
+            evidence.focus.push({ target: event.target?.tagName ?? null, id: event.target?.id ?? null, time: performance.now() });
+            if (evidence.focus.length > 32) evidence.focus.shift();
+        });
+    });
+
     await until(() => page.evaluate(() => typeof window.ipc?.postMessage === 'function' && typeof window.__PENTIMENTO_RECEIVE__ === 'function'), 'real native bridge readiness');
     stage = 'cef_framebuffer_readiness';
     const framebuffer = await until(() => cefFramebufferReceipt(log()), 'CEF first painted framebuffer (DOM readiness alone is insufficient)', 30000);
@@ -389,7 +408,7 @@ try {
     record('projection_controls', { live_projection: true, applied: true, engine_event_log: true });
 
     stage = 'complete';
-    writeFileSync(`${out}/result.json`, JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', commit: command('git', ['rev-parse', 'HEAD']).toString().trim(), records }, null, 2));
+    writeFileSync(`${out}/result.json`, JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', commit: command('git', ['rev-parse', 'HEAD']).toString().trim(), records, native_input_events: (await failureDiagnostics())?.native_input_events ?? null }, null, 2));
     console.log(JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', checks: records.length }));
 } catch (error) {
     if (windowId && width && height) { try { await capture('failure', { synchronize: false }); } catch {} }

@@ -78,20 +78,22 @@ export function parkedPointerFrames(log, x, y) {
 // Preserve native key-down/up ordering, holding modifiers until the existing
 // backend acknowledgement arrives. A deadline/error must always release keys.
 export async function holdNativeKey(value, observed, description, { send, wait, pause, releaseFailed }) {
-    let primaryError;
+    let failed = false;
+    let failure;
     try {
         send('keydown', value);
         await pause(200);
         if (observed) await wait(observed, description);
     } catch (error) {
-        primaryError = error;
-        throw error;
+        failed = true;
+        failure = error;
     } finally {
         try { send('keyup', value); } catch (error) {
-            if (!primaryError) throw error;
-            releaseFailed(error);
+            if (failed) releaseFailed(error);
+            else { failed = true; failure = error; }
         }
     }
+    if (failed) throw failure;
     await pause(350);
 }
 
@@ -100,4 +102,38 @@ export function assertNativeClickBounds(rect, width, height) {
         && rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0
         && rect.x + rect.width <= width && rect.y + rect.height <= height,
     `Native click target lies outside the viewport: ${JSON.stringify(rect)} in ${width}x${height}`);
+}
+
+// Tap the trigger once, retaining only the modifier while the backend catches
+// up. Holding Tab permits OS repeats; releasing ctrl+Tab in that order can also
+// leave Tab briefly unmodified. Both can change browser keyboard ownership.
+export async function tapNativeShortcut(modifier, trigger, observed, description, { send, wait, pause, releaseFailed }) {
+    assert.equal(typeof observed, 'function', 'A native shortcut needs a bounded backend receipt');
+    let triggerNeedsRelease = false;
+    let failed = false;
+    let failure;
+    try {
+        send('keydown', modifier);
+        triggerNeedsRelease = true;
+        send('keydown', trigger);
+        send('keyup', trigger);
+        triggerNeedsRelease = false;
+        await pause(200);
+        await wait(observed, description);
+    } catch (error) {
+        failed = true;
+        failure = error;
+    } finally {
+        const releaseErrors = [];
+        if (triggerNeedsRelease) {
+            try { send('keyup', trigger); } catch (error) { releaseErrors.push(error); }
+        }
+        try { send('keyup', modifier); } catch (error) { releaseErrors.push(error); }
+        for (const error of releaseErrors) {
+            if (failed) releaseFailed(error);
+            else { failed = true; failure = error; }
+        }
+    }
+    if (failed) throw failure;
+    await pause(350);
 }
