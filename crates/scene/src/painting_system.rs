@@ -244,7 +244,7 @@ impl Plugin for PaintingSystemPlugin {
                 Update,
                 (
                     setup_canvas_textures,
-                    process_paint_events,
+                    process_paint_events.after(crate::paint_mode::handle_paint_input),
                     extract_dirty_tiles,
                 )
                     .chain(),

@@ -559,6 +559,47 @@ impl SculptingPipeline {
     pub fn history_notice(&self) -> Option<&str> {
         self.history_notice.as_deref()
     }
+
+    /// Admit an explicitly supplied external edit as a fresh session baseline.
+    ///
+    /// Finish or cancel the active transaction first. This operation refuses
+    /// active (including rejected) strokes and validates the complete mesh with
+    /// the current safety policy before releasing any history or cache state.
+    /// It never changes geometry or emits replay packets. A failed reset leaves
+    /// history, notices, and admissions unchanged.
+    pub fn reset_history(
+        &mut self,
+        mesh_id: u32,
+        mesh: &mut ChunkedMesh,
+        notice: Option<String>,
+    ) -> Result<(), SafetyError> {
+        if self.stroke_active() {
+            return Err(SafetyError::Topology(
+                "finish or cancel the active stroke before resetting history".into(),
+            ));
+        }
+        mesh.validate_snapshot_identity()?;
+        let surface = Surface::read(mesh)?;
+        surface.validate()?;
+        let witness = Arc::new(GeometryWitness::capture(mesh));
+        // External edits may leave derived bounds and spatial lookup stale.
+        // Prepare a detached replacement before publishing any state.
+        let mut prepared = mesh.clone();
+        for chunk in prepared.chunks.values_mut() {
+            chunk.recalculate_bounds();
+            chunk.mark_topology_changed();
+        }
+        prepared.rebuild_spatial_grid();
+
+        *mesh = prepared;
+        self.chunk_octrees.clear();
+        self.history.clear();
+        self.history_owner = Some(mesh_id);
+        self.history_notice = notice;
+        self.last_admitted_surface = Some((mesh_id, surface, witness));
+        self.budget.update_current(mesh.total_vertex_count());
+        Ok(())
+    }
     pub fn stroke_active(&self) -> bool {
         self.active_stroke_state.is_some()
     }
@@ -1389,6 +1430,127 @@ mod native_history_tests {
         assert!(pipeline.restore_history(&mut mesh, false).is_err());
         assert!(edited.same_authoritative_state(&mesh));
         assert_eq!(status, pipeline.history_status());
+    }
+    #[test]
+    fn native_history_reset_admits_valid_external_baseline_without_replay() {
+        let (mut mesh, mut pipeline) = fixture();
+        stroke(&mut pipeline, &mut mesh);
+        assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+        assert_eq!(pipeline.history_status().redo_strokes, 1);
+        mesh.next_original_vertex_id += 1;
+        let external = mesh.clone();
+        pipeline
+            .reset_history(
+                7,
+                &mut mesh,
+                Some("External edit: local history cleared.".into()),
+            )
+            .unwrap();
+        assert!(mesh.same_authoritative_state(&external));
+        assert_eq!(pipeline.history_status().undo_strokes, 0);
+        assert_eq!(pipeline.history_status().redo_strokes, 0);
+        assert_eq!(pipeline.history_status().retained_snapshot_bytes, 0);
+        assert_eq!(
+            pipeline.history_notice(),
+            Some("External edit: local history cleared.")
+        );
+        assert!(pipeline.end_stroke(&mut mesh).packets.is_empty());
+        assert!(!pipeline.restore_history(&mut mesh, false).unwrap());
+        stroke(&mut pipeline, &mut mesh);
+        assert_eq!(pipeline.history_status().undo_strokes, 1);
+        assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+        assert!(mesh.same_authoritative_state(&external));
+    }
+    #[test]
+    fn native_history_reset_refuses_active_and_invalid_mesh_atomically() {
+        let (mut mesh, mut pipeline) = fixture();
+        stroke(&mut pipeline, &mut mesh);
+        let status = pipeline.history_status();
+        let before = mesh.clone();
+        pipeline.begin_stroke(7, input(0.));
+        pipeline.history_notice = Some("existing notice".into());
+        assert!(pipeline.reset_history(7, &mut mesh, None).is_err());
+        assert!(pipeline.stroke_active());
+        assert_eq!(pipeline.history_status(), status);
+        assert_eq!(pipeline.history_notice(), Some("existing notice"));
+        assert!(mesh.same_authoritative_state(&before));
+        pipeline.cancel_stroke(&mut mesh);
+        let mut invalid = mesh.clone();
+        invalid.next_original_vertex_id = 0;
+        assert!(pipeline.reset_history(7, &mut invalid, None).is_err());
+        assert_eq!(pipeline.history_status(), status);
+        let mut invalid = mesh.clone();
+        invalid
+            .chunks
+            .values_mut()
+            .next()
+            .unwrap()
+            .mesh
+            .vertex_mut(painting::half_edge::VertexId(0))
+            .unwrap()
+            .position
+            .x = f32::NAN;
+        assert!(pipeline.reset_history(7, &mut invalid, None).is_err());
+        assert_eq!(pipeline.history_status(), status);
+        assert_eq!(pipeline.history_notice(), Some("existing notice"));
+        assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+    }
+    #[test]
+    fn native_history_reset_rebuilds_stale_bounds_after_external_translation() {
+        let (mut mesh, mut pipeline) = fixture();
+        stroke(&mut pipeline, &mut mesh);
+        for chunk in mesh.chunks.values_mut() {
+            for index in 0..chunk.mesh.vertices().len() {
+                if let Some(vertex) = chunk
+                    .mesh
+                    .vertex_mut(painting::half_edge::VertexId(index as u32))
+                {
+                    vertex.position += Vec3::X * 10.;
+                }
+            }
+        }
+        let external = mesh.clone();
+        pipeline.reset_history(7, &mut mesh, None).unwrap();
+        assert!(mesh.same_authoritative_state(&external));
+        let mut dab = input(10.);
+        pipeline.begin_stroke(7, dab);
+        dab.position.x += 0.01;
+        let result = pipeline.process_input(dab, &mut mesh);
+        assert!(result.rejected.is_none(), "{:?}", result.rejected);
+        assert!(
+            result.vertices_modified > 0,
+            "translated mesh must be discoverable"
+        );
+        let end = pipeline.end_stroke(&mut mesh);
+        assert!(end.rejected.is_none(), "{:?}", end.rejected);
+        assert!(!end.packets.is_empty());
+        assert_eq!(pipeline.history_status().undo_strokes, 1);
+        assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+        assert!(mesh.same_authoritative_state(&external));
+    }
+    #[test]
+    fn native_history_reset_does_not_admit_a_conflicting_stroke() {
+        let (mut mesh, mut pipeline) = fixture();
+        stroke(&mut pipeline, &mut mesh);
+        mesh.next_original_vertex_id += 1;
+        let external = mesh.clone();
+        pipeline.begin_stroke(7, input(0.));
+        assert!(
+            pipeline
+                .process_input(input(0.01), &mut mesh)
+                .rejected
+                .is_some()
+        );
+        assert!(pipeline.reset_history(7, &mut mesh, None).is_err());
+        let end = pipeline.end_stroke(&mut mesh);
+        assert!(end.rejected.is_some());
+        assert!(end.packets.is_empty());
+        assert!(mesh.same_authoritative_state(&external));
+        assert_eq!(pipeline.history_status().undo_strokes, 1);
+        pipeline.reset_history(7, &mut mesh, None).unwrap();
+        stroke(&mut pipeline, &mut mesh);
+        assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+        assert!(mesh.same_authoritative_state(&external));
     }
     #[test]
     fn native_history_revalidates_invalid_target_without_partial_swap() {
