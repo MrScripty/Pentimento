@@ -471,7 +471,10 @@ try {
     const pristineTarget = await inspectReceiver('projection-target-before');
     await returnToCanvas();
     await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '14');
-    await fill(page.getByRole('spinbutton', { name: 'Opacity value', exact: true }), '45');
+    // This metallic receiver produced only16RGBunits of change at45%opacity.
+    // Use a real opaque brush commit for visible inspection; keep the strict
+    // receiver mask, magenta threshold and calibrated history oracle unchanged.
+    await fill(page.getByRole('spinbutton', { name: 'Opacity value', exact: true }), '100');
     await clickAt(35, height - 35);
     // Paint over the real sphere, rather than an arbitrary background location.
     await drag(sculptPoint.x - 35, sculptPoint.y - 10, 70, 0);
