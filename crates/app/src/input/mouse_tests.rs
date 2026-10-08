@@ -836,6 +836,74 @@ fn native_paint_control() -> Vec<u8> {
 fn native_paint_separate_frame_positive_control() {
     native_paint_control();
 }
+
+#[test]
+fn native_paint_fine_moves_cover_the_continuous_path_and_undo_exactly() {
+    let (mut app, window) = native_paint_fixture();
+    {
+        let mut paint = app
+            .world_mut()
+            .resource_mut::<pentimento_scene::PaintingResource>();
+        paint.set_brush_color([1., 0., 1., 1.]);
+        let mut preset = paint.brush_preset.clone();
+        preset.base_size = 8.;
+        preset.min_size = 8.;
+        preset.max_size = 8.;
+        preset.hardness = 1.;
+        preset.spacing = 0.25;
+        paint.set_brush_preset(preset);
+    }
+    let before = native_paint_pixels(&app);
+    let mut events = vec![
+        moved(window, 300., 500.),
+        button(window, bevy::input::mouse::MouseButton::Left, true),
+    ];
+    // Each three-pixel native movement is below half a dab spacing after the
+    // real fixture camera projects it into this 128px canvas.
+    for x in (303..=570).step_by(3) {
+        events.push(moved(window, x as f32, 500.));
+    }
+    events.push(button(window, bevy::input::mouse::MouseButton::Left, false));
+    native_batch(&mut app, &events);
+    assert_native_paint_complete(&app, 1);
+    // Locate the screen path through the real fixture camera. The canvas is the
+    // four-unit identity XY rectangle used by native_paint_fixture.
+    let world = app.world_mut();
+    let mut cameras =
+        world.query_filtered::<(&Camera, &GlobalTransform), With<pentimento_scene::MainCamera>>();
+    let (camera, transform) = cameras.single(world).unwrap();
+    for x in (300..=570).step_by(3) {
+        let ray = camera
+            .viewport_to_world(transform, Vec2::new(x as f32, 500.))
+            .unwrap();
+        let point = ray.origin + ray.direction * (-ray.origin.z / ray.direction.z);
+        let px = ((point.x / 4. + 0.5) * 128.).floor() as usize;
+        let py = ((-point.y / 4. + 0.5) * 128.).floor() as usize;
+        let pixel = world
+            .resource::<pentimento_scene::PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .get_pixel(px as u32, py as u32)
+            .unwrap();
+        assert_eq!(
+            pixel,
+            [1., 0., 1., 1.],
+            "unpainted path at screen {x}, canvas ({px},{py})"
+        );
+    }
+    assert!(
+        app.world_mut()
+            .resource_mut::<pentimento_scene::PaintingResource>()
+            .get_pipeline_mut(7)
+            .unwrap()
+            .undo()
+    );
+    app.update();
+    assert!(
+        native_paint_pixels(&app) == before,
+        "undo must restore the complete fine-movement stroke"
+    );
+}
 #[test]
 fn native_paint_complete_gesture_then_focus_loss_preserves_valid_prefix() {
     let expected = native_paint_control();

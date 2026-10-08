@@ -167,6 +167,51 @@ mod tests {
     }
 
     #[test]
+    fn small_pointer_moves_paint_the_same_continuous_stroke_as_one_long_move() {
+        fn paint(step: usize) -> PaintingPipeline {
+            let mut pipeline = PaintingPipeline::new(192, 128);
+            pipeline.clear([0., 0., 0., 0.]);
+            pipeline.set_color([1., 0., 1., 1.]);
+            pipeline.set_brush(BrushPreset {
+                base_size: 48.,
+                min_size: 48.,
+                max_size: 48.,
+                spacing: 0.25,
+                hardness: 1.,
+                opacity: 1.,
+                ..Default::default()
+            });
+            pipeline.begin_stroke(7, 1, 0);
+            pipeline.stroke_to(40., 64., 1.);
+            for x in (40 + step..=136).step_by(step) {
+                pipeline.stroke_to(x as f32, 64., 1.);
+            }
+            pipeline.end_stroke();
+            pipeline.take_dirty_tiles();
+            pipeline
+        }
+        // Three-pixel events are below half of the twelve-pixel dab spacing.
+        let mut fine = paint(3);
+        let coarse = paint(96);
+        assert!(
+            fine.surface_as_bytes() == coarse.surface_as_bytes(),
+            "input cadence must not discard travelled distance"
+        );
+        for x in 40..=136 {
+            assert_eq!(
+                fine.get_pixel(x, 64).unwrap(),
+                [1., 0., 1., 1.],
+                "gap at x={x}"
+            );
+        }
+        assert_eq!(fine.undo_count(), 1);
+        assert_eq!(fine.log().total_packet_count(), 1);
+        assert!(fine.undo());
+        fine.take_dirty_tiles();
+        assert!(fine.surface_as_bytes().iter().all(|&v| v == 0));
+    }
+
+    #[test]
     fn cancelled_stroke_restores_owned_layer_and_preserves_prior_undo() {
         let mut pipeline = PaintingPipeline::new(128, 128);
         pipeline.clear([0., 0., 0., 0.]);
