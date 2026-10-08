@@ -66,3 +66,11 @@ out. The subsequent local shortcut repair has a failing-before production input
 regression and 35 passing input tests, including exact pixels for batched history
 chords. It remains unqualified in the native renderer; no new hosted runs were
 requested after the owner's CI spending constraint.
+
+The reviewed shortcut fix is published as commit
+`b5ce1e720f7f97905af6204e4c5664553bd739f5`, followed by this documentation-only
+publication note. Local checks pass 35 production input tests and 50 Node tests;
+independent review passes all 35 input tests and 15 native readiness tests.
+The publication commit skips hosted CI under the owner's spending constraint.
+Skipped checks are pending; this does not qualify the native shortcut or make
+the successor's hosted checks green.
