@@ -24,11 +24,11 @@ vello = { workspace = true }
 # Re-export wgpu types for the renderer interface
 wgpu = "27"
 
-# Blitz rendering pipeline (use git for anyrender 0.7 compatibility)
-blitz-dom = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
-blitz-paint = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
-blitz-traits = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
-dioxus-native-dom = { git = "https://github.com/DioxusLabs/blitz.git", branch = "main" }
+# Blitz rendering pipeline: keep the AnyRender 0.7 / Vello 0.7 / wgpu 27 cohort together.
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
+dioxus-native-dom = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
 
 # AnyRender - the 2D drawing abstraction
 anyrender = "0.7"
