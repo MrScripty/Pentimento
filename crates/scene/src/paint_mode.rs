@@ -163,7 +163,7 @@ fn handle_paint_mode_toggle(
 }
 
 /// Handle paint input (left mouse button for strokes)
-fn handle_paint_input(
+pub(super) fn handle_paint_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut cursor_events: MessageReader<CursorMoved>,

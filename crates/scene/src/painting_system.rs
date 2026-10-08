@@ -21,6 +21,10 @@ use pentimento_ipc::{BevyToUi, BlendMode as IpcBlendMode, LayerInfo};
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
 use crate::paint_mode::PaintEvent;
 
+#[cfg(test)]
+#[path = "paint_input_batch_tests.rs"]
+mod paint_input_batch_tests;
+
 /// Resource holding painting pipelines for each canvas plane
 ///
 /// Each canvas plane gets its own painting pipeline, indexed by plane_id.
