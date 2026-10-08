@@ -483,6 +483,8 @@ run_verification_suite() {
         ./scripts/rustfmt-active.sh --check
         ./scripts/test-paint-sculpt-tools.sh --engine-only
         npm run verify
+        # RustEmbed requires the shared UI assets before checking native frontends.
+        build_ui
         cargo check -p pentimento --features egui
         cargo check -p pentimento --features dioxus
         cargo check -p pentimento --features cef
