@@ -15,6 +15,8 @@ const records = [];
 let stage = 'launch';
 let app;
 let browser;
+let page;
+let sculptPoint;
 let windowId;
 let width;
 let height;
@@ -98,7 +100,55 @@ async function drag(x, y, dx, dy) {
     }
     xdo('mouseup', '1'); await pause(400);
 }
-async function key(value) { xdo('key', '--clearmodifiers', value); await pause(350); }
+async function key(value, observed, description) {
+    // Keep modifiers pressed across a rendered frame. A complete short chord
+    // can otherwise be batched with its release before Bevy samples pressed().
+    let primaryError;
+    try {
+        xdo('keydown', value);
+        await pause(200);
+        if (observed) await until(observed, description);
+    } catch (error) {
+        primaryError = error;
+        throw error;
+    } finally {
+        try { xdo('keyup', value); } catch (error) {
+            if (!primaryError) throw error;
+            console.error(JSON.stringify({ type: 'pentimento.cef.input_release_failed', key: value, error: String(error) }));
+        }
+    }
+    await pause(350);
+}
+
+async function failureDiagnostics() {
+    if (!page) return null;
+    let timer;
+    try {
+        return await Promise.race([page.evaluate(point => {
+            const describe = element => element ? {
+                tag: element.tagName, id: element.id, role: element.getAttribute('role'),
+                classes: element.getAttribute('class'),
+            } : null;
+            return {
+                width: innerWidth, height: innerHeight, pixel_ratio: devicePixelRatio,
+                active_element: describe(document.activeElement),
+                sculpt_point: point,
+                sculpt_hit_element: point ? describe(document.elementFromPoint(point.x, point.y)) : null,
+                headings: [...document.querySelectorAll('h1,h2,h3')].map(element => element.textContent),
+                alerts: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent),
+                brush_panels: [...document.querySelectorAll('.brush-panel')].map(element => element.textContent),
+                regions: [...document.querySelectorAll('.toolbar,.side-panel,.brush-panel,.add-menu-backdrop')].map(element => {
+                    const rect = element.getBoundingClientRect();
+                    return { ...describe(element), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                }),
+            };
+        }, sculptPoint ?? null), new Promise(resolve => {
+            timer = setTimeout(() => resolve({ unavailable: 'Renderer diagnostics timed out' }), 2000);
+        })]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 try {
     const logFd = openSync(appLog, 'w');
@@ -121,7 +171,7 @@ try {
     width = Number(geometry.match(/^WIDTH=(\d+)$/m)[1]); height = Number(geometry.match(/^HEIGHT=(\d+)$/m)[1]);
     xdo('windowfocus', '--sync', windowId);
     browser = await chromium.connectOverCDP(endpoint);
-    const page = await until(() => browser.contexts().flatMap(context => context.pages()).find(page => page.url().startsWith('data:text/html')), 'actual CEF UI page');
+    page = await until(() => browser.contexts().flatMap(context => context.pages()).find(page => page.url().startsWith('data:text/html')), 'actual CEF UI page');
     await page.getByRole('button', { name: 'Reset Camera', exact: true }).waitFor();
     await until(() => page.evaluate(() => typeof window.ipc?.postMessage === 'function' && typeof window.__PENTIMENTO_RECEIVE__ === 'function'), 'real native bridge readiness');
     await pause(2000);
@@ -140,7 +190,10 @@ try {
     const depth = dot(delta, forward); const focal = height / (2 * Math.tan(Math.PI / 8));
     const sx = width / 2 + focal * dot(delta, right) / depth;
     const sy = height / 2 - focal * dot(delta, up) / depth;
-    await clickAt(sx, sy); await key('ctrl+Tab');
+    sculptPoint = { x: sx, y: sy };
+    await clickAt(sx, sy);
+    await key('ctrl+Tab', () => log().includes('Entered sculpt mode for entity'), 'native sculpt mode entry');
+    stage = 'sculpt_panel';
     await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
     await nativeClick(page.getByRole('button', { name: 'Grab', exact: true }));
     await until(() => page.getByRole('button', { name: 'Grab', exact: true }).getAttribute('aria-pressed').then(value => value === 'true'), 'backend Grab selection');
@@ -217,7 +270,9 @@ try {
     console.log(JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', checks: records.length }));
 } catch (error) {
     if (windowId && width && height) { try { await capture('failure'); } catch {} }
-    const result = { type: 'pentimento.cef.result', status: 'failed', stage, error: String(error), records };
+    let diagnostics = null;
+    try { diagnostics = await failureDiagnostics(); } catch {}
+    const result = { type: 'pentimento.cef.result', status: 'failed', stage, error: String(error), records, diagnostics };
     writeFileSync(`${out}/result.json`, JSON.stringify(result, null, 2)); console.error(JSON.stringify(result)); process.exitCode = 1;
 } finally {
     if (browser) await browser.close().catch(() => {});
