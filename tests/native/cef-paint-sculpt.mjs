@@ -8,7 +8,7 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -111,6 +111,7 @@ async function clickAt(x, y) {
 async function nativeClick(locator) {
     await locator.waitFor({ state: 'visible' });
     const box = await locator.boundingBox(); assert.ok(box);
+    assertNativeClickBounds(box, width, height);
     await clickAt(box.x + box.width / 2, box.y + box.height / 2);
 }
 async function fill(locator, value) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
@@ -128,5 +128,13 @@ test('native chord releases in finally and preserves the original timeout', asyn
             releaseFailed: () => calls.push('release failure recorded'),
         }), error => error === timeout);
         assert.deepEqual(calls, releaseThrows ? ['keydown', 'keyup', 'release failure recorded'] : ['keydown', 'keyup']);
+    }
+});
+
+
+test('native clicks reject offscreen targets instead of letting X11 clamp to another item', () => {
+    assert.doesNotThrow(() => assertNativeClickBounds({ x: 35, y: 700, width: 150, height: 34 }, 1920, 1080));
+    for (const rect of [{ x: 35, y: 1300, width: 150, height: 34 }, { x: 1900, y: 100, width: 150, height: 34 }, { x: -1, y: 0, width: 150, height: 34 }]) {
+        assert.throws(() => assertNativeClickBounds(rect, 1920, 1080), /outside the viewport/);
     }
 });

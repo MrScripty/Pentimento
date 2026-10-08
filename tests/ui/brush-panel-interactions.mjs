@@ -121,6 +121,45 @@ await page.setViewportSize({ width: 560, height: 620 });
 await page.waitForTimeout(80);
 const mobilePanel = await page.locator('.brush-panel').boundingBox();
 assert.ok(mobilePanel.x >= 0 && mobilePanel.x + mobilePanel.width <= 560);
+// The native gate opens Add Object near the bottom edge. Every action must stay
+// reachable inside the viewport; a native pointer must never be clamped to Cube.
+await receive({ type: 'EditModeChanged', data: { mode: 'None' } });
+for (const [w, h, x, y] of [[1280, 900, 35, 865], [1280, 900, 1279, 899], [180, 180, 172, 172]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await page.mouse.move(x, y);
+    await page.keyboard.press('Shift+A');
+    const menu = page.getByRole('dialog', { name: 'Add Object', exact: true });
+    await menu.waitFor();
+    await page.waitForFunction(() => {
+        const rect = document.querySelector('.add-menu')?.getBoundingClientRect();
+        return rect && rect.x >= 0 && rect.y >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+    });
+    if (h === 180) assert.equal(await menu.evaluate(element => element.scrollHeight > element.clientHeight), true);
+    const addPaint = menu.getByRole('button', { name: 'Paint', exact: true });
+    await addPaint.scrollIntoViewIfNeeded();
+    const paintBounds = await addPaint.boundingBox();
+    assert.ok(paintBounds.x >= 0 && paintBounds.y >= 0 && paintBounds.x + paintBounds.width <= w && paintBounds.y + paintBounds.height <= h);
+    const menuScreenshot = `add-menu-${w}x${h}-${x}-${y}.jpg`;
+    await page.screenshot({ path: `${output}/${menuScreenshot}`, type: 'jpeg', quality: 85 });
+    const beforeCommands = await page.evaluate(() => window.commands.length);
+    await addPaint.click();
+    await menu.waitFor({ state: 'hidden' });
+    const emitted = await page.evaluate(offset => window.commands.slice(offset), beforeCommands);
+    assert.equal(emitted.filter(message => message.type === 'AddPaintCanvas').length, 1);
+    assert.equal(emitted.filter(message => message.type === 'AddObject').length, 0);
+    console.log(JSON.stringify({ type: 'pentimento.ui.menu', status: 'passed', viewport: { width: w, height: h }, anchor: { x, y }, paint_bounds: paintBounds, screenshot: menuScreenshot }));
+}
+// Resizing an already-open menu remeasures its overflow-constrained dimensions.
+await page.setViewportSize({ width: 1280, height: 900 });
+await page.mouse.move(1279, 899); await page.keyboard.press('Shift+A');
+await page.getByRole('dialog', { name: 'Add Object', exact: true }).waitFor();
+await page.setViewportSize({ width: 240, height: 180 });
+await page.waitForFunction(() => {
+    const rect = document.querySelector('.add-menu')?.getBoundingClientRect();
+    return rect && rect.x >= 0 && rect.y >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+});
+await page.keyboard.press('Escape');
+await page.getByRole('dialog', { name: 'Add Object', exact: true }).waitFor({ state: 'hidden' });
 assert.deepEqual(errors, []);
 await browser.close();
-console.log('Rendered controls passed: paint/erase, all numeric settings, color, presets, undo, live/apply, all 8 sculpt tools, falloff, backend sync, mode switches, layout/focus and narrow viewport.');
+console.log('Rendered controls passed: paint/erase, all numeric settings, color, presets, undo, live/apply, all 8 sculpt tools, falloff, backend sync, mode switches, layout/focus narrow viewport and edge/small-window Add Object menus.');

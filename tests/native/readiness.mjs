@@ -94,3 +94,10 @@ export async function holdNativeKey(value, observed, description, { send, wait, 
     }
     await pause(350);
 }
+
+export function assertNativeClickBounds(rect, width, height) {
+    assert.ok(rect && [rect.x, rect.y, rect.width, rect.height, width, height].every(Number.isFinite)
+        && rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0
+        && rect.x + rect.width <= width && rect.y + rect.height <= height,
+    `Native click target lies outside the viewport: ${JSON.stringify(rect)} in ${width}x${height}`);
+}

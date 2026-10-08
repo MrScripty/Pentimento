@@ -39,5 +39,38 @@ jobs:
       - name: Install repo dependencies
         run: ./launcher.sh --install
 
+      - name: Exercise rendered UI and viewport-edge menus
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PENTIMENTO_EVIDENCE_DIR="$RUNNER_TEMP/pentimento-ui-evidence"
+          mkdir -p "$PENTIMENTO_EVIDENCE_DIR"
+          browser=""
+          for name in google-chrome-stable google-chrome chromium chromium-browser; do
+            candidate="$(command -v "$name" || true)"
+            if [[ -n "$candidate" && -x "$candidate" ]]; then browser="$candidate"; break; fi
+          done
+          test -n "$browser" || { echo 'No installed runner browser executable found'; exit 1; }
+          export CHROMIUM_PATH="$browser"
+          { echo "$CHROMIUM_PATH"; "$CHROMIUM_PATH" --version; } | tee "$PENTIMENTO_EVIDENCE_DIR/browser.log"
+          setsid npm run dev -- --host 127.0.0.1 --port 5187 --strictPort > "$PENTIMENTO_EVIDENCE_DIR/vite.log" 2>&1 &
+          server_pid=$!
+          trap 'kill -TERM -- "-$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+          timeout 30s bash -c 'until curl --fail --silent --max-time 1 http://127.0.0.1:5187/ > /dev/null; do sleep 0.2; done'
+          kill -0 "$server_pid"
+          export PENTIMENTO_UI_URL=http://127.0.0.1:5187
+          timeout --signal=TERM --kill-after=10s 180s npm run test:ui:browser \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/ui-browser.log"
+
       - name: Verify active frontends
         run: ./launcher.sh --test
+
+      - name: Retain rendered UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-browser-${{ github.sha }}
+          path: ${{ runner.temp }}/pentimento-ui-evidence
+          if-no-files-found: warn
+          retention-days: 14
