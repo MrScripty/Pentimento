@@ -44,22 +44,43 @@ pub fn handle_devtools_hotkey(
 /// Handle Ctrl+Z / Ctrl+Shift+Z for the active canvas history
 pub fn handle_paint_undo_hotkey(
     key_input: Res<ButtonInput<KeyCode>>,
+    mut keys: MessageReader<bevy::input::keyboard::KeyboardInput>,
+    mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
+    mut window_events: MessageReader<bevy::window::WindowEvent>,
     input_blocks: Res<FrontendInputBlockState>,
     mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     active_canvas: Res<pentimento_scene::ActiveCanvasPlane>,
     canvases: Query<&pentimento_scene::CanvasPlane>,
 ) {
-    if input_blocks.blocks_keyboard() {
+    let events: Vec<_> = keys.read().cloned().collect();
+    let keyboard_lost = focus_lost.read().count() > 0;
+    let window_lost = window_events.read().fold(false, |lost, event| {
+        lost || matches!(event,
+            bevy::window::WindowEvent::WindowFocused(event) if !event.focused)
+    });
+    let lost = keyboard_lost || window_lost;
+    if input_blocks.blocks_keyboard() || lost || !paint_mode.active {
         return;
     }
 
-    let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
-    let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
-    let z_pressed = key_input.just_pressed(KeyCode::KeyZ);
-
-    // Ctrl+Z for Undo, Ctrl+Shift+Z for Redo.
-    if ctrl && z_pressed && paint_mode.active {
+    // A full shortcut can arrive within one frame. Restore modifiers at each
+    // native event instead of using the final (possibly released) state.
+    let translated = super::keyboard::translate_keyboard_events(
+        &events,
+        &key_input,
+        &mut ButtonInput::default(),
+        false,
+    );
+    for (native, event) in events.iter().zip(translated) {
+        if native.key_code != KeyCode::KeyZ
+            || !event.pressed
+            || native.repeat
+            || !event.modifiers.ctrl
+        {
+            continue;
+        }
+        let shift = event.modifiers.shift;
         if let Some(ref mut painting) = painting_res {
             if let Some(canvas) = active_canvas
                 .entity

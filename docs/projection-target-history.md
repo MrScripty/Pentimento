@@ -11,6 +11,9 @@ and the canvas had no stroke Redo implementation.
 
 - Undo and Redo restore exact captured layer pixels on the active canvas.
   Ctrl+Z and Ctrl+Shift+Z use the same history operations as the panel.
+  Modifiers are read at each native key event, including a complete chord in
+  one frame. Key repeats, UI-owned input and focus-loss batches do not consume
+  history or replay when input ownership returns.
 - A new changed stroke clears Redo; a no-op or cancelled stroke preserves it.
   Active transactions refuse history movement. Removing a stroke's owning layer
   refuses restoration without popping the cursor or touching another layer.
@@ -54,3 +57,12 @@ cases; each condition keeps its existing 30-second limit.
 Generated logs, source bundles and JPEG85 captures stay outside Git. Hosted
 native results and manual image review must be reported separately; passing
 command dispatch or browser mock interactions alone does not qualify projection.
+
+The published opaque fixture `cb38953` passed actual receiver pixels (110 and
+905 magenta pixels for the first and layered strokes), exact cancel restoration
+(538 pixels), and exact Undo/button Redo restoration (797 pixels), with matching
+Image/atlas endpoints and unchanged geometry. Its final Ctrl+Shift+Z case timed
+out. The subsequent local shortcut repair has a failing-before production input
+regression and 35 passing input tests, including exact pixels for batched history
+chords. It remains unqualified in the native renderer; no new hosted runs were
+requested after the owner's CI spending constraint.

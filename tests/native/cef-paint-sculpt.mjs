@@ -150,6 +150,7 @@ async function key(value, observed, description) {
         releaseFailed: error => console.error(JSON.stringify({ type: 'pentimento.cef.input_release_failed', key: value, error: String(error) })),
     };
     if (value === 'ctrl+Tab') return tapNativeShortcut('ctrl', 'Tab', observed, description, transport);
+    if (value === 'ctrl+shift+z') return tapNativeShortcut(['ctrl', 'shift'], 'z', observed, description, transport);
     return holdNativeKey(value, observed, description, transport);
 }
 

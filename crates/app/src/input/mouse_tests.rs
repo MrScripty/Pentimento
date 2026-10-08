@@ -837,6 +837,166 @@ fn native_paint_separate_frame_positive_control() {
     native_paint_control();
 }
 
+fn history_key(window: Entity, key_code: KeyCode, pressed: bool) -> WindowEvent {
+    WindowEvent::KeyboardInput(KeyboardInput {
+        window,
+        key_code,
+        logical_key: match key_code {
+            KeyCode::ControlLeft => Key::Control,
+            KeyCode::ShiftLeft => Key::Shift,
+            _ => Key::Character("z".into()),
+        },
+        state: if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        },
+        text: None,
+        repeat: false,
+    })
+}
+
+#[test]
+fn native_paint_complete_history_chords_restore_real_pixels_without_replay() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    for event in native_paint_gesture(window) {
+        native_batch(&mut app, &[event]);
+    }
+    let after = native_paint_pixels(&app);
+    assert_ne!(after, before);
+    native_batch(
+        &mut app,
+        &[
+            history_key(window, KeyCode::ControlLeft, true),
+            history_key(window, KeyCode::KeyZ, true),
+            history_key(window, KeyCode::KeyZ, false),
+            history_key(window, KeyCode::ControlLeft, false),
+        ],
+    );
+    assert!(
+        native_paint_pixels(&app) == before,
+        "batched Ctrl+Z must restore actual tiles"
+    );
+    native_batch(
+        &mut app,
+        &[
+            history_key(window, KeyCode::ControlLeft, true),
+            history_key(window, KeyCode::ShiftLeft, true),
+            history_key(window, KeyCode::KeyZ, true),
+            history_key(window, KeyCode::KeyZ, false),
+            history_key(window, KeyCode::ShiftLeft, false),
+            history_key(window, KeyCode::ControlLeft, false),
+        ],
+    );
+    assert!(
+        native_paint_pixels(&app) == after,
+        "batched Ctrl+Shift+Z must restore actual tiles"
+    );
+    assert_native_paint_complete(&app, 1);
+    assert_eq!(
+        app.world()
+            .resource::<pentimento_scene::PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .redo_count(),
+        0
+    );
+}
+
+#[test]
+fn native_paint_history_rejects_ui_owned_repeats_and_focus_loss_without_replay() {
+    for case in ["ui", "repeat", "focus"] {
+        let (mut app, window) = native_paint_fixture();
+        for event in native_paint_gesture(window) {
+            native_batch(&mut app, &[event]);
+        }
+        let after = native_paint_pixels(&app);
+        let mut trigger = history_key(window, KeyCode::KeyZ, true);
+        if case == "repeat" {
+            // A held key's repeat must never consume another history entry.
+            native_batch(&mut app, &[history_key(window, KeyCode::KeyZ, true)]);
+            if let WindowEvent::KeyboardInput(event) = &mut trigger {
+                event.repeat = true;
+            }
+        }
+        let mut events = vec![history_key(window, KeyCode::ControlLeft, true), trigger];
+        if case == "ui" {
+            app.world_mut()
+                .resource_mut::<FrontendInputBlockState>()
+                .block_keyboard = true;
+        } else if case == "focus" {
+            events.push(WindowEvent::KeyboardFocusLost(
+                bevy::input::keyboard::KeyboardFocusLost,
+            ));
+        }
+        native_batch(&mut app, &events);
+        assert!(
+            native_paint_pixels(&app) == after,
+            "{case}: history must not run"
+        );
+        app.world_mut()
+            .resource_mut::<FrontendInputBlockState>()
+            .block_keyboard = false;
+        native_batch(&mut app, &[]);
+        assert!(
+            native_paint_pixels(&app) == after,
+            "{case}: blocked input must not replay"
+        );
+        assert_native_paint_complete(&app, 1);
+    }
+}
+
+#[test]
+fn native_paint_history_focus_regain_admits_the_next_fresh_shortcut() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    for event in native_paint_gesture(window) {
+        native_batch(&mut app, &[event]);
+    }
+    native_batch(
+        &mut app,
+        &[
+            WindowEvent::KeyboardFocusLost(bevy::input::keyboard::KeyboardFocusLost),
+            WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window,
+                focused: false,
+            }),
+            WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window,
+                focused: true,
+            }),
+        ],
+    );
+    assert_native_paint_complete(&app, 1);
+    native_batch(
+        &mut app,
+        &[
+            history_key(window, KeyCode::ControlLeft, true),
+            history_key(window, KeyCode::KeyZ, true),
+            history_key(window, KeyCode::KeyZ, false),
+            history_key(window, KeyCode::ControlLeft, false),
+        ],
+    );
+    assert!(
+        native_paint_pixels(&app) == before,
+        "old focus losses must be fully consumed"
+    );
+    let pipeline = app
+        .world()
+        .resource::<pentimento_scene::PaintingResource>()
+        .get_pipeline(7)
+        .unwrap();
+    assert_eq!(pipeline.undo_count(), 0);
+    assert_eq!(pipeline.redo_count(), 1);
+    assert_eq!(
+        pipeline.log().total_packet_count(),
+        1,
+        "Undo must not append replay packets"
+    );
+    assert!(!pipeline.is_stroking());
+}
+
 #[test]
 fn native_paint_fine_moves_cover_the_continuous_path_and_undo_exactly() {
     let (mut app, window) = native_paint_fixture();
