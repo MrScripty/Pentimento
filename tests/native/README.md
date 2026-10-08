@@ -44,3 +44,21 @@ tools, every imported mesh, scaled-object gizmo accuracy or historical replay.
 Those require their own qualified tests. The manual acceptance checklist remains
 in docs/paint-sculpt-qualification.md. Until hosted execution is inspected, this
 harness is prepared source, not completed native acceptance.
+
+## Software-rendered diagnostic qualification
+
+The hosted runner sets `PENTIMENTO_CEF_RENDERING=software` for the qualification
+process only. This passes `--disable-gpu --disable-gpu-compositing` to CEF, matching
+[CEF's official software-OSR sample](https://github.com/chromiumembedded/cef/blob/master/tests/shared/browser/client_app_browser.cc).
+Bevy continues to use Mesa Vulkan. Sandbox, security, certificate and network
+settings are unchanged. This qualifies software-rendered native controls and 3D
+interaction; it does not qualify hardware-accelerated CEF.
+
+The harness fails within 30 seconds if the actual CEF framebuffer/first captured
+paint is missing. It checks native toolbar and sculpt-panel pixels, as well as
+DOM controls. Geometry capture waits for a post-finalization receipt matching the
+specific new stroke ID; a Start or pre-finalization End marker is insufficient.
+Cancellation also requires that exact transaction's cancellation receipt. The
+original geometry pixel assertion and gesture timing are retained. Per-input
+work timings are logged only in the qualification process, and any rejection is
+reported explicitly. Image inspection remains required even when these gates pass.

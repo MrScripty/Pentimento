@@ -8,8 +8,11 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
+const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
+const cefRenderingArgs = cefRenderingArguments(cefRendering);
 const out = process.env.PENTIMENTO_EVIDENCE_DIR ?? '/tmp/pentimento-cef-evidence';
 mkdirSync(out, { recursive: true });
 const records = [];
@@ -55,6 +58,12 @@ async function until(check, description, timeout = 30000) {
         await pause(100);
     }
     throw new Error(`Timed out: ${description}`);
+}
+async function waitForStrokeCompletion(offset, description) {
+    const started = await until(() => startedStroke(log().slice(offset)), `${description}: exact stroke start`);
+    const completed = await until(() => completedStroke(log().slice(offset), started.id), `${description}: transaction ${started.id} completion`, 30000);
+    assert.notEqual(completed.outcome, 'rejected', `${description}: transaction ${started.id} was rejected`);
+    return completed;
 }
 async function capture(name) {
     // Move to empty viewport so brush gizmos/hover highlights cannot masquerade
@@ -184,9 +193,10 @@ try {
     const logFd = openSync(appLog, 'w');
     // CEF documents port=0 as ephemeral. Chromium's production socket factory
     // binds loopback only; verify that at runtime before using the endpoint.
-    app = spawn('./launcher.sh', ['--run', '--frontend', 'cef', '--', '--remote-debugging-port=0'], {
+    console.log(JSON.stringify({ type: 'pentimento.cef.configuration', cef_rendering: cefRendering, cef_args: cefRenderingArgs }));
+    app = spawn('./launcher.sh', ['--run', '--frontend', 'cef', '--', '--remote-debugging-port=0', ...cefRenderingArgs], {
         cwd: root, detached: true, stdio: ['ignore', logFd, logFd],
-        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
+        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug', PENTIMENTO_NATIVE_DIAGNOSTICS: '1', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
     });
     const endpoint = await until(() => log().match(/DevTools listening on (ws:\/\/(?:127\.0\.0\.1|\[::1\]):\d+\/\S+)/)?.[1], 'ephemeral CEF DevTools endpoint', 120000);
     const url = new URL(endpoint);
@@ -204,9 +214,12 @@ try {
     page = await until(() => browser.contexts().flatMap(context => context.pages()).find(page => page.url().startsWith('data:text/html')), 'actual CEF UI page');
     await page.getByRole('button', { name: 'Reset Camera', exact: true }).waitFor();
     await until(() => page.evaluate(() => typeof window.ipc?.postMessage === 'function' && typeof window.__PENTIMENTO_RECEIVE__ === 'function'), 'real native bridge readiness');
-    await pause(2000);
+    stage = 'cef_framebuffer_readiness';
+    const framebuffer = await until(() => cefFramebufferReceipt(log()), 'CEF first painted framebuffer (DOM readiness alone is insufficient)', 30000);
     const startup = await capture('native-startup');
     record('native_startup', { screenshot: startup.screenshot, pixels_sha256: startup.sha256, width, height, cdp_bindings: sockets });
+    const toolbarPixels = assertPaintedUiRegion(startup, width, height, await page.locator('header.toolbar').boundingBox(), 'toolbar');
+    record('cef_framebuffer_ready', { ...framebuffer, ...toolbarPixels, screenshot: startup.screenshot });
 
     stage = 'sculpt_entry';
     // Exact projection of the default sphere center (2,.5,0), using the default
@@ -233,6 +246,9 @@ try {
     await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '0.8');
     await clickAt(35, height - 35); // Misses the sculpt target and clears widget focus.
     record('sculpt_panel_settings', { tool: 'Grab', radius: .8 });
+    const panelFrame = await capture('sculpt-panel-painted');
+    const panelPixels = assertPaintedUiRegion(panelFrame, width, height, await page.locator('[data-ui-region="brush-panel"]').boundingBox(), 'sculpt controls');
+    record('sculpt_panel_painted', { ...panelPixels, screenshot: panelFrame.screenshot });
 
     stage = 'sculpt_widget_capture';
     const controlStarts = starts(); const beforeControl = await capture('sculpt-before-widget');
@@ -247,13 +263,15 @@ try {
     await clickAt(35, height - 35);
     const beforeSculpt = await capture('sculpt-before-stroke'); const beforeStarts = starts();
     const beforeSculptFrames = [beforeSculpt, await capture('sculpt-before-noise-1'), await capture('sculpt-before-noise-2')];
+    const sculptLogOffset = log().length;
     await drag(sx, sy, 24, -12);
     await until(() => starts().sculpt > beforeStarts.sculpt, 'native sculpt stroke start');
+    const sculptCompletion = assertAcceptedStroke(await waitForStrokeCompletion(sculptLogOffset, 'visible sculpt'), 'visible sculpt');
     const afterSculpt = await capture('sculpt-after-stroke'); const sculptDelta = difference(beforeSculpt, afterSculpt);
     assert.ok(sculptDelta.changed_pixels > 25, 'Sculpt stroke produced no visible viewport change');
     const afterSculptFrames = [afterSculpt, await capture('sculpt-after-noise-1'), await capture('sculpt-after-noise-2')];
     const sculptRegion = deformationRegion(beforeSculptFrames, afterSculptFrames, width, height);
-    record('sculpt_stroke', { ...sculptDelta, stroke_starts: starts(), screenshot: afterSculpt.screenshot });
+    record('sculpt_stroke', { ...sculptDelta, completion: sculptCompletion, stroke_starts: starts(), screenshot: afterSculpt.screenshot });
     stage = 'sculpt_history';
     const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });
     const sculptRedo = page.getByRole('button', { name: 'Redo sculpt stroke', exact: true });
@@ -278,6 +296,7 @@ try {
     const beforeCancelFrames = [redoneSculpt, await capture('sculpt-redone-noise-1'), await capture('sculpt-redone-noise-2')];
     let cancelRegion;
     const cancelStarts = starts();
+    const cancelLogOffset = log().length;
     const rollbackCount = (log().match(/Sculpt stroke rollback:/g) ?? []).length;
     try {
         xdo('mousemove', '--window', windowId, Math.round(sx), Math.round(sy));
@@ -293,6 +312,8 @@ try {
         cancelRegion = deformationRegion(beforeCancelFrames, duringCancelFrames, width, height);
         xdo('key', '--clearmodifiers', 'Escape');
         await until(() => (log().match(/Sculpt stroke rollback:/g) ?? []).length > rollbackCount, 'native sculpt rollback');
+        const cancellation = await waitForStrokeCompletion(cancelLogOffset, 'Escape rollback');
+        assert.equal(cancellation.outcome, 'cancelled');
     } finally { xdo('mouseup', '1'); }
     const cancelledSculpt = await capture('sculpt-cancelled');
     const sculptCancelDelta = difference(redoneSculpt, cancelledSculpt);
@@ -301,7 +322,9 @@ try {
     record('sculpt_cancel_rollback', { ...sculptCancelDelta, ...sculptCancelRegion, active_screenshot: 'sculpt-cancel-active.jpg', screenshot: cancelledSculpt.screenshot });
     await nativeClick(sculptUndo);
     await until(() => sculptRedo.isEnabled(), 'native sculpt branch baseline');
+    const branchLogOffset = log().length;
     await drag(sx, sy, -16, 8);
+    assertAcceptedStroke(await waitForStrokeCompletion(branchLogOffset, 'new history branch'), 'new history branch');
     await until(async () => (await sculptUndo.isEnabled()) && (await sculptRedo.isDisabled()), 'new accepted sculpt branch clears redo');
     const branchedSculpt = await capture('sculpt-new-branch');
     assert.ok(difference(beforeSculpt, branchedSculpt).changed_pixels > 25, 'New sculpt branch has no visible deformation');

@@ -964,6 +964,21 @@ fn handle_sculpt_events(
                     if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
                         if pipeline.is_stroke_active() {
                             let result = pipeline.end_stroke(mesh);
+                            if let Some(id) = sculpt_state.current_stroke_id {
+                                let outcome = if result.rejected.is_some() {
+                                    "rejected"
+                                } else if result.packets.is_empty() {
+                                    "no_change"
+                                } else {
+                                    "accepted"
+                                };
+                                info!(
+                                    "Sculpt stroke completed: id={}, outcome={}, faces={}",
+                                    id,
+                                    outcome,
+                                    mesh.total_face_count()
+                                );
+                            }
                             if let Some(error) = result.rejected {
                                 outbound.send(BevyToUi::Error {
                                     code: "sculpt_stroke_rejected".into(),
@@ -1147,13 +1162,31 @@ fn handle_sculpt_events(
                         timestamp_ms,
                     };
 
+                    let input_started = std::time::Instant::now();
                     let result = pipeline.process_input(input, chunked_mesh);
+                    if std::env::var_os("PENTIMENTO_NATIVE_DIAGNOSTICS").is_some() {
+                        info!(
+                            "Sculpt input processed: id={}, vertices_modified={}, faces={}, elapsed_us={}, rejected={}",
+                            sculpt_state.current_stroke_id.unwrap_or(u64::MAX),
+                            result.vertices_modified,
+                            chunked_mesh.total_face_count(),
+                            input_started.elapsed().as_micros(),
+                            result.rejected.is_some()
+                        );
+                    }
                     if let Some(error) = &result.rejected {
                         outbound.send(BevyToUi::Error {
                             code: "sculpt_stroke_rejected".into(),
                             message: format!("Sculpt stroke was rolled back: {error}"),
                         });
                         pipeline.cancel_stroke(chunked_mesh);
+                        if let Some(id) = sculpt_state.current_stroke_id {
+                            info!(
+                                "Sculpt stroke completed: id={}, outcome=rejected, faces={}",
+                                id,
+                                chunked_mesh.total_face_count()
+                            );
+                        }
                         sculpt_state.current_stroke_id = None;
                         sculpt_state.suppress_left_until_release = true;
                     }
@@ -1185,7 +1218,22 @@ fn handle_sculpt_events(
                     if let (Some(pipeline), Some(chunked_mesh)) =
                         (pipeline.as_mut(), chunked_mesh.as_mut())
                     {
+                        let finish_started = std::time::Instant::now();
                         let result = pipeline.end_stroke(chunked_mesh);
+                        let outcome = if result.rejected.is_some() {
+                            "rejected"
+                        } else if result.packets.is_empty() {
+                            "no_change"
+                        } else {
+                            "accepted"
+                        };
+                        info!(
+                            "Sculpt stroke completed: id={}, outcome={}, faces={}, elapsed_us={}",
+                            stroke_id,
+                            outcome,
+                            chunked_mesh.total_face_count(),
+                            finish_started.elapsed().as_micros()
+                        );
                         if let Some(error) = &result.rejected {
                             outbound.send(BevyToUi::Error {
                                 code: "sculpt_stroke_rejected".into(),
@@ -1217,6 +1265,11 @@ fn handle_sculpt_events(
                         pipeline.cancel_stroke(mesh);
                         *cached_vertex_mapping = None;
                         info!("Sculpt stroke rollback: faces={}", mesh.total_face_count());
+                        info!(
+                            "Sculpt stroke completed: id={}, outcome=cancelled, faces={}",
+                            stroke_id,
+                            mesh.total_face_count()
+                        );
                     }
                 }
 

@@ -28,6 +28,9 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
+      # Official CEF software-OSR mode for this headless qualification process.
+      # Bevy still renders through Mesa Vulkan; this is not hardware-GPU validation.
+      PENTIMENTO_CEF_RENDERING: 'software'
       # Official CEF documentation links this recognized binary distributor.
       # cef-dll-sys selects and verifies the archive matching its binding version.
       CEF_DOWNLOAD_URL: https://cef-builds.spotifycdn.com
@@ -55,6 +58,7 @@ jobs:
           mkdir -p "$PENTIMENTO_EVIDENCE_DIR"
           {
             git rev-parse HEAD
+            echo "CEF rendering qualification: $PENTIMENTO_CEF_RENDERING"
             rustc --version
             node --version
             npm --version
