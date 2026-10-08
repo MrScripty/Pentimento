@@ -8,7 +8,7 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -130,23 +130,10 @@ async function drag(x, y, dx, dy) {
     xdo('mouseup', '1'); await pause(400);
 }
 async function key(value, observed, description) {
-    // Keep modifiers pressed across a rendered frame. A complete short chord
-    // can otherwise be batched with its release before Bevy samples pressed().
-    let primaryError;
-    try {
-        xdo('keydown', value);
-        await pause(200);
-        if (observed) await until(observed, description);
-    } catch (error) {
-        primaryError = error;
-        throw error;
-    } finally {
-        try { xdo('keyup', value); } catch (error) {
-            if (!primaryError) throw error;
-            console.error(JSON.stringify({ type: 'pentimento.cef.input_release_failed', key: value, error: String(error) }));
-        }
-    }
-    await pause(350);
+    return holdNativeKey(value, observed, description, {
+        send: (action, key) => xdo(action, key), wait: until, pause,
+        releaseFailed: error => console.error(JSON.stringify({ type: 'pentimento.cef.input_release_failed', key: value, error: String(error) })),
+    });
 }
 
 async function failureDiagnostics() {
@@ -347,9 +334,16 @@ try {
     // Tab may focus a browser widget. Return keyboard ownership to the viewport
     // before its Ctrl+Tab shortcut; a miss in sculpt mode preserves selection.
     await clickAt(35, height - 35);
-    await key('ctrl+Tab'); await until(() => page.getByRole('heading', { name: 'Sculpt brushes' }).count().then(n => n === 0), 'sculpt exit');
-    await key('ctrl+Tab'); await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
-    await key('ctrl+Tab');
+    stage = 'sculpt_mode_ownership';
+    const exitLogOffset = log().length;
+    await key('ctrl+Tab', () => log().slice(exitLogOffset).includes('Exited sculpt mode'), 'native sculpt exit receipt');
+    await until(() => page.getByRole('heading', { name: 'Sculpt brushes' }).count().then(n => n === 0), 'sculpt exit');
+    const reentryLogOffset = log().length;
+    await key('ctrl+Tab', () => log().slice(reentryLogOffset).includes('Entered sculpt mode for entity'), 'native sculpt reentry receipt');
+    await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
+    const finalExitLogOffset = log().length;
+    await key('ctrl+Tab', () => log().slice(finalExitLogOffset).includes('Exited sculpt mode'), 'native final sculpt exit receipt');
+    await until(() => page.getByRole('heading', { name: 'Sculpt brushes' }).count().then(n => n === 0), 'final sculpt exit');
     record('sculpt_mode_ownership', { plain_tab_preserved_sculpt: true, exit_reentry: true, screenshot: (await capture('sculpt-after-exit')).screenshot });
 
     stage = 'paint_entry';

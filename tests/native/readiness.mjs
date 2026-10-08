@@ -74,3 +74,23 @@ export function parkedPointerFrames(log, x, y) {
     }
     return consecutive >= 4 ? { x, y, consecutive_updates: consecutive } : null;
 }
+
+// Preserve native key-down/up ordering, holding modifiers until the existing
+// backend acknowledgement arrives. A deadline/error must always release keys.
+export async function holdNativeKey(value, observed, description, { send, wait, pause, releaseFailed }) {
+    let primaryError;
+    try {
+        send('keydown', value);
+        await pause(200);
+        if (observed) await wait(observed, description);
+    } catch (error) {
+        primaryError = error;
+        throw error;
+    } finally {
+        try { send('keyup', value); } catch (error) {
+            if (!primaryError) throw error;
+            releaseFailed(error);
+        }
+    }
+    await pause(350);
+}

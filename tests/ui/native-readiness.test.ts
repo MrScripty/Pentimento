@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
@@ -93,5 +93,40 @@ test('capture waits for fresh consecutive parked pointer updates through the ren
     for (const interruption of [receipt.replace('20.0', '1215.0'), receipt.replace('blocked=false', 'blocked=true'), receipt.replace('latched=false', 'latched=true'), receipt.replace('layout_received=true', 'layout_received=false')]) {
         assert.equal(parkedPointerFrames(receipt.repeat(4) + interruption + receipt.repeat(3), 20, 1050), null);
         assert.ok(parkedPointerFrames(receipt.repeat(4) + interruption + receipt.repeat(4), 20, 1050));
+    }
+});
+
+
+test('native chord holds through a fresh receipt and releases before settling', async () => {
+    const calls = [];
+    let log = 'Exited sculpt mode\n';
+    const offset = log.length;
+    await holdNativeKey('ctrl+Tab', () => log.slice(offset).includes('Exited sculpt mode'), 'exit', {
+        send: (action, value) => calls.push([action, value]),
+        pause: async ms => calls.push(['pause', ms]),
+        wait: async observed => {
+            assert.equal(observed(), false, 'an old transition is not an acknowledgement');
+            assert.deepEqual(calls, [['keydown', 'ctrl+Tab'], ['pause', 200]]);
+            log += 'Exited sculpt mode\n';
+            assert.equal(observed(), true);
+            calls.push(['observed']);
+        },
+        releaseFailed: () => assert.fail('unexpected release error'),
+    });
+    assert.deepEqual(calls, [['keydown', 'ctrl+Tab'], ['pause', 200], ['observed'], ['keyup', 'ctrl+Tab'], ['pause', 350]]);
+});
+
+test('native chord releases in finally and preserves the original timeout', async () => {
+    const calls = [];
+    const timeout = new Error('Timed out: exit receipt');
+    for (const releaseThrows of [false, true]) {
+        calls.length = 0;
+        await assert.rejects(holdNativeKey('ctrl+Tab', () => false, 'exit', {
+            send: action => { calls.push(action); if (action === 'keyup' && releaseThrows) throw new Error('release failed'); },
+            pause: async () => {},
+            wait: async () => { throw timeout; },
+            releaseFailed: () => calls.push('release failure recorded'),
+        }), error => error === timeout);
+        assert.deepEqual(calls, releaseThrows ? ['keydown', 'keyup', 'release failure recorded'] : ['keydown', 'keyup']);
     }
 });
