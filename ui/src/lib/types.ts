@@ -49,6 +49,7 @@ export type BevyToUi =
     | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
     | { type: 'CloseMenus' }
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
+    | { type: 'PaintColorSamplingChanged'; data: PaintColorSamplingState }
     | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean; can_redo: boolean; source_visible: boolean } }
     | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } }
     | { type: 'SculptHistoryChanged'; data: SculptHistoryState }
@@ -267,6 +268,8 @@ export type GizmoCommand =
     | { Confirm: null };
 
 export type PaintCommand =
+    | { SetColorSampling: { enabled: boolean } }
+    | { SetColorSampleSource: { source: ColorSampleSource } }
     | { SetBrushColor: { color: [number, number, number, number] } }
     | { SetBrushSize: { size: number } }
     | { SetBrushOpacity: { opacity: number } }
@@ -330,3 +333,6 @@ export type SculptCommand =
     | { SetHardness: { hardness: number } }
     | { SetAutoSmooth: { amount: number } }
     | { SetFalloff: { falloff: SculptFalloff } };
+
+export type ColorSampleSource = 'VisibleLayers' | 'ActiveLayer';
+export interface PaintColorSamplingState { enabled: boolean; source: ColorSampleSource; active: boolean }

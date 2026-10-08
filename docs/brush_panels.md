@@ -36,6 +36,38 @@ not upgraded here.
 - Canvas view retains its orbit lock but allows Shift+middle-drag pan and scroll
   zoom. Plain Tab no longer also handles Ctrl+Tab / Shift+Tab mode shortcuts.
 
+## One-click source color sampling
+
+**Sample canvas color** arms a single canvas click. Choose **Visible layers** to
+sample the bottom-to-top visible layer composition with layer opacity, or
+**Active layer** to read that layer's raw color even when hidden. Both return
+straight linear RGB; visible sampling divides the premultiplied composite RGB
+by its alpha, ignoring transparency rather than darkening the picked paint color.
+The hex/color inputs continue to display sRGB. This samples source layers, not
+lighting, materials, occlusion, or a pixel from the rendered UV receiver.
+
+A successful click updates native brush color, preserves brush alpha, opacity and
+Brush/Eraser, and disarms sampling. The consumed press remains owned until release;
+a fresh press can paint even within the same ordered input batch. Transparent,
+nonfinite or out-of-bounds pixels leave the color and history unchanged. A
+transparent hit reports an error and keeps sampling armed for another click.
+Escape, focus loss and leaving paint mode disarm the tool; an already accepted
+color survives a later cancellation/focus event. A missing canvas hit is consumed
+without painting. Source selection lasts for the editor session and is restored
+from native state when the UI remounts; it is not part of a saved brush.
+
+Sampling neither allocates stroke IDs nor creates pipelines, packets, dirty tiles
+or undo entries, and preserves redo. Scene/pipeline stroke ownership refuses stale
+arming/source commands; the UI disables and reconciles them. Actual subsequent
+sampled-color strokes use the normal accepted stroke path, Escape rollback and
+exact per-layer Undo/Redo. The color sampler does not change geometry guards,
+projection rules or tolerances.
+
+Local qualification covers layer math, real ordered Bevy input and painting
+pipeline history, and rendered Chromium controls. Native CEF qualification remains
+pending because the matching official runtime download is proxy-blocked (HTTP
+403). Browser panel screenshots and CPU tests do not qualify native 3D rendering.
+
 ## Device-local custom brushes
 
 Both panels can save the current brush by name and restore it with **Use paint

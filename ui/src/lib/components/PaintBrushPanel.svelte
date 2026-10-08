@@ -1,11 +1,13 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
     import { colorToHex as toHex, hexToColor } from '$lib/brush-values';
-    import type { PaintBrushSettings, PaintBrushPresetInfo, SavedBrushPresetsState } from '$lib/types';
+    import type { ColorSampleSource, PaintColorSamplingState, PaintBrushSettings, PaintBrushPresetInfo, SavedBrushPresetsState } from '$lib/types';
     import SavedBrushPresets from './SavedBrushPresets.svelte';
     import BrushControl from './BrushControl.svelte';
-    interface Props { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; canRedo: boolean; sourceVisible: boolean; liveProjection: boolean; saved: SavedBrushPresetsState }
-    let { settings, presets, canUndo, canRedo, sourceVisible, liveProjection, saved }: Props = $props();
+    interface Props { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; canRedo: boolean; sourceVisible: boolean; liveProjection: boolean; saved: SavedBrushPresetsState; sampling: PaintColorSamplingState }
+    let { settings, presets, canUndo, canRedo, sourceVisible, liveProjection, saved, sampling }: Props = $props();
+    let sampleSource = $state<ColorSampleSource>('VisibleLayers');
+    $effect(() => { if (sampling.active) { sampleSource = sampling.source; return; } sampleSource = sampling.source; });
     let presetChoice = $state(-1);
     $effect(() => {
         const accepted = settings.customized ? -1 : settings.preset_id;
@@ -23,6 +25,12 @@
         <button type="button" aria-pressed={settings.blend_mode === 'Normal'} onclick={() => bridge.paintCommand({ SetBlendMode: { mode: 'Normal' } })}>Brush</button>
         <button type="button" aria-pressed={settings.blend_mode === 'Erase'} onclick={() => bridge.paintCommand({ SetBlendMode: { mode: 'Erase' } })}>Eraser</button>
     </div>
+    <button class="wide" type="button" aria-pressed={sampling.enabled} disabled={sampling.active} onclick={() => bridge.paintCommand({ SetColorSampling: { enabled: !sampling.enabled } })}>{sampling.enabled ? 'Cancel color sampling' : 'Sample canvas color'}</button>
+    <label class="select-label" for="paint-sample-source">Sample source</label>
+    <select id="paint-sample-source" disabled={sampling.active} bind:value={sampleSource} onchange={(e) => bridge.paintCommand({ SetColorSampleSource: { source: e.currentTarget.value as ColorSampleSource } })}>
+        <option value="VisibleLayers">Visible layers</option><option value="ActiveLayer">Active layer</option>
+    </select>
+    <p class="hint">{sampling.enabled ? 'Click a painted source canvas pixel. Escape cancels sampling.' : 'Sample straight RGB from source canvas layers, ignoring transparency. Brush opacity and Brush / Eraser stay selected. Transparent pixels leave your color unchanged.'}</p>
     <label class="select-label" for="paint-preset">Brush preset</label>
     <select id="paint-preset" disabled={saved.active} bind:value={presetChoice} onchange={(e) => bridge.paintCommand({ SelectBrushPreset: { preset_id: Number(e.currentTarget.value) } })}>
         {#if settings.customized}<option value={-1} disabled>Custom round brush</option>{/if}

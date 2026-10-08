@@ -1,9 +1,10 @@
 use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, AppSettings, BevyToUi,
-    BlendMode, DiffusionRequest, EditMode, GizmoCommand, GizmoMode, KeyboardEvent, LayerInfo,
-    LightingSettings, MeshEditCommand, MeshEditTool, MeshSelectionMode, Modifiers,
-    PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PrimitiveType, SceneInfo, SceneObject,
-    SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool, Transform3D, UiToBevy,
+    BlendMode, ColorSampleSource, DiffusionRequest, EditMode, GizmoCommand, GizmoMode,
+    KeyboardEvent, LayerInfo, LightingSettings, MeshEditCommand, MeshEditTool, MeshSelectionMode,
+    Modifiers, PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PrimitiveType, SceneInfo,
+    SceneObject, SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool, Transform3D,
+    UiToBevy,
 };
 use serde::Serialize;
 
@@ -81,6 +82,11 @@ fn main() {
                         is_active: false,
                     },
                 ],
+            },
+            BevyToUi::PaintColorSamplingChanged {
+                enabled: true,
+                source: ColorSampleSource::VisibleLayers,
+                active: false,
             },
             BevyToUi::PaintBrushStateChanged {
                 settings: PaintBrushSettings {
@@ -168,6 +174,10 @@ fn main() {
                 opacity: 0.45,
             }),
             UiToBevy::PaintCommand(PaintCommand::SetBrushSpacing { spacing: 0.2 }),
+            UiToBevy::PaintCommand(PaintCommand::SetColorSampling { enabled: true }),
+            UiToBevy::PaintCommand(PaintCommand::SetColorSampleSource {
+                source: ColorSampleSource::ActiveLayer,
+            }),
             UiToBevy::PaintCommand(PaintCommand::Undo),
             UiToBevy::PaintCommand(PaintCommand::Redo),
             UiToBevy::PaintCommand(PaintCommand::SetSourceVisible { visible: false }),

@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{
-    AddPaintCanvasRequest, CameraCommand, EditMode, GizmoCommand, GizmoMode, LayerInfo,
-    MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
+    AddPaintCanvasRequest, CameraCommand, ColorSampleSource, EditMode, GizmoCommand, GizmoMode,
+    LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
     PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, SculptBrushSettings, SculptCommand,
 };
 use crate::types::{
@@ -90,6 +90,11 @@ pub enum BevyToUi {
         can_undo: bool,
         can_redo: bool,
         source_visible: bool,
+    },
+    PaintColorSamplingChanged {
+        enabled: bool,
+        source: ColorSampleSource,
+        active: bool,
     },
 
     /// None means sculpting is unavailable in this build.

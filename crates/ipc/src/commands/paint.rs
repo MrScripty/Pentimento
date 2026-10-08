@@ -2,6 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Canvas pixel source for the one-click color sampler.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorSampleSource {
+    #[default]
+    VisibleLayers,
+    ActiveLayer,
+}
+
 /// Blend mode for painting operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum BlendMode {
@@ -13,48 +21,94 @@ pub enum BlendMode {
 /// Commands for controlling the painting system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PaintCommand {
+    SetColorSampling {
+        enabled: bool,
+    },
+    SetColorSampleSource {
+        source: ColorSampleSource,
+    },
     /// Set brush color (RGBA, 0.0-1.0)
-    SetBrushColor { color: [f32; 4] },
+    SetBrushColor {
+        color: [f32; 4],
+    },
     /// Set brush size in pixels
-    SetBrushSize { size: f32 },
+    SetBrushSize {
+        size: f32,
+    },
     /// Set brush opacity (0.0-1.0)
-    SetBrushOpacity { opacity: f32 },
+    SetBrushOpacity {
+        opacity: f32,
+    },
     /// Set brush hardness (0.0-1.0)
-    SetBrushHardness { hardness: f32 },
+    SetBrushHardness {
+        hardness: f32,
+    },
     /// Set round-tip dab spacing as a fraction of diameter (0.01-1.0).
-    SetBrushSpacing { spacing: f32 },
+    SetBrushSpacing {
+        spacing: f32,
+    },
     /// Set blend mode (Normal or Erase)
-    SetBlendMode { mode: BlendMode },
+    SetBlendMode {
+        mode: BlendMode,
+    },
     /// Select a brush preset by ID
-    SelectBrushPreset { preset_id: u32 },
+    SelectBrushPreset {
+        preset_id: u32,
+    },
     /// Save the current paint brush, color and tool locally; same name replaces it.
-    SaveBrushPreset { name: String },
+    SaveBrushPreset {
+        name: String,
+    },
     /// Restore one backend-owned saved paint brush.
-    SelectSavedBrushPreset { preset_id: u32 },
+    SelectSavedBrushPreset {
+        preset_id: u32,
+    },
     /// Undo last stroke
     Undo,
     /// Restore the last undone canvas stroke.
     Redo,
     /// Show/hide the source canvas while retaining its projection and editing state.
-    SetSourceVisible { visible: bool },
+    SetSourceVisible {
+        visible: bool,
+    },
     /// Enable/disable live projection mode (paint-as-project)
-    SetLiveProjection { enabled: bool },
+    SetLiveProjection {
+        enabled: bool,
+    },
     /// Project current canvas contents to all visible meshes (one-shot)
     ProjectToScene,
     /// Add a new layer (empty name for auto-generated)
-    AddLayer { name: String },
+    AddLayer {
+        name: String,
+    },
     /// Remove a layer by ID
-    RemoveLayer { layer_id: u32 },
+    RemoveLayer {
+        layer_id: u32,
+    },
     /// Set the active (painting target) layer
-    SetActiveLayer { layer_id: u32 },
+    SetActiveLayer {
+        layer_id: u32,
+    },
     /// Toggle layer visibility
-    SetLayerVisibility { layer_id: u32, visible: bool },
+    SetLayerVisibility {
+        layer_id: u32,
+        visible: bool,
+    },
     /// Set layer opacity (0.0-1.0)
-    SetLayerOpacity { layer_id: u32, opacity: f32 },
+    SetLayerOpacity {
+        layer_id: u32,
+        opacity: f32,
+    },
     /// Reorder layer to a new index position
-    ReorderLayer { layer_id: u32, new_index: u32 },
+    ReorderLayer {
+        layer_id: u32,
+        new_index: u32,
+    },
     /// Rename a layer
-    RenameLayer { layer_id: u32, name: String },
+    RenameLayer {
+        layer_id: u32,
+        name: String,
+    },
 }
 
 /// Layer metadata for UI synchronization.

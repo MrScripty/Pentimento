@@ -63,6 +63,11 @@ function assertBevyToUiMessage(message) {
       assert.ok(Array.isArray(message.data.layers));
       message.data.layers.forEach(assertLayerInfo);
       return;
+    case 'PaintColorSamplingChanged':
+      assert.equal(typeof message.data.enabled, 'boolean');
+      assert.equal(typeof message.data.active, 'boolean');
+      assert.match(message.data.source, /^(VisibleLayers|ActiveLayer)$/);
+      return;
     case 'PaintBrushStateChanged':
       assertTuple(message.data.settings.color, 4, 'paint color');
       for (const field of ['size', 'opacity', 'hardness', 'spacing', 'preset_id']) assert.equal(typeof message.data.settings[field], 'number');
@@ -200,3 +205,11 @@ test('native keyboard samples preserve physical keys, native text, and additive 
   }
   assert.equal(native_keyboard[0].modifiers.shift, true);
 });
+
+ test('color sampling commands carry explicit native source and enabled state', () => {
+  const samples = loadSamples();
+  assert.ok(samples.bevy_to_ui.some(m => m.type === 'PaintColorSamplingChanged'));
+  const paint = samples.ui_to_bevy.filter(m => m.type === 'PaintCommand').map(m => m.data);
+  assert.deepEqual(paint.find(m => m.SetColorSampling), { SetColorSampling: { enabled: true } });
+  assert.deepEqual(paint.find(m => m.SetColorSampleSource), { SetColorSampleSource: { source: 'ActiveLayer' } });
+ });

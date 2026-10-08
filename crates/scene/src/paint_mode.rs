@@ -23,6 +23,10 @@ pub struct PaintMode {
     pub active: bool,
     /// Current stroke state, if a stroke is in progress
     pub current_stroke: Option<StrokeState>,
+    /// One-shot canvas sampler; a press remains consumed until release.
+    pub sample_color: bool,
+    pub sample_source: pentimento_ipc::ColorSampleSource,
+    pub sample_press_owned: bool,
 }
 
 /// State for an in-progress stroke
@@ -152,6 +156,9 @@ fn handle_paint_mode_toggle(
             paint_events.write(PaintEvent::StrokeCancel);
             paint_mode.current_stroke = None;
         }
+        if !paint_mode.active {
+            paint_mode.sample_color = false;
+        }
     }
 }
 
@@ -170,6 +177,8 @@ pub(super) fn handle_paint_input(
     time: Res<Time>,
     input_blocks: Res<FrontendInputBlockState>,
     scene_input: Option<Res<FrontendScenePointerInput>>,
+    mut painting: ResMut<crate::PaintingResource>,
+    mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
     let Ok((window_entity, window)) = windows.single() else {
         window_events.clear();
@@ -203,15 +212,24 @@ pub(super) fn handle_paint_input(
     if (arbitrated.is_none() && input_blocks.blocks_pointer())
         || (!window.focused && first_focus.is_none())
     {
+        if !mouse_button.pressed(MouseButton::Left) {
+            paint_mode.sample_press_owned = false;
+        }
         if paint_mode.current_stroke.take().is_some() {
             paint_events.write(PaintEvent::StrokeEnd);
         }
         if !window.focused {
             *last_cursor = None;
+            paint_mode.sample_color = false;
+            paint_mode.sample_press_owned = false;
         }
         return;
     }
     if !paint_mode.active {
+        paint_mode.sample_color = false;
+        if !mouse_button.pressed(MouseButton::Left) {
+            paint_mode.sample_press_owned = false;
+        }
         return;
     }
     let Some(plane_entity) = active_plane.entity else {
@@ -256,7 +274,28 @@ pub(super) fn handle_paint_input(
                 if event.window == window_entity && event.button == MouseButton::Left =>
             {
                 if event.state == bevy::input::ButtonState::Pressed {
-                    if !focus_lost && paint_mode.current_stroke.is_none() {
+                    if !focus_lost
+                        && paint_mode.current_stroke.is_none()
+                        && !paint_mode.sample_press_owned
+                    {
+                        if paint_mode.sample_color {
+                            paint_mode.sample_press_owned = true;
+                            if let Some((_, uv_pos)) = cursor.and_then(hit) {
+                                if painting.sample_brush_color(
+                                    canvas_plane,
+                                    uv_pos,
+                                    paint_mode.sample_source,
+                                ) {
+                                    paint_mode.sample_color = false;
+                                } else {
+                                    outbound.send(pentimento_ipc::BevyToUi::Error {
+                                        code: "color_sample_rejected".into(),
+                                        message: "No painted color at this source pixel. Choose another pixel or cancel sampling.".into(),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
                         if let Some((world_pos, uv_pos)) = cursor.and_then(hit) {
                             let stroke_id = stroke_id_gen.next();
                             let space_id = canvas_plane.plane_id;
@@ -281,14 +320,19 @@ pub(super) fn handle_paint_input(
                             );
                         }
                     }
-                } else if paint_mode.current_stroke.take().is_some() {
-                    paint_events.write(PaintEvent::StrokeEnd);
-                    info!("Stroke ended");
+                } else {
+                    paint_mode.sample_press_owned = false;
+                    if paint_mode.current_stroke.take().is_some() {
+                        paint_events.write(PaintEvent::StrokeEnd);
+                        info!("Stroke ended");
+                    }
                 }
             }
             WindowEvent::WindowFocused(event) if event.window == window_entity => {
                 focus_lost = !event.focused;
                 if focus_lost {
+                    paint_mode.sample_color = false;
+                    paint_mode.sample_press_owned = false;
                     if paint_mode.current_stroke.take().is_some() {
                         paint_events.write(PaintEvent::StrokeEnd);
                     }
@@ -303,6 +347,7 @@ pub(super) fn handle_paint_input(
                     && !focus_lost
                     && !input_blocks.blocks_keyboard() =>
             {
+                paint_mode.sample_color = false;
                 if paint_mode.current_stroke.take().is_some() {
                     paint_events.write(PaintEvent::StrokeCancel);
                     info!("Stroke cancelled");
@@ -312,6 +357,7 @@ pub(super) fn handle_paint_input(
         }
     }
     if !mouse_button.pressed(MouseButton::Left) {
+        paint_mode.sample_press_owned = false;
         // A host reset may release ownership without delivering a button event.
         if paint_mode.current_stroke.take().is_some() {
             paint_events.write(PaintEvent::StrokeEnd);
@@ -427,7 +473,10 @@ mod input_routing_tests {
                 last_world_pos: None,
                 last_time: 0.0,
             }),
+            ..default()
         });
+        world.init_resource::<crate::PaintingResource>();
+        world.init_resource::<crate::OutboundUiMessages>();
         world.run_system_once(handle_paint_input).unwrap();
         assert!(world.resource::<PaintMode>().current_stroke.is_none());
         let events: Vec<_> = world
