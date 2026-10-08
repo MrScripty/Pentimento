@@ -8,7 +8,7 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -65,11 +65,13 @@ async function waitForStrokeCompletion(offset, description) {
     assert.notEqual(completed.outcome, 'rejected', `${description}: transaction ${started.id} was rejected`);
     return completed;
 }
-async function capture(name) {
+async function capture(name, { synchronize = true } = {}) {
     // Move to empty viewport so brush gizmos/hover highlights cannot masquerade
     // as a geometry change in before/after viewport comparisons.
+    const parkedLogOffset = log().length;
     xdo('mousemove', '--window', windowId, 20, height - 30);
-    await pause(300);
+    if (synchronize) await until(() => parkedPointerFrames(log().slice(parkedLogOffset), 20, height - 30),
+        `${name}: off-target hover through gizmo/presentation update frames`, 30000);
     const pixels = command('import', ['-window', windowId, '-depth', '8', 'rgb:-']);
     assert.equal(pixels.length, width * height * 3, 'Unexpected X11 capture dimensions');
     command('convert', ['-size', `${width}x${height}`, '-depth', '8', 'rgb:-', '-quality', '85', `${out}/${name}.jpg`], { input: pixels });
@@ -395,7 +397,7 @@ try {
     writeFileSync(`${out}/result.json`, JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', commit: command('git', ['rev-parse', 'HEAD']).toString().trim(), records }, null, 2));
     console.log(JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', checks: records.length }));
 } catch (error) {
-    if (windowId && width && height) { try { await capture('failure'); } catch {} }
+    if (windowId && width && height) { try { await capture('failure', { synchronize: false }); } catch {} }
     let diagnostics = null;
     try { diagnostics = await failureDiagnostics(); } catch {}
     const nativePointerTrace = pointerTrace();

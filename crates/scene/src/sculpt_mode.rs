@@ -2100,6 +2100,42 @@ mod sculpt_geometry_sync_tests {
                 )),
             "history publication must reflect the completed transaction"
         );
+        let baseline_export = half_edge_to_bevy_mesh(&sculpting::merge_chunks(&before).mesh)
+            .unwrap()
+            .0;
+        for (redo, expected_asset) in [(false, baseline_export), (true, expected)] {
+            app.world_mut()
+                .resource_mut::<OutboundUiMessages>()
+                .messages
+                .clear();
+            apply_sculpt_command(
+                app.world_mut(),
+                if redo {
+                    &SculptCommand::Redo
+                } else {
+                    &SculptCommand::Undo
+                },
+            );
+            app.update();
+            let meshes = app.world().resource::<Assets<Mesh>>();
+            let restored_asset = meshes.get(&handle).unwrap();
+            for attribute in [
+                Mesh::ATTRIBUTE_POSITION,
+                Mesh::ATTRIBUTE_NORMAL,
+                Mesh::ATTRIBUTE_UV_0,
+            ] {
+                assert_eq!(
+                    restored_asset.attribute(attribute),
+                    expected_asset.attribute(attribute),
+                    "exact exported attribute after redo={redo}"
+                );
+            }
+            assert_eq!(
+                restored_asset.indices().unwrap().iter().collect::<Vec<_>>(),
+                expected_asset.indices().unwrap().iter().collect::<Vec<_>>()
+            );
+            assert!(app.world().resource::<OutboundUiMessages>().messages.iter().any(|message| matches!(message, BevyToUi::SculptHistoryChanged { undo_strokes, redo_strokes, active: false, .. } if *undo_strokes == usize::from(redo) && *redo_strokes == usize::from(!redo))));
+        }
     }
 
     #[test]

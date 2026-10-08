@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
 test('DOM, startup and stroke Start do not imply a painted CEF framebuffer', () => {
     assert.equal(cefFramebufferReceipt('Frontend initialized (Cef mode)\nDOM ready'), null);
@@ -79,5 +79,19 @@ test('presentation waits for backend history and native pixels under the origina
             measure: () => ({ changed_pixels: ready ? 0 : 100 }),
             description: 'never presented',
         }), /deadline reached/);
+    }
+});
+
+
+test('capture waits for fresh consecutive parked pointer updates through the render pipeline', () => {
+    const receipt = 'Native capture after batch: last (20.0, 1050.0) blocked=false latched=false layout_received=true\n';
+    for (let count = 0; count < 4; count++) assert.equal(parkedPointerFrames(receipt.repeat(count), 20, 1050), null);
+    assert.equal(parkedPointerFrames(receipt.repeat(3) + receipt.trimEnd(), 20, 1050), null);
+    const oldReceipts = receipt.repeat(4);
+    assert.equal(parkedPointerFrames((oldReceipts + receipt.repeat(3)).slice(oldReceipts.length), 20, 1050), null);
+    assert.deepEqual(parkedPointerFrames(receipt.repeat(4), 20, 1050), { x: 20, y: 1050, consecutive_updates: 4 });
+    for (const interruption of [receipt.replace('20.0', '1215.0'), receipt.replace('blocked=false', 'blocked=true'), receipt.replace('latched=false', 'latched=true'), receipt.replace('layout_received=true', 'layout_received=false')]) {
+        assert.equal(parkedPointerFrames(receipt.repeat(4) + interruption + receipt.repeat(3), 20, 1050), null);
+        assert.ok(parkedPointerFrames(receipt.repeat(4) + interruption + receipt.repeat(4), 20, 1050));
     }
 });
