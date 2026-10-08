@@ -77,7 +77,23 @@ function difference(a, b) {
 }
 async function clickAt(x, y) {
     xdo('mousemove', '--window', windowId, Math.round(x), Math.round(y));
-    xdo('click', '1'); await pause(250);
+    // Bevy Click targets the previous hover frame. Give native picking time to
+    // establish hover and keep the press across frames on software-rendered CI.
+    await pause(1000);
+    let primaryError;
+    try {
+        xdo('mousedown', '1');
+        await pause(1000);
+    } catch (error) {
+        primaryError = error;
+        throw error;
+    } finally {
+        try { xdo('mouseup', '1'); } catch (error) {
+            if (!primaryError) throw error;
+            console.error(JSON.stringify({ type: 'pentimento.cef.input_release_failed', button: 1, error: String(error) }));
+        }
+    }
+    await pause(250);
 }
 async function nativeClick(locator) {
     await locator.waitFor({ state: 'visible' });
@@ -191,7 +207,10 @@ try {
     const sx = width / 2 + focal * dot(delta, right) / depth;
     const sy = height / 2 - focal * dot(delta, up) / depth;
     sculptPoint = { x: sx, y: sy };
+    const selectedBefore = (log().match(/Added entity .* to ID buffer with color/g) ?? []).length;
     await clickAt(sx, sy);
+    await until(() => (log().match(/Added entity .* to ID buffer with color/g) ?? []).length > selectedBefore,
+        'native mesh selection');
     await key('ctrl+Tab', () => log().includes('Entered sculpt mode for entity'), 'native sculpt mode entry');
     stage = 'sculpt_panel';
     await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
