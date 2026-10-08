@@ -49,6 +49,17 @@ reconcile it with backend state. A real browser pointer regression reproduces
 the former pending mismatch, checks backend float acknowledgement and mode
 reentry, and verifies no scene stroke starts from the panel.
 
+Hosted native continuity on `678e017` then exposed a second paint defect: all
+sixteen pointer moves reached the forwarder in order, but the line stopped
+after the initial dab. The brush resampler overwrote its accumulated distance
+with only the current segment whenever no dab was emitted. Several moves below
+half a dab spacing therefore never reached the next dab. Diagnostic commit
+`9404636` reproduces this through both `PaintingPipeline` and the full production
+native forwarding/paint plugins, checking actual float pixels and exact Undo.
+The fix retains accumulated distance when no dab is emitted; brush spacing,
+pressure interpolation and stroke resets are unchanged. The native drag and
+continuous changed-pixel assertion remain unchanged for requalification.
+
 Reproduce with:
 
 ```sh
