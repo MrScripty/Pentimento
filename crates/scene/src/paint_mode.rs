@@ -14,7 +14,7 @@ use bevy::window::{PrimaryWindow, WindowEvent};
 
 use crate::camera::MainCamera;
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
-use crate::frontend_input::FrontendInputBlockState;
+use crate::frontend_input::{FrontendInputBlockState, FrontendScenePointerInput};
 
 /// Resource tracking paint tool state
 #[derive(Resource, Default)]
@@ -153,13 +153,6 @@ fn handle_paint_mode_toggle(
             paint_mode.current_stroke = None;
         }
     }
-
-    // Escape cancels current stroke
-    if key_input.just_pressed(KeyCode::Escape) && paint_mode.current_stroke.is_some() {
-        paint_events.write(PaintEvent::StrokeCancel);
-        paint_mode.current_stroke = None;
-        info!("Stroke cancelled");
-    }
 }
 
 /// Handle paint input (left mouse button for strokes)
@@ -176,13 +169,18 @@ pub(super) fn handle_paint_input(
     mut paint_events: MessageWriter<PaintEvent>,
     time: Res<Time>,
     input_blocks: Res<FrontendInputBlockState>,
+    scene_input: Option<Res<FrontendScenePointerInput>>,
 ) {
     let Ok((window_entity, window)) = windows.single() else {
         window_events.clear();
         return;
     };
     // Consume every frame, including blocked/inactive frames, to prevent replay.
-    let batch: Vec<_> = window_events.read().cloned().collect();
+    let raw_batch: Vec<_> = window_events.read().cloned().collect();
+    let arbitrated = scene_input
+        .as_ref()
+        .and_then(|input| input.events(window_entity));
+    let batch = arbitrated.map_or(raw_batch, |events| events.to_vec());
     let mut cursor = *last_cursor;
     let mut has_movement = false;
     for event in &batch {
@@ -202,7 +200,9 @@ pub(super) fn handle_paint_input(
         WindowEvent::WindowFocused(event) if event.window == window_entity => Some(event.focused),
         _ => None,
     });
-    if input_blocks.blocks_pointer() || (!window.focused && first_focus.is_none()) {
+    if (arbitrated.is_none() && input_blocks.blocks_pointer())
+        || (!window.focused && first_focus.is_none())
+    {
         if paint_mode.current_stroke.take().is_some() {
             paint_events.write(PaintEvent::StrokeEnd);
         }
@@ -294,6 +294,18 @@ pub(super) fn handle_paint_input(
                     }
                     cursor = None;
                     *last_cursor = None;
+                }
+            }
+            WindowEvent::KeyboardInput(event)
+                if event.window == window_entity
+                    && event.key_code == KeyCode::Escape
+                    && event.state.is_pressed()
+                    && !focus_lost
+                    && !input_blocks.blocks_keyboard() =>
+            {
+                if paint_mode.current_stroke.take().is_some() {
+                    paint_events.write(PaintEvent::StrokeCancel);
+                    info!("Stroke cancelled");
                 }
             }
             _ => {}

@@ -22,6 +22,7 @@ impl PaintingPipeline {
         // Store current stroke info
         self.current_stroke_id = Some(stroke_id);
         self.current_space_id = Some(space_id);
+        self.current_layer_id = Some(self.layers.active_layer_id());
 
         // Recorder will be initialized on first dab (we need initial position)
         self.recorder = None;
@@ -99,7 +100,10 @@ impl PaintingPipeline {
         // Apply dab to the active layer's surface
         let color = self.color;
         let blend_mode = self.blend_mode;
-        if let Some(layer) = self.layers.active_layer_mut() {
+        if let Some(layer) = self
+            .current_layer_id
+            .and_then(|id| self.layers.layer_mut(id))
+        {
             let result = layer.surface.apply_dab(
                 dab.x,
                 dab.y,
@@ -147,7 +151,9 @@ impl PaintingPipeline {
         // Finalize undo entry if we captured any tiles
         if !self.pending_undo_captures.is_empty() {
             let stroke_id = self.current_stroke_id.unwrap_or(0);
-            let layer_id = self.layers.active_layer_id();
+            let layer_id = self
+                .current_layer_id
+                .unwrap_or(self.layers.active_layer_id());
             let entry = super::undo::UndoEntry {
                 stroke_id,
                 layer_id,
@@ -172,25 +178,34 @@ impl PaintingPipeline {
         self.brush.end_stroke();
         self.current_stroke_id = None;
         self.current_space_id = None;
+        self.current_layer_id = None;
     }
 
     /// Cancel the current stroke
     ///
-    /// This aborts the stroke without saving it to the log.
-    /// Note: The visual changes on the surface are NOT reverted.
-    /// For proper undo, use the undo() method after canceling.
+    /// Restore captured tiles without saving a completion packet or undo entry.
+    /// Existing undo entries remain available.
     pub fn cancel_stroke(&mut self) {
         if let Some(mut recorder) = self.recorder.take() {
             let _ = recorder.abort("Cancelled".to_string());
         }
 
-        // Clear pending undo captures (don't save to undo stack)
-        self.pending_undo_captures.clear();
+        if let Some(layer) = self
+            .current_layer_id
+            .and_then(|id| self.layers.layer_mut(id))
+        {
+            for (coord, data) in self.pending_undo_captures.drain() {
+                super::undo::restore_tile(&mut layer.surface, coord, &data);
+            }
+        } else {
+            self.pending_undo_captures.clear();
+        }
         self.captured_tiles.clear();
 
         self.brush.end_stroke();
         self.current_stroke_id = None;
         self.current_space_id = None;
+        self.current_layer_id = None;
     }
 
     /// Check if a stroke is currently in progress

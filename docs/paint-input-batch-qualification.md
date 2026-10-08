@@ -23,6 +23,32 @@ the next press origin. Painting event processing follows the input system.
 Eight real input tests compare complete batched pixels with separate-frame
 controls and check packet IDs/dabs, actual undo entries and released ownership.
 
+Diagnostic commit `a16dd82` extends this to the production native forwarding and
+paint mode plugins. Its separate-frame and UI-drag controls pass; five tests
+fail because a later UI/focus event discards an earlier valid gesture or because
+Escape acts on frame-final state rather than the stroke at that event position.
+The native forwarder now publishes a chronological scene-owned event stream.
+UI-origin button ownership stays latched, entering UI or losing focus closes a
+scene gesture, and newly reported UI rectangles close a stationary held gesture.
+The conservative frame-wide flags remain available to other scene systems.
+Paint drains raw events as before but consumes the native stream when provided.
+Escape cancels the transaction at its chronological position, restores the
+captured pixels on the stroke's original layer, and emits no completion packet.
+Undo refuses an active transaction until it finishes or cancels, preserving the
+rollback baseline and existing undo entries.
+
+Run the full production-path regressions with:
+
+```sh
+cargo test -p pentimento --features egui input::
+cargo test -p painting
+```
+
+The paired Radius range/number controls now share an immediate local draft and
+reconcile it with backend state. A real browser pointer regression reproduces
+the former pending mismatch, checks backend float acknowledgement and mode
+reentry, and verifies no scene stroke starts from the panel.
+
 Reproduce with:
 
 ```sh
@@ -62,3 +88,10 @@ and projection controls. That successful ordinary stroke does not prove complete
 same-frame paint batching. The new input regressions establish CPU input and
 painting pipeline behavior; final native screenshot review belongs to root.
 Keep failed diagnostic evidence and source mappings alongside the green results.
+The native follow-up retains the original toolset assertions and stroke timing,
+adds changed magenta pixels along every four-pixel section of the actual paint
+drag (endpoint dabs cannot pass), and captures the open native menu and a
+nonempty source after projection controls. Sculpt Radius qualification requires
+both paired DOM values and a diagnostic receipt from the actual pipeline preset.
+These extra requirements need a successful hosted run on the published source;
+local CPU and browser passes alone do not qualify native rendering.

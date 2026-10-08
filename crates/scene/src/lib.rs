@@ -65,7 +65,7 @@ pub use depth_view::{
     DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings,
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
-pub use frontend_input::{FrontendInputBlockState, FrontendUiLayout};
+pub use frontend_input::{FrontendInputBlockState, FrontendScenePointerInput, FrontendUiLayout};
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]
 pub use gizmo_raycast::{GizmoGeometry, GizmoHandle};

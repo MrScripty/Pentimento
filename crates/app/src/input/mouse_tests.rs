@@ -946,3 +946,53 @@ fn native_paint_ui_drag_cannot_paint_after_leaving_panel_or_replay_later() {
         "UI input must leave pixels unchanged"
     );
 }
+
+#[test]
+fn native_paint_stationary_stroke_closes_when_new_ui_layout_covers_cursor() {
+    let (mut app, window) = native_paint_fixture();
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 350., 310.),
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+        ],
+    );
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::PaintMode>()
+            .current_stroke
+            .is_some()
+    );
+    app.world_mut()
+        .resource_mut::<FrontendUiLayout>()
+        .regions
+        .push(LayoutRegion {
+            id: "new-menu".into(),
+            x: 300.,
+            y: 280.,
+            width: 100.,
+            height: 100.,
+            z_index: 2,
+            accepts_keyboard: true,
+        });
+    // No motion or button event accompanies this actual layout update.
+    native_batch(&mut app, &[]);
+    assert_native_paint_complete(&app, 1);
+    let closed = native_paint_pixels(&app);
+    for _ in 0..3 {
+        native_batch(&mut app, &[]);
+    }
+    assert!(
+        native_paint_pixels(&app) == closed,
+        "covered stationary cursor must not keep painting"
+    );
+    // Leaving the menu while still physically held cannot resume this stroke.
+    native_batch(&mut app, &[moved(window, 450., 330.)]);
+    assert_native_paint_complete(&app, 1);
+    assert!(native_paint_pixels(&app) == closed);
+    native_batch(
+        &mut app,
+        &[button(window, bevy::input::mouse::MouseButton::Left, false)],
+    );
+    assert_native_paint_complete(&app, 1);
+}

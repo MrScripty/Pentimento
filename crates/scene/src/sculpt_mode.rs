@@ -2759,6 +2759,19 @@ pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
             pipeline.set_brush_preset(preset);
         }
     }
+    if matches!(command, SculptCommand::SetRadius { .. })
+        && std::env::var_os("PENTIMENTO_NATIVE_DIAGNOSTICS").is_some()
+    {
+        let radius = world.resource::<SculptState>().brush_radius;
+        let pipeline_radius = world
+            .get_resource::<SculptingData>()
+            .and_then(|data| data.pipeline.as_ref())
+            .map(|pipeline| pipeline.brush_preset().radius);
+        info!(
+            "Sculpt radius accepted: value={} pipeline={:?}",
+            radius, pipeline_radius
+        );
+    }
 }
 
 #[cfg(test)]

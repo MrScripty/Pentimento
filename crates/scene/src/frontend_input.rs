@@ -5,6 +5,30 @@
 
 use bevy::prelude::*;
 
+/// A native frontend's per-frame, chronologically arbitrated scene input.
+/// UI-owned gestures never enter this stream; a scene gesture entering UI or
+/// losing focus receives an explicit closing event. Global blocking flags
+/// remain conservative for scene systems that do not consume this stream.
+#[derive(Resource, Default)]
+pub struct FrontendScenePointerInput {
+    batch: Option<(Entity, Vec<bevy::window::WindowEvent>)>,
+}
+
+impl FrontendScenePointerInput {
+    pub fn publish(&mut self, window: Entity, events: Vec<bevy::window::WindowEvent>) {
+        self.batch = Some((window, events));
+    }
+    pub fn clear(&mut self) {
+        self.batch = None;
+    }
+    pub fn events(&self, window: Entity) -> Option<&[bevy::window::WindowEvent]> {
+        self.batch
+            .as_ref()
+            .filter(|(owner, _)| *owner == window)
+            .map(|(_, events)| events.as_slice())
+    }
+}
+
 /// Generic input blocking flags owned by the active frontend integration.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct FrontendInputBlockState {

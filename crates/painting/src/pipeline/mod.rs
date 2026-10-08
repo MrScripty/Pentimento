@@ -48,6 +48,8 @@ pub struct PaintingPipeline {
     pub(crate) current_stroke_id: Option<u64>,
     /// Current space ID (used during active stroke)
     pub(crate) current_space_id: Option<u32>,
+    /// Layer owned by the active stroke, independent of later UI selection.
+    pub(crate) current_layer_id: Option<u32>,
     /// Tiles captured for undo during current stroke
     pub(crate) pending_undo_captures: HashMap<TileCoord, Vec<[f32; 4]>>,
     /// Set of tiles already captured this stroke (to avoid re-capturing)
@@ -70,6 +72,7 @@ impl PaintingPipeline {
             blend_mode: BlendMode::Normal,
             current_stroke_id: None,
             current_space_id: None,
+            current_layer_id: None,
             pending_undo_captures: HashMap::new(),
             captured_tiles: HashSet::new(),
             undo_stack: Vec::new(),
@@ -161,6 +164,38 @@ mod tests {
         assert!(!pipeline.is_stroking());
         // Log should be empty (stroke was cancelled)
         assert_eq!(pipeline.log().total_packet_count(), 0);
+    }
+
+    #[test]
+    fn cancelled_stroke_restores_owned_layer_and_preserves_prior_undo() {
+        let mut pipeline = PaintingPipeline::new(128, 128);
+        pipeline.clear([0., 0., 0., 0.]);
+        pipeline.set_color([1., 0., 0., 1.]);
+        pipeline.begin_stroke(0, 1, 0);
+        pipeline.stroke_to(30., 30., 1.);
+        pipeline.end_stroke();
+        pipeline.take_dirty_tiles();
+        let before = pipeline.surface_as_bytes().to_vec();
+        pipeline.begin_stroke(0, 2, 0);
+        pipeline.stroke_to(80., 80., 1.);
+        pipeline.take_dirty_tiles();
+        assert!(pipeline.surface_as_bytes() != before.as_slice());
+        assert!(!pipeline.can_undo(), "live transaction owns its baseline");
+        assert!(
+            !pipeline.undo(),
+            "undo must wait for finish or cancellation"
+        );
+        assert_eq!(pipeline.undo_count(), 1);
+        let other = pipeline.layers.add_layer("Other".into());
+        pipeline.layers.set_active(other);
+        pipeline.cancel_stroke();
+        pipeline.take_dirty_tiles();
+        assert!(pipeline.surface_as_bytes() == before.as_slice());
+        assert_eq!(pipeline.layers.active_layer_id(), other);
+        assert_eq!(pipeline.undo_count(), 1);
+        assert_eq!(pipeline.log().total_packet_count(), 1);
+        assert!(!pipeline.is_stroking());
+        assert!(pipeline.can_undo());
     }
 
     #[test]

@@ -25,7 +25,7 @@ impl PaintingPipeline {
             return;
         }
 
-        let Some(layer) = self.layers.active_layer() else {
+        let Some(layer) = self.current_layer_id.and_then(|id| self.layers.layer(id)) else {
             return;
         };
 
@@ -65,7 +65,7 @@ impl PaintingPipeline {
 
     /// Check if undo is available
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        !self.is_stroking() && !self.undo_stack.is_empty()
     }
 
     /// Get the number of undo levels available
@@ -75,8 +75,12 @@ impl PaintingPipeline {
 
     /// Undo the last stroke
     ///
-    /// Returns true if an undo was performed, false if no undo available
+    /// Finish or cancel an active stroke before undoing committed history.
+    /// Returns true if an undo was performed, false if unavailable.
     pub fn undo(&mut self) -> bool {
+        if self.is_stroking() {
+            return false;
+        }
         let Some(entry) = self.undo_stack.pop() else {
             debug!("Undo: no entries available");
             return false;
@@ -104,7 +108,7 @@ impl PaintingPipeline {
 }
 
 /// Restore a tile's pixel data from an undo entry on a specific surface
-fn restore_tile(surface: &mut TiledSurface, coord: TileCoord, tile_data: &[[f32; 4]]) {
+pub(super) fn restore_tile(surface: &mut TiledSurface, coord: TileCoord, tile_data: &[[f32; 4]]) {
     let tile_size = surface.tile_size();
     let tile_start_x = coord.x * tile_size;
     let tile_start_y = coord.y * tile_size;

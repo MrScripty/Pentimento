@@ -38,6 +38,7 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseState>()
+            .init_resource::<pentimento_scene::FrontendScenePointerInput>()
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(
                 PreUpdate,

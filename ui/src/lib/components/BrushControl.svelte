@@ -4,16 +4,21 @@
         step?: number; unit?: string; onchange: (value: number) => void;
     }
     let { id, label, value, min, max, step = 1, unit = '', onchange }: Props = $props();
+    let displayed = $state(0);
+    $effect(() => { displayed = value; });
     function change(event: Event) {
         const next = (event.currentTarget as HTMLInputElement).valueAsNumber;
-        if (Number.isFinite(next)) onchange(Math.min(max, Math.max(min, next)));
+        if (Number.isFinite(next)) {
+            displayed = Math.min(max, Math.max(min, next));
+            onchange(displayed);
+        }
     }
 </script>
 <div class="brush-control">
     <label for={id}>{label}<span>{unit}</span></label>
     <div class="inputs">
-        <input {id} type="range" {min} {max} {step} {value} oninput={change} />
-        <input type="number" aria-label={`${label} value`} {min} {max} {step} {value} onchange={change} />
+        <input {id} type="range" {min} {max} {step} value={displayed} oninput={change} />
+        <input type="number" aria-label={`${label} value`} {min} {max} {step} value={displayed} onchange={change} />
     </div>
 </div>
 <style>

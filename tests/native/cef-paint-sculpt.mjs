@@ -8,6 +8,7 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
+import { assertContinuousPaint } from './paint-stroke-pixels.mjs';
 import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -260,14 +261,23 @@ try {
     record('sculpt_panel_painted', { ...panelPixels, screenshot: panelFrame.screenshot });
 
     stage = 'sculpt_widget_capture';
+    const radiusLogOffset = log().length;
     const controlStarts = starts(); const beforeControl = await capture('sculpt-before-widget');
     const slider = await page.locator('#sculpt-radius').boundingBox();
     await drag(slider.x + slider.width / 2, slider.y + slider.height / 2, sx - slider.x - slider.width / 2, sy - slider.y - slider.height / 2);
     assert.deepEqual(starts(), controlStarts, 'UI widget drag started an underlying brush stroke');
+    const acceptedRadius = await until(async () => {
+        const radius = Number(await page.locator('#sculpt-radius').inputValue());
+        const number = Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue());
+        const receipt = [...log().slice(radiusLogOffset).matchAll(/Sculpt radius accepted: value=([\d.e+-]+) pipeline=Some\(([\d.e+-]+)\)/g)].at(-1);
+        if (receipt && Math.abs(Number(receipt[1]) - radius) < 0.00001
+            && Math.abs(Number(receipt[2]) - radius) < 0.00001 && radius === number) return radius;
+        return false;
+    }, 'sculpt slider, number and accepted pipeline radius agreement');
     const afterControl = await capture('sculpt-after-widget');
     const controlDelta = difference(beforeControl, afterControl);
     assert.ok(controlDelta.mean_max_channel_difference < 2, 'Sculpt geometry changed during UI drag');
-    record('sculpt_widget_no_stroke', { ...controlDelta, stroke_starts: starts(), screenshot: afterControl.screenshot, native_pointer_trace: pointerTrace() });
+    record('sculpt_widget_no_stroke', { ...controlDelta, accepted_radius: acceptedRadius, stroke_starts: starts(), screenshot: afterControl.screenshot, native_pointer_trace: pointerTrace() });
     await fill(page.getByRole('spinbutton', { name: 'Radius value', exact: true }), '0.8');
     await clickAt(35, height - 35);
     const beforeSculpt = await capture('sculpt-before-stroke'); const beforeStarts = starts();
@@ -361,6 +371,9 @@ try {
     const reentryLogOffset = log().length;
     await key('ctrl+Tab', () => log().slice(reentryLogOffset).includes('Entered sculpt mode for entity'), 'native sculpt reentry receipt');
     await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
+    await until(async () => Number(await page.locator('#sculpt-radius').inputValue()) === .8
+        && Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue()) === .8,
+    'backend sculpt radius persists through exit and reentry');
     const finalExitLogOffset = log().length;
     await key('ctrl+Tab', () => log().slice(finalExitLogOffset).includes('Exited sculpt mode'), 'native final sculpt exit receipt');
     await until(() => page.getByRole('heading', { name: 'Sculpt brushes' }).count().then(n => n === 0), 'final sculpt exit');
@@ -368,6 +381,11 @@ try {
 
     stage = 'paint_entry';
     await clickAt(35, height - 35); await key('shift+a');
+    await page.getByRole('dialog', { name: 'Add Object', exact: true }).waitFor();
+    const menuFrame = await capture('native-add-menu-open');
+    const menuBounds = await page.locator('.add-menu').boundingBox();
+    assertNativeClickBounds(menuBounds, width, height);
+    record('native_open_menu', { ...assertPaintedUiRegion(menuFrame, width, height, menuBounds, 'Add Object menu'), bounds: menuBounds, screenshot: menuFrame.screenshot });
     await nativeClick(page.getByRole('button', { name: 'Paint', exact: true }));
     await page.getByRole('heading', { name: 'Projection paint' }).waitFor();
     await fill(page.getByRole('textbox', { name: 'Hex color', exact: true }), '#ff00ff');
@@ -394,18 +412,28 @@ try {
     assert.ok(starts().paint > paintStarts.paint, 'No engine paint stroke received');
     const afterPaint = await capture('paint-after-stroke'); const paintDelta = difference(beforePaint, afterPaint);
     assert.ok(paintDelta.changed_pixels > 100, 'Paint stroke produced no visible viewport change');
-    record('paint_stroke', { ...paintDelta, stroke_starts: starts(), screenshot: afterPaint.screenshot });
+    const continuousPaint = assertContinuousPaint(beforePaint, afterPaint, width, height,
+        { x: width * .43, y: height * .52 }, { x: width * .43 + 90, y: height * .52 - 25 });
+    record('paint_stroke', { ...paintDelta, ...continuousPaint, stroke_starts: starts(), screenshot: afterPaint.screenshot });
     const beforeUndo = starts(); await nativeClick(undo);
     await until(() => undo.isDisabled(), 'canvas undo restored empty history');
     assert.deepEqual(starts(), beforeUndo, 'Clicking Undo also started a canvas stroke');
     const afterUndo = await capture('paint-after-undo'); const undoDelta = difference(beforePaint, afterUndo);
     assert.ok(undoDelta.mean_max_channel_difference < 2, 'Undo did not restore visible source canvas');
     record('paint_undo_and_ui_capture', { ...undoDelta, screenshot: afterUndo.screenshot });
+    // Project a nonempty real source stroke after proving actual canvas Undo.
+    await drag(width * .43, height * .52, 90, -25);
+    await until(() => undo.isEnabled(), 'second canvas stroke committed before projection');
+    const projectionSource = await capture('paint-projection-source');
+    assertContinuousPaint(afterUndo, projectionSource, width, height,
+        { x: width * .43, y: height * .52 }, { x: width * .43 + 90, y: height * .52 - 25 });
     await nativeClick(page.getByRole('checkbox', { name: 'Live projection', exact: true }));
     await until(() => page.getByRole('checkbox', { name: 'Live projection', exact: true }).isChecked(), 'live projection backend state');
     await nativeClick(page.getByRole('button', { name: 'Apply canvas to UV surfaces', exact: true }));
     await until(() => log().includes('Live projection enabled') && log().includes('Project to scene requested'), 'production projection event handlers');
-    record('projection_controls', { live_projection: true, applied: true, engine_event_log: true });
+    const projectionFrame = await capture('paint-after-projection');
+    record('projection_controls', { live_projection: true, applied: true, engine_event_log: true,
+        nonempty_source: true, source_screenshot: projectionSource.screenshot, screenshot: projectionFrame.screenshot });
 
     stage = 'complete';
     writeFileSync(`${out}/result.json`, JSON.stringify({ type: 'pentimento.cef.result', status: 'passed', commit: command('git', ['rev-parse', 'HEAD']).toString().trim(), records, native_input_events: (await failureDiagnostics())?.native_input_events ?? null }, null, 2));
