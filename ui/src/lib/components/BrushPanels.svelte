@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { bridge } from '$lib/bridge';
-    import type { EditMode, PaintBrushSettings, PaintBrushPresetInfo, SculptBrushSettings, SculptHistoryState } from '$lib/types';
+    import type { EditMode, PaintBrushSettings, PaintBrushPresetInfo, SculptBrushSettings, SculptHistoryState, SavedBrushPresetsState } from '$lib/types';
     import PaintBrushPanel from './PaintBrushPanel.svelte';
     import SculptBrushPanel from './SculptBrushPanel.svelte';
     let { mode }: { mode: EditMode } = $props();
@@ -14,6 +14,7 @@
     let canRedo = $state(false);
     let sourceVisible = $state(true);
     let liveProjection = $state(false);
+    let saved = $state<SavedBrushPresetsState>({ paint: [], sculpt: [], selected_paint: null, selected_sculpt: null, active: false, available: false, notice: null });
     onMount(() => {
         const unsubscribe = bridge.subscribe(message => {
             if (message.type === 'PaintBrushStateChanged') {
@@ -24,6 +25,8 @@
                 sculptHistory = message.data;
             } else if (message.type === 'ProjectionModeChanged') {
                 liveProjection = message.data.live_projection;
+            } else if (message.type === 'SavedBrushPresetsChanged') {
+                saved = message.data;
             }
         });
         bridge.requestBrushState();
@@ -32,8 +35,8 @@
 </script>
 {#if mode === 'Paint' || mode === 'Sculpt'}
     <aside class="brush-panel panel interactive" data-ui-region="brush-panel" aria-label={mode === 'Paint' ? 'Projection paint controls' : 'Sculpt controls'}>
-        {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {presets} {canUndo} {canRedo} {sourceVisible} {liveProjection} />
-        {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} history={sculptHistory} />
+        {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {presets} {canUndo} {canRedo} {sourceVisible} {liveProjection} {saved} />
+        {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} history={sculptHistory} {saved} />
         {:else if mode === 'Sculpt' && sculptReceived}<p class="notice">Sculpting is not available in this renderer build.</p>
         {:else}<p class="notice">Waiting for brush settings from the renderer.</p>{/if}
     </aside>

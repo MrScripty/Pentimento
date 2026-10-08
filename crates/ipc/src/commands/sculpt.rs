@@ -24,6 +24,12 @@ pub enum SculptFalloff {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SculptCommand {
+    SaveBrushPreset {
+        name: String,
+    },
+    SelectSavedBrushPreset {
+        preset_id: u32,
+    },
     Undo,
     Redo,
     SetTool {

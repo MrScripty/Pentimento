@@ -1,8 +1,9 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
-    import type { SculptBrushSettings, SculptTool, SculptFalloff, SculptHistoryState } from '$lib/types';
+    import type { SculptBrushSettings, SculptTool, SculptFalloff, SculptHistoryState, SavedBrushPresetsState } from '$lib/types';
+    import SavedBrushPresets from './SavedBrushPresets.svelte';
     import BrushControl from './BrushControl.svelte';
-    let { settings, history }: { settings: SculptBrushSettings; history: SculptHistoryState } = $props();
+    let { settings, history, saved }: { settings: SculptBrushSettings; history: SculptHistoryState; saved: SavedBrushPresetsState } = $props();
     const tools: { name: SculptTool; description: string }[] = [
         { name: 'Push', description: 'Move along the hit surface normal' },
         { name: 'Pull', description: 'Draw vertices toward the brush center' },
@@ -17,6 +18,7 @@
 </script>
 <section aria-labelledby="sculpt-heading">
     <header><span class="eyebrow">MESH SCULPTING</span><h2 id="sculpt-heading">Sculpt brushes</h2></header>
+    <SavedBrushPresets mode="Sculpt" catalog={saved} />
     <div class="sculpt-tools" aria-label="Sculpt tool">
         {#each tools as tool}<button type="button" aria-pressed={settings.tool === tool.name} title={tool.description} onclick={() => bridge.sculptCommand({ SetTool: { tool: tool.name } })}>{tool.name}</button>{/each}
     </div>

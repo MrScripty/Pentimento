@@ -51,7 +51,14 @@ export type BevyToUi =
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
     | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean; can_redo: boolean; source_visible: boolean } }
     | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } }
-    | { type: 'SculptHistoryChanged'; data: SculptHistoryState };
+    | { type: 'SculptHistoryChanged'; data: SculptHistoryState }
+    | { type: 'SavedBrushPresetsChanged'; data: SavedBrushPresetsState };
+// Backend-owned device-local custom presets share metadata, never parameters.
+export interface SavedBrushPresetsState {
+    paint: PaintBrushPresetInfo[]; sculpt: PaintBrushPresetInfo[];
+    selected_paint: number | null; selected_sculpt: number | null;
+    active: boolean; available: boolean; notice: string | null;
+}
 
 // Messages from UI to Bevy
 export type UiToBevy =
@@ -267,6 +274,8 @@ export type PaintCommand =
     | { SetBrushSpacing: { spacing: number } }
     | { SetBlendMode: { mode: 'Normal' | 'Erase' } }
     | { SelectBrushPreset: { preset_id: number } }
+    | { SaveBrushPreset: { name: string } }
+    | { SelectSavedBrushPreset: { preset_id: number } }
     | 'Undo'
     | 'Redo'
     | { SetSourceVisible: { visible: boolean } }
@@ -311,6 +320,8 @@ export interface SculptBrushSettings {
 }
 export interface SculptHistoryState { undo_strokes: number; redo_strokes: number; active: boolean; notice: string | null }
 export type SculptCommand =
+    | { SaveBrushPreset: { name: string } }
+    | { SelectSavedBrushPreset: { preset_id: number } }
     | 'Undo'
     | 'Redo'
     | { SetTool: { tool: SculptTool } }

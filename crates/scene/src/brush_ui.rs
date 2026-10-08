@@ -47,6 +47,20 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
             }
         }
         UiToBevy::PaintCommand(command) => {
+            if crate::brush_presets::paint_command(world, command) {
+                send_brush_state(world);
+                return true;
+            }
+            if matches!(command, PaintCommand::SelectBrushPreset { .. })
+                && crate::brush_presets::active(world)
+            {
+                crate::brush_presets::reject(
+                    world,
+                    "Finish or cancel the active stroke before selecting a brush preset.",
+                );
+                send_brush_state(world);
+                return true;
+            }
             match command {
                 PaintCommand::SetSourceVisible { visible } => {
                     if let Some(entity) = world
@@ -88,6 +102,10 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
             send_brush_state(world);
         }
         UiToBevy::SculptCommand(command) => {
+            if crate::brush_presets::sculpt_command(world, command) {
+                send_brush_state(world);
+                return true;
+            }
             #[cfg(feature = "sculpting")]
             crate::sculpt_mode::apply_sculpt_command(world, command);
             #[cfg(not(feature = "sculpting"))]
@@ -188,6 +206,8 @@ fn sculpt_history_message(world: &World) -> BevyToUi {
 }
 
 fn send_brush_state(world: &mut World) {
+    crate::brush_presets::ensure(world);
+    let saved = crate::brush_presets::message(world);
     let paint = paint_message(world);
     let live_projection = world
         .get_resource::<ProjectionMode>()
@@ -200,6 +220,9 @@ fn send_brush_state(world: &mut World) {
     let sculpt = None;
     let history = sculpt_history_message(world);
     if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+        if let Some(saved) = saved {
+            outbound.send(saved);
+        }
         outbound.send(history);
         if let Some(paint) = paint {
             outbound.send(paint);
@@ -211,6 +234,7 @@ fn send_brush_state(world: &mut World) {
 
 /// Publish only changed values, including undo availability after strokes and hotkey adjustments.
 pub(crate) fn sync_brush_ui_state(world: &mut World, mut previous: Local<String>) {
+    crate::brush_presets::ensure(world);
     let paint = paint_message(world);
     let projection = world
         .get_resource::<ProjectionMode>()
@@ -223,11 +247,12 @@ pub(crate) fn sync_brush_ui_state(world: &mut World, mut previous: Local<String>
     let sculpt: Option<pentimento_ipc::SculptBrushSettings> = None;
     // Tiny settings payload; serialization is stable and avoids keeping duplicate state resources.
     let key = format!(
-        "{:?}|{:?}|{}|{:?}",
+        "{:?}|{:?}|{}|{:?}|{:?}",
         paint,
         sculpt,
         projection,
-        sculpt_history_message(world)
+        sculpt_history_message(world),
+        crate::brush_presets::message(world)
     );
     if *previous != key {
         *previous = key;
@@ -254,6 +279,7 @@ fn handle_paint_command(
     };
 
     match command {
+        PaintCommand::SaveBrushPreset { .. } | PaintCommand::SelectSavedBrushPreset { .. } => {}
         PaintCommand::SelectBrushPreset { preset_id } => {
             let presets = painting::brush::builtin_presets();
             if let Some(preset) = presets.into_iter().find(|preset| preset.id == preset_id) {

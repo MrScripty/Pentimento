@@ -47,6 +47,9 @@ impl Default for PaintingResource {
 }
 
 impl PaintingResource {
+    pub(crate) fn has_active_stroke(&self) -> bool {
+        self.pipelines.values().any(PaintingPipeline::is_stroking)
+    }
     /// Create a new painting resource
     pub fn new() -> Self {
         Self {

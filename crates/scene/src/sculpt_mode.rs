@@ -2955,6 +2955,64 @@ fn configured_sculpt_preset(state: &SculptState) -> BrushPreset {
     preset
 }
 
+pub(crate) fn preset_from_saved_settings(
+    settings: &SculptBrushSettings,
+    autosmooth_override: Option<f32>,
+) -> Result<BrushPreset, String> {
+    let mut candidate = SculptState::default();
+    candidate.deformation_type = match settings.tool {
+        SculptTool::Push => DeformationType::Push,
+        SculptTool::Pull => DeformationType::Pull,
+        SculptTool::Grab => DeformationType::Grab,
+        SculptTool::Smooth => DeformationType::Smooth,
+        SculptTool::Flatten => DeformationType::Flatten,
+        SculptTool::Inflate => DeformationType::Inflate,
+        SculptTool::Pinch => DeformationType::Pinch,
+        SculptTool::Crease => DeformationType::Crease,
+    };
+    candidate.brush_radius = settings.radius;
+    candidate.brush_strength = settings.strength;
+    candidate.brush_hardness = settings.hardness;
+    candidate.brush_autosmooth = autosmooth_override;
+    candidate.brush_falloff = match settings.falloff {
+        SculptFalloff::Linear => FalloffCurve::Linear,
+        SculptFalloff::Smooth => FalloffCurve::Smooth,
+        SculptFalloff::Sharp => FalloffCurve::Sharp,
+        SculptFalloff::Constant => FalloffCurve::Constant,
+        SculptFalloff::Sphere => FalloffCurve::Sphere,
+    };
+    if sculpt_snapshot(&candidate) != *settings {
+        return Err("The saved sculpt brush disagrees with its effective tool settings.".into());
+    }
+    Ok(configured_sculpt_preset(&candidate))
+}
+
+pub(crate) fn restore_saved_brush(
+    world: &mut World,
+    settings: &SculptBrushSettings,
+    autosmooth_override: Option<f32>,
+) -> Result<(), String> {
+    if crate::brush_presets::active(world) {
+        return Err("Finish or cancel the active stroke before restoring a sculpt brush.".into());
+    }
+    let preset = preset_from_saved_settings(settings, autosmooth_override)?;
+    let mut state = world
+        .get_resource_mut::<SculptState>()
+        .ok_or("Sculpt brushes are unavailable.")?;
+    state.deformation_type = preset.deformation_type;
+    state.brush_radius = preset.radius;
+    state.brush_strength = preset.strength;
+    state.brush_hardness = preset.hardness;
+    state.brush_autosmooth = autosmooth_override;
+    state.brush_falloff = preset.falloff;
+    if let Some(mut data) = world.get_resource_mut::<SculptingData>() {
+        if let Some(pipeline) = data.pipeline.as_mut() {
+            pipeline.set_brush_preset(preset);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
     if matches!(command, SculptCommand::SetAutoSmooth { .. }) {
         let active_stroke = world

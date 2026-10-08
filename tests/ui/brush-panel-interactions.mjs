@@ -97,6 +97,7 @@ assert.equal(await smoothingSlider.inputValue(), '20');
 assert.equal(await smoothingValue.isDisabled(), true);
 assert.equal(await smoothingSlider.isDisabled(), true);
 await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: false, notice: null } });
+await smoothingSlider.scrollIntoViewIfNeeded();
 const smoothingBox = await smoothingSlider.boundingBox();
 await page.mouse.click(smoothingBox.x + smoothingBox.width / 3, smoothingBox.y + smoothingBox.height / 2);
 const smoothingRequested = Number(await smoothingSlider.inputValue());
@@ -136,6 +137,7 @@ assert.equal(await page.getByRole('spinbutton', { name: 'Radius value', exact: t
 // Both controls show the same draft while backend acknowledgement is pending.
 // This uses a real pointer event, not programmatic value assignment.
 const sculptRadius = page.locator('#sculpt-radius');
+await sculptRadius.scrollIntoViewIfNeeded();
 const radiusBox = await sculptRadius.boundingBox();
 await page.mouse.click(radiusBox.x + radiusBox.width / 2, radiusBox.y + radiusBox.height / 2);
 const requestedRadius = Number(await sculptRadius.inputValue());

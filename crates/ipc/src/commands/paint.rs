@@ -27,6 +27,10 @@ pub enum PaintCommand {
     SetBlendMode { mode: BlendMode },
     /// Select a brush preset by ID
     SelectBrushPreset { preset_id: u32 },
+    /// Save the current paint brush, color and tool locally; same name replaces it.
+    SaveBrushPreset { name: String },
+    /// Restore one backend-owned saved paint brush.
+    SelectSavedBrushPreset { preset_id: u32 },
     /// Undo last stroke
     Undo,
     /// Restore the last undone canvas stroke.

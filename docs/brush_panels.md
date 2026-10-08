@@ -36,6 +36,51 @@ not upgraded here.
 - Canvas view retains its orbit lock but allows Shift+middle-drag pan and scroll
   zoom. Plain Tab no longer also handles Ctrl+Tab / Shift+Tab mode shortcuts.
 
+## Device-local custom brushes
+
+Both panels can save the current brush by name and restore it with **Use paint
+brush** or **Use sculpt brush**. The lists are separate, including their IDs;
+the same name can exist once in each mode. Reusing a name replaces that entry
+without changing its ID. Two differently named brushes with identical parameters
+retain the explicitly saved/restored identity. Customization clears the displayed
+current match. A UI reload requests the backend catalog again; application restart
+loads it from disk, and selecting a preset restores its parameters.
+
+Paint saves the existing engine brush model, including full pressure-size limits,
+opacity, hardness and spacing, plus linear color and Brush/Eraser. Built-in presets
+continue to reset only tip settings and retain the current color/tool. Sculpt saves
+the existing editor settings: tool, mesh-local radius, strength, hardness, falloff
+and the explicit auto-smoothing override. Grab stays continuous and retains its
+stored amount for returning to a stamped brush. No geometry, tessellation policy,
+history snapshots or projection settings are stored in a brush preset.
+
+Saving and restoring are refused whenever the scene or a brush pipeline owns a
+stroke, including stale enabled frontend commands. The panel disables preset
+actions and reconciles the accepted choice. Restoring changes current brush
+parameters without clearing undo/redo or replaying input.
+
+One versioned backend-owned JSON catalog stores both modes. On Linux it is under
+`$XDG_CONFIG_HOME/pentimento/brush-presets.json` (absolute XDG paths only), falling
+back to `$HOME/.config`; macOS uses `~/Library/Application Support`, and Windows
+uses `%APPDATA%`. `PENTIMENTO_BRUSH_PRESETS_PATH` can explicitly override the file
+path. Saves use a stable advisory lock and atomic file replacement. Known external
+edits block further preset operations until restart; editors ignoring the advisory
+lock are not protected from every concurrent filesystem race. Corrupt/unsupported
+catalogs are left unchanged, and write errors never report a successful save.
+
+Limits are 64 presets per mode, 64 characters per name and a 1 MiB file. Invalid
+numeric settings and duplicate names/IDs are refused. Builds without the sculpt
+engine preserve the other mode's catalog and validate numeric/schema bounds;
+sculpt effective tool defaults are additionally validated when that engine is
+available. WASM/browser storage is unavailable and shown as such; there is no
+separate frontend preset database, cloud sync or cross-frontend panel parity claim.
+
+Local qualification includes actual saved/reloaded paint pixels and eraser undo,
+saved sculpt parameters affecting guarded pipeline geometry with exact history,
+concurrent-writer refusal, storage faults, active-stroke refusal and Chromium panel
+interactions. Native CEF acceptance remains pending due to the official runtime
+download's proxy 403 block.
+
 ## Limitations and next requirement
 
 Sculpt has transactional per-stroke Undo/Redo and Escape cancellation; see

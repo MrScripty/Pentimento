@@ -112,6 +112,21 @@ fn main() {
                 }),
             },
             BevyToUi::SculptBrushStateChanged { settings: None },
+            BevyToUi::SavedBrushPresetsChanged {
+                paint: vec![PaintBrushPresetInfo {
+                    id: 1,
+                    name: "Ink detail".into(),
+                }],
+                sculpt: vec![PaintBrushPresetInfo {
+                    id: 1,
+                    name: "Gentle push".into(),
+                }],
+                selected_paint: Some(1),
+                selected_sculpt: None,
+                active: false,
+                available: true,
+                notice: None,
+            },
             BevyToUi::SculptHistoryChanged {
                 undo_strokes: 1,
                 redo_strokes: 2,
@@ -126,6 +141,14 @@ fn main() {
         ui_to_bevy: vec![
             UiToBevy::SculptCommand(SculptCommand::Undo),
             UiToBevy::SculptCommand(SculptCommand::Redo),
+            UiToBevy::PaintCommand(PaintCommand::SaveBrushPreset {
+                name: "Ink detail".into(),
+            }),
+            UiToBevy::PaintCommand(PaintCommand::SelectSavedBrushPreset { preset_id: 1 }),
+            UiToBevy::SculptCommand(SculptCommand::SaveBrushPreset {
+                name: "Gentle push".into(),
+            }),
+            UiToBevy::SculptCommand(SculptCommand::SelectSavedBrushPreset { preset_id: 1 }),
             UiToBevy::AddObject(AddObjectRequest {
                 primitive_type: PrimitiveType::Cube,
                 position: Some([0.0, 1.0, 0.0]),

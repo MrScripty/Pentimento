@@ -16,6 +16,7 @@ use bevy::pbr::{Atmosphere, AtmosphereSettings};
 
 mod add_object;
 mod ambient_occlusion;
+mod brush_presets;
 mod brush_ui;
 mod camera;
 mod canvas_plane;

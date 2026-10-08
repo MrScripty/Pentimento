@@ -1,10 +1,17 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
     import { colorToHex as toHex, hexToColor } from '$lib/brush-values';
-    import type { PaintBrushSettings, PaintBrushPresetInfo } from '$lib/types';
+    import type { PaintBrushSettings, PaintBrushPresetInfo, SavedBrushPresetsState } from '$lib/types';
+    import SavedBrushPresets from './SavedBrushPresets.svelte';
     import BrushControl from './BrushControl.svelte';
-    interface Props { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; canRedo: boolean; sourceVisible: boolean; liveProjection: boolean }
-    let { settings, presets, canUndo, canRedo, sourceVisible, liveProjection }: Props = $props();
+    interface Props { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; canRedo: boolean; sourceVisible: boolean; liveProjection: boolean; saved: SavedBrushPresetsState }
+    let { settings, presets, canUndo, canRedo, sourceVisible, liveProjection, saved }: Props = $props();
+    let presetChoice = $state(-1);
+    $effect(() => {
+        const accepted = settings.customized ? -1 : settings.preset_id;
+        if (saved.active) { presetChoice = accepted; return; }
+        presetChoice = accepted;
+    });
     function colorChange(event: Event) {
         const hex = (event.currentTarget as HTMLInputElement).value;
         if (/^#[0-9a-f]{6}$/i.test(hex)) bridge.paintCommand({ SetBrushColor: { color: hexToColor(hex) } });
@@ -17,11 +24,12 @@
         <button type="button" aria-pressed={settings.blend_mode === 'Erase'} onclick={() => bridge.paintCommand({ SetBlendMode: { mode: 'Erase' } })}>Eraser</button>
     </div>
     <label class="select-label" for="paint-preset">Brush preset</label>
-    <select id="paint-preset" value={settings.customized ? -1 : settings.preset_id} onchange={(e) => bridge.paintCommand({ SelectBrushPreset: { preset_id: Number(e.currentTarget.value) } })}>
+    <select id="paint-preset" disabled={saved.active} bind:value={presetChoice} onchange={(e) => bridge.paintCommand({ SelectBrushPreset: { preset_id: Number(e.currentTarget.value) } })}>
         {#if settings.customized}<option value={-1} disabled>Custom round brush</option>{/if}
         {#each presets as preset}<option value={preset.id}>{preset.name}</option>{/each}
     </select>
     <p class="hint">Presets reset the tip settings. Your color and tool stay selected.</p>
+    <SavedBrushPresets mode="Paint" catalog={saved} />
     <div class="tip-row">
         <div class="tip-preview" aria-label="Round tip preview" style={`background: radial-gradient(circle, ${toHex(settings.color)} ${settings.hardness * 45}%, transparent 50%); opacity: ${settings.opacity};`}></div>
         <div><strong>Round tip</strong><p class="hint">Hardness controls edge falloff.</p></div>
