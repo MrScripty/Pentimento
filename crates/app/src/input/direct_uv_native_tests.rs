@@ -3892,3 +3892,283 @@ fn egui_actual_file_popup_captures_a_stationary_native_press() {
     f.batch(vec![button(w, false)]);
     assert_eq!(counts(&f), (0, 0));
 }
+
+// A real, initially unfocused TextEdit supplies the hit position. The native
+// batch still starts with block_keyboard=false: egui acknowledges focus later.
+fn egui_rename_field(f: &mut Fixture, direct: bool) -> pentimento_egui_ui::egui::Pos2 {
+    use pentimento_egui_ui::egui;
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(f);
+    let name = if direct {
+        snapshot
+            .paint
+            .as_ref()
+            .unwrap()
+            .target
+            .uv_layers
+            .as_ref()
+            .unwrap()
+            .layers[0]
+            .name
+            .clone()
+    } else {
+        egui_click(f, &ctx, &mut snapshot, &mut runtime, "Canvas layers");
+        snapshot.layers[0].name.clone()
+    };
+    egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    let (output, _) = egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    fn matching_text(shape: &egui::epaint::Shape, name: &str, points: &mut Vec<egui::Pos2>) {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.text() == name => {
+                points.push(text.pos + text.galley.size() / 2.);
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    matching_text(shape, name, points);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut points = Vec::new();
+    for shape in output.shapes {
+        matching_text(&shape.shape, &name, &mut points);
+    }
+    let point = *points.last().expect("actual layer rename TextEdit");
+    assert!(!ctx.wants_keyboard_input());
+    egui_frame(
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: default(),
+            },
+        ],
+    );
+    assert!(
+        ctx.wants_keyboard_input(),
+        "hit must focus the real TextEdit"
+    );
+    let regions = runtime
+        .ui_regions()
+        .iter()
+        .enumerate()
+        .map(|(i, r)| pentimento_ipc::LayoutRegion {
+            id: format!("egui-{i}"),
+            x: r.min.x,
+            y: r.min.y,
+            width: r.width(),
+            height: r.height(),
+            z_index: i as i32,
+            accepts_keyboard: true,
+        })
+        .collect();
+    crate::render::dispatch_ui_commands(
+        f.app.world_mut(),
+        [UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions,
+        })],
+    );
+    assert!(
+        !f.app
+            .world()
+            .resource::<FrontendInputBlockState>()
+            .blocks_keyboard()
+    );
+    point
+}
+fn egui_fresh_field_history_case(direct: bool, prefix: bool, touch_field: bool) {
+    let mut f = Fixture::new();
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    if direct {
+        f.enable_layers();
+        f.direct();
+    }
+    f.command(PaintCommand::SetBrushSize { size: 8. });
+    f.gesture();
+    f.settle();
+    let history_count = |f: &Fixture| {
+        if direct {
+            counts(f)
+        } else {
+            let pipeline = f
+                .app
+                .world()
+                .resource::<PaintingResource>()
+                .get_pipeline(7)
+                .unwrap();
+            (pipeline.undo_count(), pipeline.redo_count())
+        }
+    };
+    assert_eq!(history_count(&f), (1, 0));
+    let accepted = if direct { f.image() } else { f.source() };
+    let point = egui_rename_field(&mut f, direct);
+    let w = f.window;
+    let mut events = Vec::new();
+    if prefix {
+        // Ctrl is held before the batch. Its release and a new Shift happen
+        // after UI focus, and must neither erase Undo nor convert it to Redo.
+        f.batch(vec![key(w, KeyCode::ControlLeft, true)]);
+        events.extend([key(w, KeyCode::KeyZ, true), key(w, KeyCode::KeyZ, false)]);
+    }
+    if touch_field {
+        let WindowEvent::TouchInput(mut contact) = touch(w, 808, point.x, TouchPhase::Started, 0.7)
+        else {
+            unreachable!()
+        };
+        contact.position.y = point.y;
+        events.push(WindowEvent::TouchInput(contact));
+        contact.phase = TouchPhase::Ended;
+        events.push(WindowEvent::TouchInput(contact));
+    } else {
+        events.extend([
+            WindowEvent::CursorMoved(CursorMoved {
+                window: w,
+                position: Vec2::new(point.x, point.y),
+                delta: None,
+            }),
+            button(w, true),
+            button(w, false),
+        ]);
+    }
+    if prefix {
+        events.push(key(w, KeyCode::ShiftLeft, true));
+    } else {
+        events.push(key(w, KeyCode::ControlLeft, true));
+    }
+    events.extend([
+        key(w, KeyCode::KeyZ, true),
+        key(w, KeyCode::KeyZ, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    if prefix {
+        events.push(key(w, KeyCode::ShiftLeft, false));
+    }
+    f.batch(events);
+    f.settle();
+    assert_eq!(history_count(&f), if prefix { (0, 1) } else { (1, 0) });
+    let current = if direct { f.image() } else { f.source() };
+    if prefix {
+        assert_ne!(current, accepted);
+    } else {
+        assert_eq!(current, accepted);
+    }
+    f.settle();
+    assert_eq!(
+        history_count(&f),
+        if prefix { (0, 1) } else { (1, 0) },
+        "filtered keys cannot replay next frame"
+    );
+}
+#[test]
+fn egui_fresh_text_focus_filters_canvas_history_suffix_and_preserves_held_ctrl_prefix() {
+    for (prefix, touch) in [(false, false), (true, false), (false, true), (true, true)] {
+        egui_fresh_field_history_case(false, prefix, touch);
+    }
+}
+#[test]
+fn egui_fresh_text_focus_filters_directuv_history_suffix_and_preserves_held_ctrl_prefix() {
+    for (prefix, touch) in [(false, false), (true, false), (false, true), (true, true)] {
+        egui_fresh_field_history_case(true, prefix, touch);
+    }
+}
+
+#[test]
+fn egui_focus_return_cannot_replay_a_rejected_history_prefix() {
+    for direct in [false, true] {
+        let mut f = Fixture::new();
+        f.app
+            .world_mut()
+            .resource_mut::<crate::config::PentimentoConfig>()
+            .composite_mode = crate::config::CompositeMode::Egui;
+        if direct {
+            f.direct();
+        }
+        f.command(PaintCommand::SetBrushSize { size: 8. });
+        f.gesture();
+        f.settle();
+        let pixels = if direct { f.image() } else { f.source() };
+        let w = f.window;
+        f.batch(vec![WindowEvent::WindowFocused(
+            bevy::window::WindowFocused {
+                window: w,
+                focused: false,
+            },
+        )]);
+        f.batch(vec![
+            key(w, KeyCode::ControlLeft, true),
+            key(w, KeyCode::KeyZ, true),
+            key(w, KeyCode::KeyZ, false),
+            key(w, KeyCode::ControlLeft, false),
+            WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window: w,
+                focused: true,
+            }),
+            key(w, KeyCode::KeyZ, true),
+            key(w, KeyCode::KeyZ, false),
+        ]);
+        f.settle();
+        assert_eq!(if direct { f.image() } else { f.source() }, pixels);
+        let history = if direct {
+            counts(&f)
+        } else {
+            let painting = f.app.world().resource::<PaintingResource>();
+            let pipeline = painting.get_pipeline(7).unwrap();
+            (pipeline.undo_count(), pipeline.redo_count())
+        };
+        assert_eq!(history, (1, 0));
+    }
+}
+
+#[test]
+fn egui_history_keys_wait_for_own_layout_and_do_not_replay_after_startup() {
+    for direct in [false, true] {
+        let mut f = Fixture::new();
+        f.app
+            .world_mut()
+            .resource_mut::<crate::config::PentimentoConfig>()
+            .composite_mode = crate::config::CompositeMode::Egui;
+        if direct {
+            f.direct();
+        }
+        f.command(PaintCommand::SetBrushSize { size: 8. });
+        f.gesture();
+        f.settle();
+        let pixels = if direct { f.image() } else { f.source() };
+        f.app
+            .world_mut()
+            .resource_mut::<FrontendUiLayout>()
+            .received = false;
+        let w = f.window;
+        f.batch(vec![
+            key(w, KeyCode::ControlLeft, true),
+            key(w, KeyCode::KeyZ, true),
+            key(w, KeyCode::KeyZ, false),
+            key(w, KeyCode::ControlLeft, false),
+        ]);
+        f.app
+            .world_mut()
+            .resource_mut::<FrontendUiLayout>()
+            .received = true;
+        f.settle();
+        assert!(pixels == if direct { f.image() } else { f.source() });
+        let history = if direct {
+            counts(&f)
+        } else {
+            let painting = f.app.world().resource::<PaintingResource>();
+            let pipeline = painting.get_pipeline(7).unwrap();
+            (pipeline.undo_count(), pipeline.redo_count())
+        };
+        assert_eq!(history, (1, 0));
+    }
+}

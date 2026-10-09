@@ -115,10 +115,12 @@ pub fn forward_native_input(
     mut layout: ResMut<pentimento_scene::FrontendUiLayout>,
     mut input_blocks: ResMut<pentimento_scene::FrontendInputBlockState>,
     mut scene_input: ResMut<pentimento_scene::FrontendScenePointerInput>,
+    mut paint_history: ResMut<super::hotkeys::EguiPaintHistory>,
     mut state: Local<NativeInputState>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     owner: Option<Res<pentimento_scene::ProjectOwner>>,
 ) {
+    paint_history.actions.clear();
     let Ok((window_id, window)) = windows.single() else {
         events.clear();
         scene_input.clear();
@@ -200,6 +202,12 @@ pub fn forward_native_input(
     );
     let mut translated = translated.into_iter();
     let mut ui_owned_in_frame = state.ui_buttons.get_pressed().next().is_some();
+    // egui focus is normally acknowledged in PostUpdate. A fresh UI press owns
+    // subsequent keys in this native batch, while valid earlier keys keep order.
+    let egui = config.composite_mode == crate::config::CompositeMode::Egui;
+    let mut egui_keyboard_owned = input_blocks.blocks_keyboard()
+        || ui_owned_in_frame
+        || state.touch.as_ref().is_some_and(|touch| touch.ui);
     if layout.received && !state.layout_reported {
         debug!(
             "Native input layout received: {} regions",
@@ -270,6 +278,7 @@ pub fn forward_native_input(
                     }
                     if !state.buttons.pressed(event.button) && over_ui(&layout, position) {
                         state.ui_buttons.press(event.button);
+                        egui_keyboard_owned |= egui;
                     }
                     state.buttons.press(event.button);
                     ui_owned_in_frame |= state.ui_buttons.get_pressed().next().is_some();
@@ -325,6 +334,7 @@ pub fn forward_native_input(
                     window.resolution.scale_factor(),
                     &mut scene_events,
                 );
+                egui_keyboard_owned |= egui && state.touch.as_ref().is_some_and(|touch| touch.ui);
             }
             WindowEvent::MouseWheel(event) if event.window == window_id => {
                 flush_move(&mut state, &mut mouse, &mut backend);
@@ -337,12 +347,29 @@ pub fn forward_native_input(
                 });
             }
             WindowEvent::KeyboardInput(event) if event.window == window_id => {
-                if !input_blocks.blocks_keyboard() && !state.focus_suspended {
+                let admitted = !input_blocks.blocks_keyboard()
+                    && !(egui && egui_keyboard_owned)
+                    && (!egui || scene_ready)
+                    && !state.focus_suspended;
+                if admitted {
                     scene_events.push(WindowEvent::KeyboardInput(event.clone()));
                 }
                 flush_move(&mut state, &mut mouse, &mut backend);
-                if let Some(event) = translated.next() {
-                    backend.send_keyboard_event(event);
+                if let Some(translated) = translated.next() {
+                    if egui
+                        && admitted
+                        && event.key_code == KeyCode::KeyZ
+                        && translated.pressed
+                        && !event.repeat
+                        && translated.modifiers.ctrl
+                    {
+                        paint_history.actions.push(if translated.modifiers.shift {
+                            super::hotkeys::PaintHistoryAction::Redo
+                        } else {
+                            super::hotkeys::PaintHistoryAction::Undo
+                        });
+                    }
+                    backend.send_keyboard_event(translated);
                 }
             }
             WindowEvent::KeyboardFocusLost(_) => {

@@ -41,6 +41,7 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseState>()
             .init_resource::<pentimento_scene::FrontendScenePointerInput>()
+            .init_resource::<hotkeys::EguiPaintHistory>()
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(
                 PreUpdate,
@@ -63,7 +64,7 @@ impl Plugin for InputPlugin {
         // Paint undo hotkey (Ctrl+Z)
         app.add_systems(
             PreUpdate,
-            hotkeys::handle_paint_undo_hotkey.after(InputSystems),
+            hotkeys::handle_paint_undo_hotkey.after(mouse::forward_native_input),
         );
 
         // Add object menu hotkey (Shift+A)
