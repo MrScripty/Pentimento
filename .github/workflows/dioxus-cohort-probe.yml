@@ -1,9 +1,12 @@
-name: Dioxus dependency cohort probe
+name: Dioxus dependency cohort verification
 
 on:
   pull_request:
     paths:
-      - 'crates/dioxus-ui/Cargo.toml'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - 'launcher.sh'
       - 'docs/dioxus-dependency-compatibility.md'
       - '.github/workflows/dioxus-cohort-probe.yml'
   workflow_dispatch:
@@ -44,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
         with:
           toolchain: '1.99.0'
-      - name: Generate Pentimento lock and graph evidence
+      - name: Verify committed Pentimento lock and graph evidence
         id: resolve
         run: |
           set -euo pipefail
@@ -56,9 +59,10 @@ jobs:
           rustc -Vv > evidence/rustc.txt
           cargo -V > evidence/cargo.txt
           find . -name Cargo.toml -not -path './.git/*' -print0 | sort -z | xargs -0 sha256sum > evidence/manifests.sha256
-          # Never seed this probe with an upstream or pre-existing lock.
-          test ! -e Cargo.lock
-          cargo generate-lockfile
+          # The reviewed application lock is authoritative; never regenerate here.
+          test -s Cargo.lock
+          git ls-files --error-unmatch Cargo.lock
+          git diff --exit-code -- Cargo.lock
           sha256sum Cargo.lock > evidence/Cargo.lock.sha256
           cp Cargo.lock evidence/Cargo.lock
           echo "lock-sha256=$(sha256sum Cargo.lock | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
@@ -120,8 +124,8 @@ jobs:
           cmp resolution/rustc.txt evidence/rustc.txt
           cmp resolution/cargo.txt evidence/cargo.txt
           sha256sum --check resolution/manifests.sha256
-          test ! -e Cargo.lock
-          cp resolution/Cargo.lock Cargo.lock
+          test -s Cargo.lock
+          cmp Cargo.lock resolution/Cargo.lock
           sha256sum --check resolution/Cargo.lock.sha256
           cp resolution/{source-sha.txt,run.txt,Cargo.lock.sha256} evidence/
       - name: Install Linux frontend prerequisites
@@ -223,8 +227,8 @@ jobs:
           cargo -V > evidence/cargo.txt
           # --no-fetch also prevents cargo-audit from filling absent index entries.
           # Resolve the unchanged project lock in this same Cargo home first.
-          test ! -e Cargo.lock
-          cp resolution/Cargo.lock Cargo.lock
+          test -s Cargo.lock
+          cmp Cargo.lock resolution/Cargo.lock
           cargo metadata --locked --format-version 1 --features pentimento-dioxus-ui/hot-reload > evidence/audit-metadata.json
           sha256sum --check resolution/Cargo.lock.sha256
           cargo install cargo-audit --version '=0.22.2' --locked 2>&1 | tee evidence/scanner-install.log

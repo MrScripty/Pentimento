@@ -327,7 +327,7 @@ build_wasm_bundle() {
 
     (
         cd "$PROJECT_ROOT"
-        cargo build --target wasm32-unknown-unknown "${cargo_args[@]}" -p pentimento-wasm --features selection
+        cargo build --locked --target wasm32-unknown-unknown "${cargo_args[@]}" -p pentimento-wasm --features selection
     )
 
     local wasm_file="${PROJECT_ROOT}/target/wasm32-unknown-unknown/${profile}/pentimento_wasm.wasm"
@@ -357,13 +357,13 @@ build_native_app() {
 
     (
         cd "$PROJECT_ROOT"
-        cargo build "${cargo_args[@]}" -p "$APP_BIN" "${feature_args[@]}"
+        cargo build --locked "${cargo_args[@]}" -p "$APP_BIN" "${feature_args[@]}"
     )
 
     if [[ "$FRONTEND" == "cef" ]]; then
         (
             cd "$PROJECT_ROOT"
-            cargo build "${cargo_args[@]}" -p "$CEF_HELPER_BIN"
+            cargo build --locked "${cargo_args[@]}" -p "$CEF_HELPER_BIN"
         )
     fi
 }
@@ -482,7 +482,7 @@ run_verification_suite() {
         cd "$PROJECT_ROOT"
         ./scripts/check-source-readmes.sh --all
         ./scripts/rustfmt-active.sh --check
-        cargo test -p sculpting --lib
+        cargo test --locked -p sculpting --lib
         npm run verify
         build_ui
         # Discover every format regression with selection enabled (outline is feature-gated).
@@ -523,20 +523,20 @@ run_verification_suite() {
         cargo test --locked -p pentimento-frontend-core --lib
         cargo test --locked -p pentimento-dioxus-ui --lib
         cargo test --locked -p pentimento-egui-ui --lib
-        cargo check -p pentimento --features egui
-        cargo check -p pentimento --features dioxus
-        cargo check -p pentimento --features cef
-        cargo check --target wasm32-unknown-unknown -p pentimento-wasm
-        cargo rustc -p pentimento-frontend-core --lib -- -D warnings
-        cargo rustc -p pentimento-scene --lib --features 'wireframe selection mesh_painting mesh_editing sculpting atmosphere' -- -D warnings
-        cargo rustc -p pentimento-webview --lib --features dioxus -- -D warnings
-        cargo rustc -p pentimento-webview --lib --features cef -- -D warnings
-        cargo rustc -p pentimento-egui-ui --lib -- -D warnings
-        cargo rustc -p pentimento-dioxus-ui --lib -- -D warnings
-        cargo rustc -p pentimento --bin pentimento --features egui -- -D warnings
-        cargo rustc -p pentimento --bin pentimento --features dioxus -- -D warnings
-        cargo rustc -p pentimento --bin pentimento --features cef -- -D warnings
-        cargo rustc -p pentimento-wasm --lib --target wasm32-unknown-unknown -- -D warnings
+        cargo check --locked -p pentimento --features egui
+        cargo check --locked -p pentimento --features dioxus
+        cargo check --locked -p pentimento --features cef
+        cargo check --locked --target wasm32-unknown-unknown -p pentimento-wasm
+        cargo rustc --locked -p pentimento-frontend-core --lib -- -D warnings
+        cargo rustc --locked -p pentimento-scene --lib --features 'wireframe selection mesh_painting mesh_editing sculpting atmosphere' -- -D warnings
+        cargo rustc --locked -p pentimento-webview --lib --features dioxus -- -D warnings
+        cargo rustc --locked -p pentimento-webview --lib --features cef -- -D warnings
+        cargo rustc --locked -p pentimento-egui-ui --lib -- -D warnings
+        cargo rustc --locked -p pentimento-dioxus-ui --lib -- -D warnings
+        cargo rustc --locked -p pentimento --bin pentimento --features egui -- -D warnings
+        cargo rustc --locked -p pentimento --bin pentimento --features dioxus -- -D warnings
+        cargo rustc --locked -p pentimento --bin pentimento --features cef -- -D warnings
+        cargo rustc --locked -p pentimento-wasm --lib --target wasm32-unknown-unknown -- -D warnings
     )
 }
 
