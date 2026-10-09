@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 // NativeImage's Linux bitmap is BGRA. Expect the canonical ScenePlugin's red cube,
 // green torus, blue sphere and neutral ground; a blank/gradient-only canvas is insufficient.
-function inspectScene(bitmap, width, height) {
+function measureScene(bitmap, width, height) {
     assert.equal(bitmap.length, width * height * 4);
     const counts = { red: 0, green: 0, blue: 0, neutral: 0 };
     const histogram = new Map();
@@ -17,11 +17,17 @@ function inspectScene(bitmap, width, height) {
     }
     const total = width * height;
     const variedFraction = 1 - Math.max(0, ...histogram.values()) / total;
-    assert.ok(histogram.size >= 8 && variedFraction > .01, 'canvas lacks spatial scene detail');
+    const pending = [];
+    if (!(histogram.size >= 8 && variedFraction > .01)) pending.push('canvas lacks spatial scene detail');
     for (const color of ['red', 'green', 'blue']) {
-        assert.ok(counts[color] >= Math.max(32, total * .0001), `missing canonical ${color} object pixels`);
+        if (!(counts[color] >= Math.max(32, total * .0001))) pending.push(`missing canonical ${color} object pixels`);
     }
-    assert.ok(counts.neutral > total * .01, 'missing neutral ground/background pixels');
-    return { colors: histogram.size, variedFraction, counts };
+    if (!(counts.neutral > total * .01)) pending.push('missing neutral ground/background pixels');
+    return { colors: histogram.size, variedFraction, counts, ready: pending.length === 0, pending };
 }
-module.exports = { inspectScene };
+function inspectScene(bitmap, width, height) {
+    const evidence = measureScene(bitmap, width, height);
+    assert.ok(evidence.ready, evidence.pending.join('; '));
+    return evidence;
+}
+module.exports = { inspectScene, measureScene };

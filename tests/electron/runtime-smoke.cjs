@@ -5,7 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
-const { inspectScene } = require('./frame-evidence.cjs');
+const { inspectScene, measureScene } = require('./frame-evidence.cjs');
+const { createSandboxObserver } = require('./sandbox-observer.cjs');
 const root = path.resolve(__dirname, '../..');
 const preflight = process.argv.includes('--preflight');
 const phase = preflight ? 'environment' : 'production';
@@ -23,8 +24,19 @@ async function prepareShutdown() {
         await new Promise(resolve => setTimeout(resolve, 20));
     }
 }
+let lastCanvasCapture;
+let productionObserver;
 function fail(error) {
     result.errors.push(String(error?.stack || error));
+    try {
+        if (lastCanvasCapture && !lastCanvasCapture.isEmpty()) {
+            fs.writeFileSync(path.join(evidence, 'last-canvas.png'), lastCanvasCapture.toPNG());
+        }
+    } catch (captureError) {
+        result.errors.push(`Could not preserve last canvas: ${captureError}`);
+    }
+    try { productionObserver?.cleanup(); }
+    catch (cleanupError) { result.errors.push(`Observer cleanup failed: ${cleanupError}`); }
     save();
     console.error(error);
     app.exit(1);
@@ -41,6 +53,8 @@ for (const flag of ['no-sandbox', 'disable-setuid-sandbox', 'disable-web-securit
 app.on('will-quit', () => {
     clearTimeout(timeout);
     result.willQuit = true;
+    try { productionObserver?.cleanup(); }
+    catch (error) { return fail(error); }
     save();
 });
 
@@ -70,6 +84,8 @@ if (preflight) {
     }
     app.on('browser-window-created', (_event, win) => {
         const contents = win.webContents;
+        try { productionObserver.bind(contents); }
+        catch (error) { return fail(error); }
         contents.on('did-fail-load', (_event, code, description, url, mainFrame) => {
             if (mainFrame) fail(new Error(`production load failed ${code}: ${description} (${url})`));
         });
@@ -84,26 +100,43 @@ if (preflight) {
             if (message !== 'Pentimento: WASM loaded!' || inspected) return;
             inspected = true;
             try {
-                await new Promise(resolve => setTimeout(resolve, 3000));
+                // Backend readiness is asynchronous; the existing overall timeout bounds this wait.
+                // Keep the latest observed startup state in failure evidence.
+                while (true) {
+                    result.depthReadiness = await contents.executeJavaScript(`(() => {
+                        const control = document.querySelector('[aria-label="Toggle depth view"]');
+                        return control ? {disabled: control.disabled, reason: control.title} : null;
+                    })()`);
+                    if (result.depthReadiness && (!result.depthReadiness.disabled ||
+                        /unavailable on WebGL\/OpenGL/.test(result.depthReadiness.reason))) break;
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
                 assert.equal(contents.getURL(), pathToFileURL(expectedDocument).href);
                 const preferences = contents.getLastWebPreferences();
                 assert.equal(preferences.nodeIntegration, false);
                 assert.equal(preferences.contextIsolation, true);
                 assert.equal(preferences.sandbox, true);
                 result.preferences = { nodeIntegration: preferences.nodeIntegration, contextIsolation: preferences.contextIsolation, sandbox: preferences.sandbox, preload: preferences.preload };
-                result.sandbox = await contents.executeJavaScriptInIsolatedWorld(999, [{ code: '({sandboxed: process.sandboxed, contextIsolated: process.contextIsolated})' }]);
+                // Observe documented process flags from an additional restricted session preload.
+                // This is actual renderer instrumentation, not an independent kernel attestation.
+                result.sandbox = await productionObserver.observation;
                 assert.equal(result.sandbox.sandboxed, true);
                 assert.equal(result.sandbox.contextIsolated, true);
                 result.renderer = await contents.executeJavaScript(`(() => {
                     const canvas = document.querySelector('#bevy-canvas');
+                    const depth = document.querySelector('[aria-label="Toggle depth view"]');
                     return { marker: window.__ELECTRON__, process: typeof process, require: typeof require,
                         elements: document.querySelector('#app').childElementCount,
                         canvasVisible: canvas && getComputedStyle(canvas).display !== 'none',
-                        canvasWidth: canvas?.width, canvasHeight: canvas?.height };
+                        canvasWidth: canvas?.width, canvasHeight: canvas?.height,
+                        depth: {disabled: depth?.disabled, pressed: depth?.getAttribute('aria-pressed'), reason: depth?.title} };
                 })()`);
                 assert.equal(result.renderer.marker, true);
                 assert.equal(result.renderer.process, 'undefined');
                 assert.equal(result.renderer.require, 'undefined');
+                assert.equal(result.renderer.depth.disabled, true);
+                assert.equal(result.renderer.depth.pressed, 'false');
+                assert.match(result.renderer.depth.reason, /unavailable on WebGL\/OpenGL/);
                 assert.ok(result.renderer.elements > 0);
                 assert.ok(result.renderer.canvasVisible && result.renderer.canvasWidth > 0 && result.renderer.canvasHeight > 0);
                 const screenshot = await contents.capturePage();
@@ -115,16 +148,29 @@ if (preflight) {
                 try {
                     result.canvasFrames = [];
                     for (let frame = 0; frame < 2; frame++) {
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                        const rect = await contents.executeJavaScript(`(() => {
-                            const r = document.querySelector('#bevy-canvas').getBoundingClientRect();
-                            return {x: Math.ceil(r.x + r.width * .1), y: Math.ceil(r.y + r.height * .1),
-                                width: Math.floor(r.width * .8), height: Math.floor(r.height * .8)};
-                        })()`);
-                        const canvas = await contents.capturePage(rect);
-                        assert.equal(canvas.isEmpty(), false);
-                        const size = canvas.getSize();
-                        const scene = inspectScene(canvas.toBitmap(), size.width, size.height);
+                        let canvas, size, rect, scene;
+                        // Capability can arrive before the first rendered frame. Poll the same
+                        // scene predicate until ready; renderer/load errors still fail immediately.
+                        while (true) {
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                            rect = await contents.executeJavaScript(`(() => {
+                                const r = document.querySelector('#bevy-canvas').getBoundingClientRect();
+                                return {x: Math.ceil(r.x + r.width * .1), y: Math.ceil(r.y + r.height * .1),
+                                    width: Math.floor(r.width * .8), height: Math.floor(r.height * .8)};
+                            })()`);
+                            canvas = await contents.capturePage(rect);
+                            lastCanvasCapture = canvas;
+                            size = canvas.getSize();
+                            if (canvas.isEmpty()) {
+                                result.lastFrame = { frame, rect, size, ready: false, pending: ['empty capture'] };
+                                continue;
+                            }
+                            const bitmap = canvas.toBitmap();
+                            result.lastFrame = { frame, rect, size, ...measureScene(bitmap, size.width, size.height) };
+                            if (!result.lastFrame.ready) continue;
+                            scene = inspectScene(bitmap, size.width, size.height);
+                            break;
+                        }
                         fs.writeFileSync(path.join(evidence, `canvas-${frame}.png`), canvas.toPNG());
                         result.canvasFrames.push({ rect, size, ...scene });
                     }
@@ -142,10 +188,12 @@ if (preflight) {
     });
     // Prove the canonical production layout is self-contained once installed.
     app.whenReady().then(() => {
+        productionObserver = createSandboxObserver({ ipcMain, session: session.defaultSession,
+            expectedUrl: pathToFileURL(expectedDocument).href, onFailure: fail });
         session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
             result.network.push(details.url);
             callback({ cancel: true });
         });
-    });
-    require(path.join(root, 'src-electron/dist/main.js'));
+        require(path.join(root, 'src-electron/dist/main.js'));
+    }).catch(fail);
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-const { inspectScene } = createRequire(import.meta.url)('../electron/frame-evidence.cjs');
+const { inspectScene, measureScene } = createRequire(import.meta.url)('../electron/frame-evidence.cjs');
 function pixels(fn) {
     const buffer = Buffer.alloc(100 * 100 * 4);
     for (let i = 0; i < 10000; i++) buffer.set(fn(i), i * 4);
@@ -27,4 +27,14 @@ test('render evidence recognizes all required canonical material color populatio
     assert.equal(result.counts.red, 1000);
     assert.equal(result.counts.green, 1000);
     assert.equal(result.counts.blue, 1000);
+});
+
+test('pending scene evidence keeps statistics and reasons without accepting a blank frame', () => {
+    const report = measureScene(pixels(() => [80,80,80,255]), 100, 100);
+    assert.equal(report.ready, false);
+    assert.equal(report.colors, 1);
+    assert.equal(report.variedFraction, 0);
+    assert.equal(report.counts.neutral, 10000);
+    assert.ok(report.pending.includes('missing canonical red object pixels'));
+    assert.throws(() => measureScene(Buffer.alloc(3), 100, 100));
 });
