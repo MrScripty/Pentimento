@@ -524,6 +524,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normal_hint_packet_preserves_input_direction_and_v1_bytes() {
+        let mut engine = SculptBrushEngine::new(BrushPreset {
+            spacing: 0.0,
+            ..BrushPreset::default()
+        });
+        // Stationary inputs and zero spacing isolate normal encoding from the
+        // resampler and packet-origin bookkeeping, which this test does not qualify.
+        let mut input = BrushInput {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            normal: Vec3::X,
+            pressure: 1.0,
+            timestamp_ms: 10,
+        };
+        let stroke_id = engine.begin_stroke(7, input);
+        let normals = [Vec3::X, Vec3::Y, Vec3::new(1.0, 2.0, 3.0).normalize()];
+        let expected_hints = [0x88, 0x8c, 0x3a];
+        for (normal, expected_hint) in normals.into_iter().zip(expected_hints) {
+            input.normal = normal;
+            let results = engine.update_stroke(input);
+            assert_eq!(results.len(), 1);
+            // Live deformation still receives the original normal, not decode_normal.
+            assert_eq!(results[0].normal, normal);
+            assert_eq!(results[0].dab.normal_hint, expected_hint);
+        }
+        let packets = engine.end_stroke().expect("active stroke");
+        assert_eq!(packets.len(), 1);
+        let packet = &packets[0];
+        assert_eq!(packet.header.version, 1);
+        assert_eq!(packet.header.mesh_id, 7);
+        assert_eq!(packet.header.stroke_id, stroke_id);
+        assert_eq!(packet.dabs.len(), normals.len());
+        for ((dab, normal), expected_hint) in packet.dabs.iter().zip(normals).zip(expected_hints) {
+            assert_eq!(
+                bytemuck::bytes_of(dab),
+                &[0, 0, 0, 255, 85, expected_hint, 0, 0]
+            );
+            let decoded = dab.decode_normal();
+            let error = normal.dot(decoded).clamp(-1.0, 1.0).acos();
+            // One polar bin plus one azimuth bin is a conservative angular bound.
+            let bound = std::f32::consts::PI / 16.0 + std::f32::consts::TAU / 16.0 + 1e-5;
+            assert!(error <= bound, "normal {normal:?}, error {error}");
+        }
+    }
+
+    #[test]
     fn test_falloff_curves() {
         // All curves should be 1.0 at center
         assert!((FalloffCurve::Linear.evaluate(0.0) - 1.0).abs() < 0.001);

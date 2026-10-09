@@ -3,8 +3,9 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use pentimento_ipc::{CameraCommand, GizmoCommand, MaterialCommand, ObjectCommand, UiToBevy};
 use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, GizmoState, MainCamera, MeshEditEvent,
-    OrbitCamera, SceneAmbientOcclusion, SceneLighting,
+    AddObjectEvent, CanvasPlaneEvent, DepthViewCapability, DepthViewSettings, GizmoState,
+    MainCamera, MeshEditEvent, OrbitCamera, OutboundUiMessages, SceneAmbientOcclusion,
+    SceneLighting,
 };
 #[cfg(feature = "selection")]
 use pentimento_scene::{Selectable, Selected, SelectionState};
@@ -14,6 +15,7 @@ pub(crate) fn dispatch_ui_commands(
     commands: impl IntoIterator<Item = UiToBevy>,
 ) {
     let mut canvas_events = Vec::new();
+    let mut outbound_layer_messages = Vec::new();
 
     for command in commands {
         if matches!(
@@ -61,9 +63,18 @@ pub(crate) fn dispatch_ui_commands(
                     ambient_occlusion.update(settings);
                 }
             }
-            UiToBevy::SetDepthView { enabled } => {
+            UiToBevy::GetDepthViewState | UiToBevy::SetDepthView { .. } => {
+                let capability = world
+                    .get_resource::<DepthViewCapability>()
+                    .cloned()
+                    .unwrap_or_default();
                 if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
-                    settings.enabled = enabled;
+                    if let UiToBevy::SetDepthView { enabled } = command {
+                        if let Some(rejection) = capability.set_enabled(&mut settings, enabled) {
+                            outbound_layer_messages.push(rejection);
+                        }
+                    }
+                    outbound_layer_messages.push(capability.state_message(&settings));
                 }
             }
             UiToBevy::MeshEditCommand(command) => handle_mesh_edit_command(world, command),
@@ -88,6 +99,13 @@ pub(crate) fn dispatch_ui_commands(
         if let Some(mut messages) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
             for event in canvas_events {
                 messages.write(event);
+            }
+        }
+    }
+    if !outbound_layer_messages.is_empty() {
+        if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+            for message in outbound_layer_messages {
+                outbound.send(message);
             }
         }
     }
@@ -485,5 +503,44 @@ mod project_command_tests {
         assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), 1);
         assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished{operation,success:true,..} if operation=="Open")));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod depth_command_tests {
+    use super::*;
+    use pentimento_ipc::BevyToUi;
+
+    #[test]
+    fn native_depth_query_and_rejected_toggle_emit_authoritative_replies() {
+        let mut world = World::new();
+        world.init_resource::<DepthViewSettings>();
+        world.init_resource::<DepthViewCapability>();
+        world.init_resource::<OutboundUiMessages>();
+        dispatch_ui_commands(
+            &mut world,
+            [
+                UiToBevy::GetDepthViewState,
+                UiToBevy::SetDepthView { enabled: true },
+            ],
+        );
+        assert!(!world.resource::<DepthViewSettings>().enabled);
+        let messages = &world.resource::<OutboundUiMessages>().messages;
+        assert!(matches!(
+            messages.as_slice(),
+            [
+                BevyToUi::DepthViewState {
+                    available: false,
+                    enabled: false,
+                    ..
+                },
+                BevyToUi::DepthViewRejected { .. },
+                BevyToUi::DepthViewState {
+                    available: false,
+                    enabled: false,
+                    ..
+                },
+            ]
+        ));
     }
 }

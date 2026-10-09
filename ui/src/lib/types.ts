@@ -49,6 +49,8 @@ export type BevyToUi =
     | { type: 'ProjectionModeChanged'; data: { live_projection: boolean } }
     | { type: 'MeshEditModeChanged'; data: { active: boolean; selection_mode: MeshSelectionMode; tool: MeshEditTool } }
     | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
+    | { type: 'DepthViewState'; data: DepthViewState }
+    | { type: 'DepthViewRejected'; data: { reason: string } }
     | { type: 'CloseMenus' }
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
     | { type: 'PaintColorSamplingChanged'; data: PaintColorSamplingState }
@@ -85,7 +87,15 @@ export type UiToBevy =
     | { type: 'SculptCommand'; data: SculptCommand }
     | { type: 'RequestBrushState' }
     | { type: 'MeshEditCommand'; data: MeshEditCommand }
-    | { type: 'SetDepthView'; data: { enabled: boolean } };
+    | { type: 'SetDepthView'; data: { enabled: boolean } }
+    | { type: 'GetDepthViewState' };
+
+// Renderer-authoritative depth view capability and state.
+export interface DepthViewState {
+    available: boolean;
+    enabled: boolean;
+    reason: string | null;
+}
 
 export type ProjectCommand='GetState'|{Save:{path:string}}|{Open:{path:string}};
 export interface ProjectState {path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}

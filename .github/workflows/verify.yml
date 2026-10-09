@@ -16,6 +16,9 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            src-electron/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -30,6 +33,7 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libudev-dev \
             libwayland-dev \
+            libwebkit2gtk-4.1-dev \
             libxkbcommon-dev \
             pkg-config
 
@@ -37,7 +41,10 @@ jobs:
         run: cargo install wasm-bindgen-cli
 
       - name: Install repo dependencies
-        run: ./launcher.sh --install
+        run: |
+          sha256sum package-lock.json src-electron/package-lock.json > "$RUNNER_TEMP/npm-lockfiles.sha256"
+          ./launcher.sh --install
+          sha256sum --check "$RUNNER_TEMP/npm-lockfiles.sha256"
 
       - name: Exercise rendered UI and viewport-edge menus
         timeout-minutes: 6
@@ -64,7 +71,10 @@ jobs:
             2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/ui-browser.log"
 
       - name: Verify active frontends
-        run: ./launcher.sh --test
+        run: |
+          sha256sum Cargo.lock > "$RUNNER_TEMP/cargo-lock.sha256"
+          ./launcher.sh --test
+          sha256sum --check "$RUNNER_TEMP/cargo-lock.sha256"
 
       - name: Retain rendered UI evidence
         if: always()
@@ -74,3 +84,24 @@ jobs:
           path: ${{ runner.temp }}/pentimento-ui-evidence
           if-no-files-found: warn
           retention-days: 14
+
+  sculpting:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check normal codec source formatting
+        run: rustfmt --edition 2024 --check crates/sculpting/src/types.rs crates/sculpting/src/brush.rs
+
+      - name: Test sculpting library
+        run: cargo test --locked -p sculpting --lib
+
+      - name: Lint sculpting library
+        run: cargo clippy --locked -p sculpting --lib --tests

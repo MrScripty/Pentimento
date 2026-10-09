@@ -19,6 +19,13 @@ Use the root launcher for install, build, run, and verification:
 ./launcher.sh --test
 ```
 
+The root `package-lock.json` and `src-electron/package-lock.json` are tracked
+inputs to reproducible npm installs. Routine bootstrap uses
+`./launcher.sh --install`, which runs `npm ci` without regenerating either
+lockfile. Deliberate dependency updates must regenerate and review the affected
+lockfile alongside its manifest using the Node.js 22/npm 10 CI toolchain. Do not
+delete or regenerate lockfiles to work around a failed install.
+
 ## Frontend Paths
 
 | Frontend | Ownership Model | Status |
@@ -53,6 +60,7 @@ sudo apt-get install -y \
   libgtk-3-dev \
   libudev-dev \
   libwayland-dev \
+  libwebkit2gtk-4.1-dev \
   libxkbcommon-dev \
   pkg-config
 ```
@@ -64,18 +72,35 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli
 ```
 
-Node.js 22+ is required for the Svelte and Electron tooling.
+Node.js 22.12+ is required for the Svelte and Electron 44 tooling.
+The canonical `--install` explicitly runs the installed `install-electron`
+command after `npm ci`, so the runtime binary is acquired during bootstrap,
+not on first launch. Readiness checks inspect the lockfile version, installed
+package, binary version marker, and executable without importing Electron.
+The Electron runtime CI separately builds genuine production UI/WASM, checks the
+ordinary Linux sandbox and preload isolation, and records canvas-only scene
+captures for visual review. Its test-only Linux supervisor records descendant
+PID/start-time identities before shutdown and verifies observed process exits;
+a `will-quit` event alone is not considered completed shutdown.
 
 ## Verification
 
-`./launcher.sh --test` is the canonical local verification command. It currently enforces:
+`./launcher.sh --test` is the canonical local verification command. Canonical launcher
+builds/checks and CI checks use the committed root `Cargo.lock` with `--locked`; dependency
+changes require explicit lock review. See [dependency lock provenance and known
+audit findings](docs/cargo-lock-baseline.md). This reproducibility baseline is
+not security clearance or a runtime support guarantee.
+
+The verification suite currently enforces:
 
 - active source-directory README coverage
 - active frontend Rust formatting
 - CPU sculpt topology, UV-seam, tessellation, and render-asset synchronization tests
 - combined projection, brush-control, and sculpt mode-transition engine tests
+- sculpting library unit tests, including the v1 normal codec and brush packets
 - Svelte accessibility linting
 - TypeScript typechecking for the browser and Electron shells
+- production UI asset generation before Rust checks that embed `dist/ui`
 - Rust-to-JavaScript IPC acceptance coverage
 - warning-free cargo checks for the CEF, Dioxus, egui, WASM, and shared native
   UI crates

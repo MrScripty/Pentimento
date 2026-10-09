@@ -29,6 +29,16 @@ pub enum BevyToUi {
         success: bool,
         message: String,
     },
+    /// Authoritative optional depth-view capability and current state.
+    DepthViewState {
+        available: bool,
+        enabled: bool,
+        reason: Option<String>,
+    },
+
+    /// A depth-view request could not be applied; state is unchanged.
+    DepthViewRejected { reason: String },
+
     /// Initial state sync when UI loads
     Initialize {
         scene_info: SceneInfo,
@@ -227,6 +237,9 @@ pub enum UiToBevy {
 
     /// Mesh edit mode commands
     MeshEditCommand(MeshEditCommand),
+
+    /// Query depth capability after mounting or reconnecting a UI.
+    GetDepthViewState,
 
     /// Toggle depth view mode
     SetDepthView {

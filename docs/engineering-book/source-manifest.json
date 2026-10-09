@@ -1,0 +1,217 @@
+{
+  "repo": "MrScripty/Pentimento",
+  "commit": "f819e593819004690c4465afbb9733cb78b731c2",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "path": "README.md",
+      "blob_sha": "897d607bf0dba5c2b114aceecd146ad181eeb92b",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/README.md",
+      "chars": 3040
+    },
+    {
+      "path": "Cargo.toml",
+      "blob_sha": "66b4b0c625b6a9e6ea9d2634abbccfb97cc9ea65",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/Cargo.toml",
+      "chars": 1384
+    },
+    {
+      "path": "justfile",
+      "blob_sha": "3d6479bae8b9329e5ff96df03ea97819aa9c2cdc",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/justfile",
+      "chars": 1336
+    },
+    {
+      "path": ".github/workflows/verify.yml",
+      "blob_sha": "d34b83db55367533c887ea43cd13f73c5d5d2edf",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/.github/workflows/verify.yml",
+      "chars": 900
+    },
+    {
+      "path": "docs/adr/ADR-001-active-frontends-and-contract-ownership.md",
+      "blob_sha": "4432adf083d4fe9027096d6d2ddfe7c8577e8c42",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/docs/adr/ADR-001-active-frontends-and-contract-ownership.md",
+      "chars": 2583
+    },
+    {
+      "path": "docs/paint_projection.md",
+      "blob_sha": "3dc7d164b0bdd25967262c300dad9e005ff6b697",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/docs/paint_projection.md",
+      "chars": 9266
+    },
+    {
+      "path": "PAINTING_PLAN.md",
+      "blob_sha": "7efb0c0f00f7fbb3b1e74d7fd84d50a7797d576c",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/PAINTING_PLAN.md",
+      "chars": 14067
+    },
+    {
+      "path": "crates/painting/src/half_edge/construction.rs",
+      "blob_sha": "b06cb2c5c494793f75bb6781d3b9a23a3f289ba7",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/half_edge/construction.rs",
+      "chars": 10168
+    },
+    {
+      "path": "crates/painting/src/half_edge/topology.rs",
+      "blob_sha": "e57f937ca040ae3220e6a54e79e64cd40551b124",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/half_edge/topology.rs",
+      "chars": 14201
+    },
+    {
+      "path": "crates/painting/src/half_edge/modification.rs",
+      "blob_sha": "060c8325a68403ac0aed6851d0898ae458bf3465",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/half_edge/modification.rs",
+      "chars": 61174
+    },
+    {
+      "path": "crates/painting/src/log/storage.rs",
+      "blob_sha": "a0c74c3613b2a5c3eb5ceb5bf149d7409b214a10",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/log/storage.rs",
+      "chars": 4316
+    },
+    {
+      "path": "crates/painting/src/log/recorder.rs",
+      "blob_sha": "efe07c8964dd55f02d0681af896c4fab95cc47d9",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/log/recorder.rs",
+      "chars": 9633
+    },
+    {
+      "path": "crates/painting/src/types.rs",
+      "blob_sha": "87e0ded3c63ecf5fd1312625970a9482229f9932",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/types.rs",
+      "chars": 5168
+    },
+    {
+      "path": "crates/sculpting/src/pipeline.rs",
+      "blob_sha": "5f9f0a9e231724d12e246afffd748b70907d68b3",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/pipeline.rs",
+      "chars": 33570
+    },
+    {
+      "path": "crates/sculpting/src/tessellation/mod.rs",
+      "blob_sha": "de88ab2f89cfa2069afef629d9b97c83cdad7956",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/tessellation/mod.rs",
+      "chars": 54050
+    },
+    {
+      "path": "crates/sculpting/src/tessellation/edge_collapse.rs",
+      "blob_sha": "5a56a93e28833b3a667b8671cee181fbba054936",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/tessellation/edge_collapse.rs",
+      "chars": 21751
+    },
+    {
+      "path": "crates/sculpting/src/tessellation/edge_split.rs",
+      "blob_sha": "14372fcba2da2236e9156ee8df83737392b550f2",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/tessellation/edge_split.rs",
+      "chars": 8687
+    },
+    {
+      "path": "crates/painting/src/half_edge/validation.rs",
+      "blob_sha": "b7c27fb1fb639b19e34808e5e364cc5429bcec7a",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/half_edge/validation.rs",
+      "chars": 12391
+    },
+    {
+      "path": "crates/painting/src/projection.rs",
+      "blob_sha": "1b5a72b30ae2f5c3e1897ea97aa56cfa91e4fdd4",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/projection.rs",
+      "chars": 17470
+    },
+    {
+      "path": "crates/painting/src/projection_target.rs",
+      "blob_sha": "2850108a934fe7ed3d113d5d50330f8db08d04d6",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/projection_target.rs",
+      "chars": 12091
+    },
+    {
+      "path": "crates/painting/src/raycast.rs",
+      "blob_sha": "aa6fecc76f1f3bd131f9d791689128d6efdf12f7",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/raycast.rs",
+      "chars": 10161
+    },
+    {
+      "path": "crates/painting/src/mesh_surface.rs",
+      "blob_sha": "47e3331c77ef0f42245fd3810a59bcc7d2f23a06",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/mesh_surface.rs",
+      "chars": 14617
+    },
+    {
+      "path": "crates/painting/src/brush.rs",
+      "blob_sha": "1b6007aae79297591333ffe6b578c85b91aeb23f",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/brush.rs",
+      "chars": 10899
+    },
+    {
+      "path": "crates/painting/src/pipeline/undo.rs",
+      "blob_sha": "909b14ec1d96c23b692ca7225d0a3bc5b2dd8f76",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/pipeline/undo.rs",
+      "chars": 4446
+    },
+    {
+      "path": "crates/painting/src/pipeline/stroke.rs",
+      "blob_sha": "2adbebea9808e1be6479181817e0bd1d7227d32f",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/painting/src/pipeline/stroke.rs",
+      "chars": 6800
+    },
+    {
+      "path": "crates/sculpting/src/brush.rs",
+      "blob_sha": "c218e8154946e3ee45068189ef9b10f10b3568d0",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/brush.rs",
+      "chars": 20980
+    },
+    {
+      "path": "crates/sculpting/src/types.rs",
+      "blob_sha": "908c8f248818b9e5bafdaac9031ad0972910de15",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/types.rs",
+      "chars": 8909
+    },
+    {
+      "path": "crates/sculpting/src/deformation.rs",
+      "blob_sha": "d2df856bfafb6b71c05b7b4c863d982fac1b99c2",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/deformation.rs",
+      "chars": 18536
+    },
+    {
+      "path": "crates/sculpting/src/chunking/merge.rs",
+      "blob_sha": "dc985c407e285df9c0faf5ff024fd65df93905ac",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/chunking/merge.rs",
+      "chars": 22538
+    },
+    {
+      "path": "crates/sculpting/src/chunking/boundary.rs",
+      "blob_sha": "5d58b4799da2a9f550b4b6560311bb98e2deac87",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/chunking/boundary.rs",
+      "chars": 6603
+    },
+    {
+      "path": "crates/sculpting/src/chunking/mod.rs",
+      "blob_sha": "e5e195a34a514a7886a3ad4907e3645b2320c059",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/sculpting/src/chunking/mod.rs",
+      "chars": 19066
+    },
+    {
+      "path": "crates/scene/src/projection_painting.rs",
+      "blob_sha": "7dffa8f656e106ff130bb30bec0c39f9abe014ac",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/scene/src/projection_painting.rs",
+      "chars": 15634
+    },
+    {
+      "path": "crates/scene/src/depth_view/mod.rs",
+      "blob_sha": "e3bb1356bacb13d1fb14ee81052093e49de5a4ca",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/scene/src/depth_view/mod.rs",
+      "chars": 18503
+    },
+    {
+      "path": "crates/scene/src/mesh_painting_system.rs",
+      "blob_sha": "de66070d07c5a7761b1b55d8d726e0003a36a263",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/crates/scene/src/mesh_painting_system.rs",
+      "chars": 19121
+    },
+    {
+      "path": "launcher.sh",
+      "blob_sha": "1fb38e8045720cb98d4386d4ee48790bf9f314d2",
+      "url": "https://github.com/MrScripty/Pentimento/blob/f819e593819004690c4465afbb9733cb78b731c2/launcher.sh",
+      "chars": 17626
+    }
+  ]
+}

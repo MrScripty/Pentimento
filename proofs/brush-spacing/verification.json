@@ -1,0 +1,38 @@
+{
+  "verified_commit": "483af7ece3b0adb747045f5c7dbb7e95db6cbc32",
+  "verified_tree": "10f699d737e458eb7c7118c6575860a88e1dcdbd",
+  "pull_request": "https://github.com/MrScripty/Pentimento/pull/8",
+  "workflow_run": "https://github.com/MrScripty/Pentimento/actions/runs/37125580657",
+  "job_id": 111210098701,
+  "conclusion": "success",
+  "lean": "leanprover/lean4:v4.19.0",
+  "mathlib": "c44e0c8ee63ca166450922a373c7409c5d26b00b",
+  "checks": {
+    "lean_build": "passed",
+    "transitive_axiom_audit": {
+      "result": "passed",
+      "declarations": 47,
+      "allowed_axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    "axiom_negative_controls": [
+      "custom",
+      "unfinished",
+      "native"
+    ],
+    "source_inventory_negative_controls": 5,
+    "rational_fixtures": 10,
+    "rational_composition_cases": 1200,
+    "legacy_divergence_models": 2
+  },
+  "exclusions": [
+    "Rust/f32 refinement",
+    "geometric positions",
+    "pressure-dependent spacing",
+    "production brush fixes",
+    "whole-repository CI health"
+  ]
+}

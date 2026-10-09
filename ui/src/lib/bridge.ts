@@ -382,6 +382,10 @@ class BevyBridge {
     projectCommand(data:ProjectCommand):void {this.send({type:"ProjectCommand",data});}
 
     // Depth view
+    getDepthViewState(): void {
+        this.send({ type: 'GetDepthViewState' });
+    }
+
     setDepthView(enabled: boolean): void {
         this.send({ type: 'SetDepthView', data: { enabled } });
     }

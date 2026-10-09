@@ -73,7 +73,8 @@ pub use canvas_plane::{
     CanvasPlaneIdGenerator, CanvasPlanePlugin,
 };
 pub use depth_view::{
-    DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings,
+    DepthViewBounds, DepthViewCamera, DepthViewCapability, DepthViewLabel, DepthViewPlugin,
+    DepthViewSettings,
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use frontend_input::{

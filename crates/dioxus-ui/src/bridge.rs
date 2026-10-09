@@ -60,6 +60,9 @@ impl DioxusBridge {
             shared_state,
         };
 
+        // Channel delivery is buffered, so this is safe before the Bevy
+        // command dispatcher starts and also covers a late-created UI.
+        bridge.get_depth_view_state();
         (bridge, handle)
     }
 
@@ -194,11 +197,14 @@ impl DioxusBridge {
         self.send(UiToBevy::UpdateAmbientOcclusion(settings));
     }
 
-    /// Toggle depth view mode on/off
+    pub fn get_depth_view_state(&self) {
+        self.send(UiToBevy::GetDepthViewState);
+    }
+
+    /// Request depth view without changing backend-authoritative display state.
     pub fn set_depth_view(&self, enabled: bool) {
-        {
-            let mut state = self.shared_state.lock().unwrap();
-            state.depth_view_enabled = enabled;
+        if !self.shared_state.lock().unwrap().depth_view_available {
+            return;
         }
         self.send(UiToBevy::SetDepthView { enabled });
     }
@@ -415,5 +421,71 @@ impl DioxusBridgeHandle {
             }
             Err(e) => tracing::error!("DioxusBridgeHandle::send() failed: {:?}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn depth_view_starts_disabled_and_queries_backend() {
+        let (bridge, handle) = DioxusBridge::new();
+        assert!(matches!(
+            handle.try_recv(),
+            Some(UiToBevy::GetDepthViewState)
+        ));
+        assert!(!bridge.get_shared_state().depth_view_available);
+        bridge.set_depth_view(true);
+        assert!(handle.try_recv().is_none());
+        assert!(!bridge.get_shared_state().depth_view_enabled);
+    }
+
+    #[test]
+    fn depth_view_waits_for_backend_acknowledgement() {
+        let (bridge, handle) = DioxusBridge::new();
+        let _ = handle.try_recv();
+        handle.send(BevyToUi::DepthViewState {
+            available: true,
+            enabled: false,
+            reason: None,
+        });
+        bridge.set_depth_view(true);
+        assert!(matches!(
+            handle.try_recv(),
+            Some(UiToBevy::SetDepthView { enabled: true })
+        ));
+        assert!(!bridge.get_shared_state().depth_view_enabled);
+        handle.send(BevyToUi::DepthViewState {
+            available: true,
+            enabled: true,
+            reason: None,
+        });
+        assert!(bridge.get_shared_state().depth_view_enabled);
+        bridge.set_depth_view(false);
+        assert!(matches!(
+            handle.try_recv(),
+            Some(UiToBevy::SetDepthView { enabled: false })
+        ));
+        assert!(bridge.get_shared_state().depth_view_enabled);
+    }
+
+    #[test]
+    fn depth_view_rejection_and_state_disable_future_requests() {
+        let (bridge, handle) = DioxusBridge::new();
+        let _ = handle.try_recv();
+        let reason = "OpenGL/WebGL is unsupported.".to_string();
+        handle.send(BevyToUi::DepthViewRejected {
+            reason: reason.clone(),
+        });
+        handle.send(BevyToUi::DepthViewState {
+            available: false,
+            enabled: false,
+            reason: Some(reason.clone()),
+        });
+        assert_eq!(bridge.get_shared_state().depth_view_reason, Some(reason));
+        bridge.set_depth_view(true);
+        assert!(handle.try_recv().is_none());
+        assert!(!bridge.get_shared_state().depth_view_enabled);
     }
 }

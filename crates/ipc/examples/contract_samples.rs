@@ -50,6 +50,14 @@ fn main() {
                 success: true,
                 message: "Saved".into(),
             },
+            BevyToUi::DepthViewState {
+                available: false,
+                enabled: false,
+                reason: Some("WebGL depth read unsupported".into()),
+            },
+            BevyToUi::DepthViewRejected {
+                reason: "WebGL depth read unsupported".into(),
+            },
             BevyToUi::Initialize {
                 scene_info: SceneInfo {
                     objects: vec![SceneObject {
@@ -235,6 +243,7 @@ fn main() {
                 name: "Gentle push".into(),
             }),
             UiToBevy::SculptCommand(SculptCommand::SelectSavedBrushPreset { preset_id: 1 }),
+            UiToBevy::GetDepthViewState,
             UiToBevy::AddObject(AddObjectRequest {
                 primitive_type: PrimitiveType::Cube,
                 position: Some([0.0, 1.0, 0.0]),
