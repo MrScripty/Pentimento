@@ -5,6 +5,7 @@
 
 mod construction;
 mod modification;
+mod project;
 mod topology;
 mod types;
 mod validation;
@@ -12,6 +13,7 @@ mod validation;
 use std::collections::HashMap;
 
 pub use modification::CompactionMap;
+pub use project::HalfEdgeDocument;
 pub use types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
 pub use validation::ManifoldError;
 
@@ -22,13 +24,45 @@ use types::Vertex as VertexInternal;
 /// Half-edge mesh data structure
 ///
 /// Provides efficient topology queries for mesh editing operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HalfEdgeMesh {
     pub(crate) vertices: Vec<VertexInternal>,
     pub(crate) half_edges: Vec<HalfEdgeInternal>,
     pub(crate) faces: Vec<FaceInternal>,
     /// Map from (origin, destination) vertex pair to half-edge
     pub(crate) edge_map: HashMap<(VertexId, VertexId), HalfEdgeId>,
+}
+
+impl HalfEdgeMesh {
+    /// Conservative storage charge for retained complete geometry snapshots.
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(
+                self.vertices
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Vertex>()),
+            )
+            .saturating_add(
+                self.half_edges
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<HalfEdge>()),
+            )
+            .saturating_add(
+                self.faces
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Face>()),
+            )
+            // Hash tables use spare buckets/control bytes. Four times capacity
+            // plus group padding conservatively covers those owned allocations.
+            .saturating_add(
+                self.edge_map
+                    .capacity()
+                    .saturating_mul(
+                        4 * (std::mem::size_of::<((VertexId, VertexId), HalfEdgeId)>() + 1),
+                    )
+                    .saturating_add(64),
+            )
+    }
 }
 
 #[cfg(test)]

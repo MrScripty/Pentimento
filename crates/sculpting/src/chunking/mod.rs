@@ -15,6 +15,10 @@
 //! - [`BoundaryVertex`] - Tracks vertices shared between adjacent chunks
 
 mod boundary;
+#[cfg(feature = "bevy")]
+mod project;
+#[cfg(feature = "bevy")]
+pub use project::ChunkedDocument;
 pub mod merge;
 pub mod partition;
 
@@ -169,7 +173,7 @@ impl MeshChunk {
 /// Manages all chunks for a sculpted mesh.
 ///
 /// Coordinates chunk creation, updates, and merging.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChunkedMesh {
     /// All chunks indexed by ID.
     pub chunks: HashMap<ChunkId, MeshChunk>,
@@ -191,6 +195,152 @@ pub struct ChunkedMesh {
 }
 
 impl ChunkedMesh {
+    /// Compare all authoritative geometry, identities and allocation counters.
+    /// Bounds, spatial indexes and GPU dirty flags are disposable derived state.
+    pub fn same_authoritative_state(&self, other: &Self) -> bool {
+        self.next_chunk_id == other.next_chunk_id
+            && self.next_original_vertex_id == other.next_original_vertex_id
+            && self.config == other.config
+            && self.chunks.len() == other.chunks.len()
+            && self.chunks.iter().all(|(id, chunk)| {
+                other.chunks.get(id).is_some_and(|rhs| {
+                    chunk.id == rhs.id
+                        && chunk.mesh == rhs.mesh
+                        && chunk.local_to_original == rhs.local_to_original
+                        && chunk.original_to_local == rhs.original_to_local
+                        && chunk.boundary_vertices == rhs.boundary_vertices
+                })
+            })
+    }
+
+    /// Validate snapshot-owned identities and counters, including unused vertices.
+    pub(crate) fn validate_snapshot_identity(&self) -> Result<(), crate::SafetyError> {
+        let invalid =
+            || crate::SafetyError::Topology("invalid snapshot identities or counters".into());
+        for (id, chunk) in &self.chunks {
+            if *id != chunk.id
+                || id.0 >= self.next_chunk_id
+                || chunk.local_to_original.len() != chunk.mesh.vertex_count()
+                || chunk.original_to_local.len() != chunk.mesh.vertex_count()
+            {
+                return Err(invalid());
+            }
+            for vertex in chunk.mesh.vertices() {
+                if !vertex.position.is_finite()
+                    || !vertex.normal.is_finite()
+                    || vertex.uv.is_some_and(|uv| !uv.is_finite())
+                {
+                    return Err(invalid());
+                }
+                let original = chunk
+                    .local_to_original
+                    .get(&vertex.id)
+                    .ok_or_else(invalid)?;
+                if original.0 >= self.next_original_vertex_id
+                    || chunk.original_to_local.get(original) != Some(&vertex.id)
+                {
+                    return Err(invalid());
+                }
+            }
+            for edge in chunk.mesh.half_edges() {
+                if edge.corner_uv.is_some_and(|uv| !uv.is_finite()) {
+                    return Err(invalid());
+                }
+            }
+            for (local, peers) in &chunk.boundary_vertices {
+                let original = chunk.local_to_original.get(local).ok_or_else(invalid)?;
+                for peer in peers {
+                    let neighbor = self.chunks.get(&peer.chunk_id).ok_or_else(invalid)?;
+                    if peer.original_vertex_id != *original
+                        || neighbor.local_to_original.get(&peer.vertex_id) != Some(original)
+                        || !neighbor
+                            .boundary_vertices
+                            .get(&peer.vertex_id)
+                            .is_some_and(|back| {
+                                back.iter().any(|p| {
+                                    p.chunk_id == *id
+                                        && p.vertex_id == *local
+                                        && p.original_vertex_id == *original
+                                })
+                            })
+                    {
+                        return Err(invalid());
+                    }
+                }
+            }
+        }
+        // Completeness matters as well as reciprocity: a missing seam relation
+        // would otherwise pass a loop over only the references that remain.
+        let mut canonical = self.clone();
+        canonical.rebuild_boundary_relationships();
+        for (id, chunk) in &self.chunks {
+            let expected = &canonical.chunks[id].boundary_vertices;
+            if chunk.boundary_vertices.len() != expected.len() {
+                return Err(invalid());
+            }
+            for (local, peers) in expected {
+                let mut want: Vec<_> = peers
+                    .iter()
+                    .map(|p| (p.chunk_id.0, p.vertex_id.0, p.original_vertex_id.0))
+                    .collect();
+                let mut got: Vec<_> = chunk
+                    .boundary_vertices
+                    .get(local)
+                    .ok_or_else(invalid)?
+                    .iter()
+                    .map(|p| (p.chunk_id.0, p.vertex_id.0, p.original_vertex_id.0))
+                    .collect();
+                want.sort_unstable();
+                got.sort_unstable();
+                if want != got {
+                    return Err(invalid());
+                }
+            }
+            if chunk
+                .mesh
+                .faces()
+                .iter()
+                .any(|face| !face.normal.is_finite())
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    /// Charge every owned allocation, including private spatial lookup storage.
+    pub fn retained_bytes(&self) -> usize {
+        fn table<K, V>(map: &HashMap<K, V>) -> usize {
+            map.capacity()
+                .saturating_mul(4 * (std::mem::size_of::<(K, V)>() + 1))
+                .saturating_add(64)
+        }
+        let mut bytes = std::mem::size_of::<Self>()
+            .saturating_add(table(&self.chunks))
+            .saturating_add(table(&self.spatial_grid));
+        for ids in self.spatial_grid.values() {
+            bytes = bytes.saturating_add(
+                ids.capacity()
+                    .saturating_mul(std::mem::size_of::<ChunkId>()),
+            );
+        }
+        for chunk in self.chunks.values() {
+            bytes = bytes
+                .saturating_add(chunk.mesh.retained_bytes())
+                .saturating_add(table(&chunk.local_to_original))
+                .saturating_add(table(&chunk.original_to_local))
+                .saturating_add(table(&chunk.boundary_vertices));
+            for peers in chunk.boundary_vertices.values() {
+                bytes = bytes.saturating_add(
+                    peers
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<BoundaryVertex>()),
+                );
+            }
+        }
+        bytes
+    }
+
     /// Create a new empty chunked mesh with default configuration.
     pub fn new() -> Self {
         Self::with_config(ChunkConfig::default())
@@ -473,6 +623,12 @@ impl ChunkedMesh {
         }
     }
 
+    /// Refresh both sides of every boundary reference after local compaction.
+    /// Global IDs survive topology edits; cached neighbor-local IDs do not.
+    pub fn rebuild_boundary_relationships(&mut self) {
+        boundary::build_boundary_relationships(self);
+    }
+
     /// Synchronize a vertex position change to all chunks sharing this boundary vertex.
     ///
     /// Call this after modifying a vertex that may be shared across chunk boundaries.
@@ -497,10 +653,13 @@ impl ChunkedMesh {
         // Update in neighboring chunks
         for boundary_ref in boundary_refs {
             if let Some(neighbor) = self.chunks.get_mut(&boundary_ref.chunk_id) {
-                neighbor
-                    .mesh
-                    .set_vertex_position(boundary_ref.vertex_id, new_position);
-                neighbor.mark_dirty();
+                if let Some(&local_id) = neighbor
+                    .original_to_local
+                    .get(&boundary_ref.original_vertex_id)
+                {
+                    neighbor.mesh.set_vertex_position(local_id, new_position);
+                    neighbor.mark_dirty();
+                }
             }
         }
     }

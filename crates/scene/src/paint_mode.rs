@@ -10,19 +10,29 @@
 use bevy::ecs::message::Message;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy::window::{PrimaryWindow, WindowEvent};
 
 use crate::camera::MainCamera;
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
-use crate::frontend_input::FrontendInputBlockState;
+use crate::frontend_input::{FrontendInputBlockState, FrontendScenePointerInput};
 
 /// Resource tracking paint tool state
 #[derive(Resource, Default)]
 pub struct PaintMode {
+    pub target: pentimento_ipc::PaintTarget,
+    pub direct_target: Option<Entity>,
+    pub target_notice: Option<String>,
+    pub direct_source_entity: Option<Entity>,
+    pub direct_source_visibility: Option<Visibility>,
+    pub direct_camera_locked: Option<bool>,
     /// Whether paint mode is currently active
     pub active: bool,
     /// Current stroke state, if a stroke is in progress
     pub current_stroke: Option<StrokeState>,
+    /// One-shot canvas sampler; a press remains consumed until release.
+    pub sample_color: bool,
+    pub sample_source: pentimento_ipc::ColorSampleSource,
+    pub sample_press_owned: bool,
 }
 
 /// State for an in-progress stroke
@@ -46,6 +56,12 @@ pub struct StrokeIdGenerator {
 }
 
 impl StrokeIdGenerator {
+    pub(crate) fn document_next_id(&self) -> u64 {
+        self.next_id
+    }
+    pub(crate) fn from_document(next_id: u64) -> Self {
+        Self { next_id }
+    }
     /// Generate the next unique stroke ID
     pub fn next(&mut self) -> u64 {
         let id = self.next_id;
@@ -106,7 +122,7 @@ impl Plugin for PaintModePlugin {
 }
 
 /// Handle paint mode toggle (Shift+Tab)
-fn handle_paint_mode_toggle(
+pub(crate) fn handle_paint_mode_toggle(
     key_input: Res<ButtonInput<KeyCode>>,
     mut paint_mode: ResMut<PaintMode>,
     edit_mode: Res<crate::EditModeState>,
@@ -152,21 +168,19 @@ fn handle_paint_mode_toggle(
             paint_events.write(PaintEvent::StrokeCancel);
             paint_mode.current_stroke = None;
         }
-    }
-
-    // Escape cancels current stroke
-    if key_input.just_pressed(KeyCode::Escape) && paint_mode.current_stroke.is_some() {
-        paint_events.write(PaintEvent::StrokeCancel);
-        paint_mode.current_stroke = None;
-        info!("Stroke cancelled");
+        if !paint_mode.active {
+            paint_mode.sample_color = false;
+        }
     }
 }
 
 /// Handle paint input (left mouse button for strokes)
-fn handle_paint_input(
+pub(super) fn handle_paint_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut cursor_events: MessageReader<CursorMoved>,
+    mut window_events: MessageReader<WindowEvent>,
+    mut last_cursor: Local<(Option<Vec2>, u64)>,
+    project: Option<Res<crate::project::ProjectState>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     plane_query: Query<(&GlobalTransform, &CanvasPlane)>,
     active_plane: Res<ActiveCanvasPlane>,
@@ -175,169 +189,225 @@ fn handle_paint_input(
     mut paint_events: MessageWriter<PaintEvent>,
     time: Res<Time>,
     input_blocks: Res<FrontendInputBlockState>,
+    scene_input: Option<Res<FrontendScenePointerInput>>,
+    mut painting: ResMut<crate::PaintingResource>,
+    mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
-    if input_blocks.blocks_pointer() {
+    let generation = project.as_ref().map_or(0, |p| p.generation);
+    if last_cursor.1 != generation {
+        *last_cursor = (None, generation);
+    }
+    let Ok((window_entity, window)) = windows.single() else {
+        window_events.clear();
+        return;
+    };
+    // Consume every frame, including blocked/inactive frames, to prevent replay.
+    let raw_batch: Vec<_> = window_events.read().cloned().collect();
+    let arbitrated = scene_input
+        .as_ref()
+        .and_then(|input| input.events(window_entity));
+    let batch = arbitrated.map_or(raw_batch, |events| events.to_vec());
+    let mut cursor = last_cursor.0;
+    let mut has_movement = false;
+    for event in &batch {
+        if let WindowEvent::CursorMoved(event) = event {
+            if event.window == window_entity {
+                last_cursor.0 = Some(event.position);
+                has_movement = true;
+            }
+        }
+    }
+    if cursor.is_none() && !has_movement {
+        cursor = window.cursor_position();
+    }
+    // Window holds the final batch focus. An ordered focus transition lets us
+    // finish earlier valid input before processing the loss itself.
+    let first_focus = batch.iter().find_map(|event| match event {
+        WindowEvent::WindowFocused(event) if event.window == window_entity => Some(event.focused),
+        _ => None,
+    });
+    if (arbitrated.is_none() && input_blocks.blocks_pointer())
+        || (!window.focused && first_focus.is_none())
+    {
+        if !mouse_button.pressed(MouseButton::Left) {
+            paint_mode.sample_press_owned = false;
+        }
         if paint_mode.current_stroke.take().is_some() {
             paint_events.write(PaintEvent::StrokeEnd);
         }
-        cursor_events.clear();
+        if !window.focused {
+            last_cursor.0 = None;
+            paint_mode.sample_color = false;
+            paint_mode.sample_press_owned = false;
+        }
         return;
     }
-
-    // Only process if paint mode is active and a plane is selected
-    if !paint_mode.active {
+    if !paint_mode.active || paint_mode.target != pentimento_ipc::PaintTarget::Canvas {
+        paint_mode.sample_color = false;
+        if !mouse_button.pressed(MouseButton::Left) {
+            paint_mode.sample_press_owned = false;
+        }
         return;
     }
-
     let Some(plane_entity) = active_plane.entity else {
         return;
     };
-
-    // Get camera for ray casting
     let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
-
-    // Get plane transform and component
     let Ok((plane_transform, canvas_plane)) = plane_query.get(plane_entity) else {
         return;
     };
-
-    // Get window and its entity for filtering cursor events
-    let Ok((window_entity, window)) = windows.single() else {
-        return;
+    let hit = |position| {
+        camera
+            .viewport_to_world(camera_transform, position)
+            .ok()
+            .and_then(|ray| {
+                ray_plane_intersection(
+                    ray,
+                    plane_transform,
+                    canvas_plane.world_width,
+                    canvas_plane.world_height,
+                )
+            })
     };
-
-    // Collect all cursor positions from this frame for this window
-    let cursor_positions: Vec<Vec2> = cursor_events
-        .read()
-        .filter(|e| e.window == window_entity)
-        .map(|e| e.position)
-        .collect();
-
     let current_time = time.elapsed_secs_f64();
-
-    // Handle stroke start (just pressed) - use current cursor position
-    if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions
-            .last()
-            .copied()
-            .or_else(|| window.cursor_position());
-        if let Some(cursor_pos) = cursor_pos {
-            let ray = camera.viewport_to_world(camera_transform, cursor_pos);
-            if let Some(ray) = ray.ok() {
-                let plane_intersection = ray_plane_intersection(
-                    ray,
-                    plane_transform,
-                    canvas_plane.world_width,
-                    canvas_plane.world_height,
-                );
-
-                if let Some((world_pos, uv_pos)) = plane_intersection {
-                    // Start new stroke
-                    let stroke_id = stroke_id_gen.next();
-                    let space_id = canvas_plane.plane_id;
-
-                    paint_mode.current_stroke = Some(StrokeState {
-                        stroke_id,
-                        space_id,
-                        start_time: (current_time * 1000.0) as u64,
-                        last_world_pos: Some(world_pos),
-                        last_time: current_time,
-                    });
-
-                    paint_events.write(PaintEvent::StrokeStart {
-                        plane_entity,
-                        world_pos,
-                        uv_pos,
-                        stroke_id,
-                        space_id,
-                    });
-
-                    info!(
-                        "Stroke started: id={}, pos={:?}, uv={:?}",
-                        stroke_id, world_pos, uv_pos
-                    );
+    let mut moved = false;
+    let mut began = false;
+    let mut focus_lost = first_focus.map_or(!window.focused, |focused| focused);
+    for event in batch {
+        match event {
+            WindowEvent::CursorMoved(event) if event.window == window_entity => {
+                cursor = (!focus_lost).then_some(event.position);
+                last_cursor.0 = cursor;
+                if let Some(state) = paint_mode.current_stroke.as_mut() {
+                    if let Some((world_pos, uv_pos)) = hit(event.position) {
+                        emit_move(state, world_pos, uv_pos, current_time, &mut paint_events);
+                        moved = true;
+                    }
                 }
             }
-        }
-    } else if mouse_button.pressed(MouseButton::Left) {
-        // Continue stroke - process ALL cursor events for smooth input
-        if let Some(ref mut stroke_state) = paint_mode.current_stroke {
-            // If we have cursor events this frame, process each one
-            // This gives us sub-frame input resolution for smooth strokes
-            let positions_to_process: Vec<Vec2> = if !cursor_positions.is_empty() {
-                cursor_positions
-            } else if let Some(pos) = window.cursor_position() {
-                // Fallback to current position if no events (cursor stationary)
-                vec![pos]
-            } else {
-                vec![]
-            };
-
-            info!(
-                "StrokeMove: {} positions to process (cursor_events={}, window_pos={:?})",
-                positions_to_process.len(),
-                positions_to_process.len(),
-                window.cursor_position()
-            );
-
-            for cursor_pos in positions_to_process {
-                let ray = camera.viewport_to_world(camera_transform, cursor_pos);
-                let Some(ray) = ray.ok() else {
-                    info!(
-                        "StrokeMove: ray cast failed for cursor_pos {:?}",
-                        cursor_pos
-                    );
-                    continue;
-                };
-
-                let plane_intersection = ray_plane_intersection(
-                    ray,
-                    plane_transform,
-                    canvas_plane.world_width,
-                    canvas_plane.world_height,
-                );
-
-                if let Some((world_pos, uv_pos)) = plane_intersection {
-                    // Calculate speed from position delta and time delta
-                    let speed = if let Some(last_pos) = stroke_state.last_world_pos {
-                        let distance = world_pos.distance(last_pos);
-                        let dt = (current_time - stroke_state.last_time) as f32;
-                        if dt > 0.0 { distance / dt } else { 0.0 }
-                    } else {
-                        0.0
-                    };
-
-                    // Update stroke state
-                    stroke_state.last_world_pos = Some(world_pos);
-                    stroke_state.last_time = current_time;
-
-                    paint_events.write(PaintEvent::StrokeMove {
-                        world_pos,
-                        uv_pos,
-                        pressure: 1.0, // Default pressure for mouse
-                        speed,
-                    });
-                    info!(
-                        "StrokeMove: wrote event uv=({:.3}, {:.3})",
-                        uv_pos.x, uv_pos.y
-                    );
+            WindowEvent::MouseButtonInput(event)
+                if event.window == window_entity && event.button == MouseButton::Left =>
+            {
+                if event.state == bevy::input::ButtonState::Pressed {
+                    if !focus_lost
+                        && paint_mode.current_stroke.is_none()
+                        && !paint_mode.sample_press_owned
+                    {
+                        if paint_mode.sample_color {
+                            paint_mode.sample_press_owned = true;
+                            if let Some((_, uv_pos)) = cursor.and_then(hit) {
+                                if painting.sample_brush_color(
+                                    canvas_plane,
+                                    uv_pos,
+                                    paint_mode.sample_source,
+                                ) {
+                                    paint_mode.sample_color = false;
+                                } else {
+                                    outbound.send(pentimento_ipc::BevyToUi::Error {
+                                        code: "color_sample_rejected".into(),
+                                        message: "No painted color at this source pixel. Choose another pixel or cancel sampling.".into(),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
+                        if let Some((world_pos, uv_pos)) = cursor.and_then(hit) {
+                            let stroke_id = stroke_id_gen.next();
+                            let space_id = canvas_plane.plane_id;
+                            paint_mode.current_stroke = Some(StrokeState {
+                                stroke_id,
+                                space_id,
+                                start_time: (current_time * 1000.) as u64,
+                                last_world_pos: Some(world_pos),
+                                last_time: current_time,
+                            });
+                            paint_events.write(PaintEvent::StrokeStart {
+                                plane_entity,
+                                world_pos,
+                                uv_pos,
+                                stroke_id,
+                                space_id,
+                            });
+                            began = true;
+                            info!(
+                                "Stroke started: id={}, pos={:?}, uv={:?}",
+                                stroke_id, world_pos, uv_pos
+                            );
+                        }
+                    }
                 } else {
-                    info!("StrokeMove: ray-plane intersection returned None");
+                    paint_mode.sample_press_owned = false;
+                    if paint_mode.current_stroke.take().is_some() {
+                        paint_events.write(PaintEvent::StrokeEnd);
+                        info!("Stroke ended");
+                    }
                 }
             }
-        } else {
-            info!("StrokeMove: mouse pressed but current_stroke is None!");
-        }
-    } else if mouse_button.just_released(MouseButton::Left) {
-        // End stroke
-        if paint_mode.current_stroke.is_some() {
-            paint_events.write(PaintEvent::StrokeEnd);
-            paint_mode.current_stroke = None;
-            info!("Stroke ended");
+            WindowEvent::WindowFocused(event) if event.window == window_entity => {
+                focus_lost = !event.focused;
+                if focus_lost {
+                    paint_mode.sample_color = false;
+                    paint_mode.sample_press_owned = false;
+                    if paint_mode.current_stroke.take().is_some() {
+                        paint_events.write(PaintEvent::StrokeEnd);
+                    }
+                    cursor = None;
+                    last_cursor.0 = None;
+                }
+            }
+            WindowEvent::KeyboardInput(event)
+                if event.window == window_entity
+                    && event.key_code == KeyCode::Escape
+                    && event.state.is_pressed()
+                    && !focus_lost
+                    && !input_blocks.blocks_keyboard() =>
+            {
+                paint_mode.sample_color = false;
+                if paint_mode.current_stroke.take().is_some() {
+                    paint_events.write(PaintEvent::StrokeCancel);
+                    info!("Stroke cancelled");
+                }
+            }
+            _ => {}
         }
     }
+    if !mouse_button.pressed(MouseButton::Left) {
+        paint_mode.sample_press_owned = false;
+        // A host reset may release ownership without delivering a button event.
+        if paint_mode.current_stroke.take().is_some() {
+            paint_events.write(PaintEvent::StrokeEnd);
+        }
+    } else if !began && !moved {
+        if let Some(state) = paint_mode.current_stroke.as_mut() {
+            if let Some((world_pos, uv_pos)) = cursor.and_then(hit) {
+                emit_move(state, world_pos, uv_pos, current_time, &mut paint_events);
+            }
+        }
+    }
+}
+
+fn emit_move(
+    state: &mut StrokeState,
+    world_pos: Vec3,
+    uv_pos: Vec2,
+    current_time: f64,
+    events: &mut MessageWriter<PaintEvent>,
+) {
+    let dt = (current_time - state.last_time) as f32;
+    let speed = state
+        .last_world_pos
+        .filter(|_| dt > 0.)
+        .map_or(0., |last| world_pos.distance(last) / dt);
+    state.last_world_pos = Some(world_pos);
+    state.last_time = current_time;
+    events.write(PaintEvent::StrokeMove {
+        world_pos,
+        uv_pos,
+        pressure: 1.,
+        speed,
+    });
 }
 
 /// Perform ray-plane intersection
@@ -401,7 +471,8 @@ mod input_routing_tests {
         world
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
-        world.init_resource::<Messages<CursorMoved>>();
+        world.init_resource::<Messages<WindowEvent>>();
+        world.spawn((Window::default(), PrimaryWindow));
         world.init_resource::<Messages<PaintEvent>>();
         world.init_resource::<ActiveCanvasPlane>();
         world.init_resource::<StrokeIdGenerator>();
@@ -419,7 +490,10 @@ mod input_routing_tests {
                 last_world_pos: None,
                 last_time: 0.0,
             }),
+            ..default()
         });
+        world.init_resource::<crate::PaintingResource>();
+        world.init_resource::<crate::OutboundUiMessages>();
         world.run_system_once(handle_paint_input).unwrap();
         assert!(world.resource::<PaintMode>().current_stroke.is_none());
         let events: Vec<_> = world

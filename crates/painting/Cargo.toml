@@ -21,3 +21,6 @@ bevy = { workspace = true, optional = true, features = [
     "bevy_asset",
     "bevy_render",
 ] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

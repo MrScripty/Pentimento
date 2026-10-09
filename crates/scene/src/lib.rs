@@ -16,10 +16,14 @@ use bevy::pbr::{Atmosphere, AtmosphereSettings};
 
 mod add_object;
 mod ambient_occlusion;
+mod brush_presets;
 mod brush_ui;
 mod camera;
 mod canvas_plane;
 mod depth_view;
+mod direct_uv_tool;
+#[cfg(all(test, feature = "mesh_painting"))]
+mod direct_uv_tool_tests;
 mod edit_mode;
 mod frontend_input;
 mod gizmo;
@@ -37,12 +41,17 @@ mod mesh_paint_mode;
 #[cfg(feature = "mesh_painting")]
 mod mesh_painting_system;
 #[cfg(feature = "mesh_painting")]
+mod mesh_uv_history;
+#[cfg(feature = "mesh_painting")]
 mod normal_indicator;
 #[cfg(feature = "selection")]
 mod outline;
 mod paint_mode;
 mod painting_system;
 pub mod pixel_coverage;
+mod project;
+mod project_assets;
+mod project_uv;
 mod projection_mode;
 mod projection_painting;
 mod render_camera;
@@ -50,6 +59,8 @@ mod render_camera;
 mod sculpt_mode;
 #[cfg(feature = "selection")]
 mod selection;
+#[cfg(feature = "mesh_painting")]
+mod uv_layer_scene;
 #[cfg(feature = "wireframe")]
 mod wireframe;
 
@@ -65,7 +76,9 @@ pub use depth_view::{
     DepthViewBounds, DepthViewCamera, DepthViewLabel, DepthViewPlugin, DepthViewSettings,
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
-pub use frontend_input::{FrontendInputBlockState, FrontendUiLayout};
+pub use frontend_input::{
+    FrontendInputBlockState, FrontendScenePointerInput, FrontendUiLayout, touch_pressure,
+};
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]
 pub use gizmo_raycast::{GizmoGeometry, GizmoHandle};
@@ -83,7 +96,10 @@ pub use mesh_paint_mode::{
     MeshIdGenerator, MeshPaintEvent, MeshPaintModePlugin, MeshPaintState, PaintableMesh,
 };
 #[cfg(feature = "mesh_painting")]
-pub use mesh_painting_system::{MeshPaintTexture, MeshPaintingResource, MeshPaintingSystemPlugin};
+pub use mesh_painting_system::{
+    MeshPaintTexture, MeshPaintingResource, MeshPaintingSystemPlugin, redo_mesh_paint,
+    undo_mesh_paint,
+};
 #[cfg(feature = "mesh_painting")]
 pub use normal_indicator::{NormalIndicatorPlugin, NormalIndicatorState};
 #[cfg(feature = "selection")]
@@ -91,6 +107,7 @@ pub use outline::{OutlineCamera, OutlinePlugin};
 pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
 pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
 pub use pixel_coverage::{PixelCoveragePlugin, PixelCoverageState, estimate_pixel_coverage_cpu};
+pub use project::project_generation;
 pub use projection_mode::{
     ProjectionEvent, ProjectionMode, ProjectionModePlugin, ProjectionTarget,
 };
@@ -127,6 +144,7 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OutboundUiMessages>();
+        app.init_resource::<project::ProjectState>();
         app.init_resource::<FrontendInputBlockState>();
         app.init_resource::<FrontendUiLayout>();
         app.add_systems(PostUpdate, brush_ui::sync_brush_ui_state);

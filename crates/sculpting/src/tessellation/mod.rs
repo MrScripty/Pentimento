@@ -87,6 +87,30 @@ pub fn tessellate_at_brush(
     screen_config: &ScreenSpaceConfig,
     next_original_vertex_id: &mut u32,
 ) -> TessellationStats {
+    let mut edit_budget = usize::MAX;
+    tessellate_at_brush_checked(
+        chunk,
+        brush_center,
+        brush_radius,
+        config,
+        screen_config,
+        next_original_vertex_id,
+        &mut |_| true,
+        &mut edit_budget,
+    )
+}
+
+/// Pipeline variant: every topology mutation must be admitted before continuing.
+pub(crate) fn tessellate_at_brush_checked(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    brush_radius: f32,
+    config: &TessellationConfig,
+    screen_config: &ScreenSpaceConfig,
+    next_original_vertex_id: &mut u32,
+    check: &mut dyn FnMut(&MeshChunk) -> bool,
+    edit_budget: &mut usize,
+) -> TessellationStats {
     trace!("tessellate_at_brush: START");
     let mut stats = TessellationStats::default();
     let influence_radius = brush_radius * 1.5;
@@ -105,6 +129,7 @@ pub fn tessellate_at_brush(
     for iteration in 0..config.max_tessellation_iterations {
         let iter_start = std::time::Instant::now();
         let mut collapses_this_iter = 0usize;
+        let mut flips_this_iter = 0usize;
 
         // ===== SPLIT PASS =====
         debug!(
@@ -119,9 +144,14 @@ pub fn tessellate_at_brush(
             config,
             screen_config,
             next_original_vertex_id,
+            check,
+            edit_budget,
         );
 
         stats.edges_split += splits_this_iter;
+        if splits_this_iter > 0 && !check(chunk) {
+            return stats;
+        }
         if splits_this_iter > 0 {
             chunk.topology_changed = true;
         }
@@ -134,17 +164,23 @@ pub fn tessellate_at_brush(
             splits_this_iter
         );
         if config.collapse_enabled && chunk.mesh.face_count() > config.min_faces {
-            collapses_this_iter = collapse_pass(
+            (collapses_this_iter, flips_this_iter) = collapse_pass(
                 chunk,
                 brush_center,
                 influence_radius,
                 config,
                 screen_config,
                 next_original_vertex_id,
+                check,
+                edit_budget,
             );
 
             stats.edges_collapsed += collapses_this_iter;
-            if collapses_this_iter > 0 {
+            stats.edges_flipped += flips_this_iter;
+            if (collapses_this_iter > 0 || flips_this_iter > 0) && !check(chunk) {
+                return stats;
+            }
+            if collapses_this_iter > 0 || flips_this_iter > 0 {
                 chunk.topology_changed = true;
             }
         }
@@ -159,7 +195,7 @@ pub fn tessellate_at_brush(
         );
 
         // Converged - no more changes needed
-        if splits_this_iter == 0 && collapses_this_iter == 0 {
+        if splits_this_iter == 0 && collapses_this_iter == 0 && flips_this_iter == 0 {
             break;
         }
 
@@ -177,7 +213,7 @@ pub fn tessellate_at_brush(
 
     // Validate chunk after tessellation in debug builds
     #[cfg(debug_assertions)]
-    if stats.edges_split > 0 || stats.edges_collapsed > 0 {
+    if stats.edges_split > 0 || stats.edges_collapsed > 0 || stats.edges_flipped > 0 {
         if let Err(e) = validate_chunk_after_tessellation(chunk) {
             tracing::error!("CHUNK VALIDATION FAILED after tessellation: {}", e);
             tracing::error!(
@@ -212,6 +248,30 @@ pub fn tessellate_at_brush_budget(
     budget: &mut VertexBudget,
     next_original_vertex_id: &mut u32,
 ) -> TessellationStats {
+    let mut edit_budget = usize::MAX;
+    tessellate_at_brush_budget_checked(
+        chunk,
+        brush_center,
+        brush_radius,
+        config,
+        budget,
+        next_original_vertex_id,
+        &mut |_| true,
+        &mut edit_budget,
+    )
+}
+
+/// Pipeline variant: every topology mutation must be admitted before continuing.
+pub(crate) fn tessellate_at_brush_budget_checked(
+    chunk: &mut MeshChunk,
+    brush_center: Vec3,
+    brush_radius: f32,
+    config: &TessellationConfig,
+    budget: &mut VertexBudget,
+    next_original_vertex_id: &mut u32,
+    check: &mut dyn FnMut(&MeshChunk) -> bool,
+    edit_budget: &mut usize,
+) -> TessellationStats {
     trace!("tessellate_at_brush_budget: START");
     let mut stats = TessellationStats::default();
     let influence_radius = brush_radius * 1.5;
@@ -229,6 +289,7 @@ pub fn tessellate_at_brush_budget(
     // Convergence loop: iterate split+collapse until no changes or max iterations
     for iteration in 0..config.max_tessellation_iterations {
         let mut collapses_this_iter = 0usize;
+        let mut flips_this_iter = 0usize;
 
         // ===== SPLIT PASS (curvature-prioritized, budget-limited) =====
         let splits_this_iter = split_pass_budget(
@@ -238,26 +299,37 @@ pub fn tessellate_at_brush_budget(
             config,
             budget,
             next_original_vertex_id,
+            check,
+            edit_budget,
         );
 
         stats.edges_split += splits_this_iter;
+        if splits_this_iter > 0 && !check(chunk) {
+            return stats;
+        }
         if splits_this_iter > 0 {
             chunk.topology_changed = true;
         }
 
         // ===== COLLAPSE PASS (lowest-curvature first, also triggered when over budget) =====
         if config.collapse_enabled && chunk.mesh.face_count() > config.min_faces {
-            collapses_this_iter = collapse_pass_budget(
+            (collapses_this_iter, flips_this_iter) = collapse_pass_budget(
                 chunk,
                 brush_center,
                 influence_radius,
                 config,
                 budget,
                 next_original_vertex_id,
+                check,
+                edit_budget,
             );
 
             stats.edges_collapsed += collapses_this_iter;
-            if collapses_this_iter > 0 {
+            stats.edges_flipped += flips_this_iter;
+            if (collapses_this_iter > 0 || flips_this_iter > 0) && !check(chunk) {
+                return stats;
+            }
+            if collapses_this_iter > 0 || flips_this_iter > 0 {
                 chunk.topology_changed = true;
             }
         }
@@ -272,7 +344,7 @@ pub fn tessellate_at_brush_budget(
         );
 
         // Converged - no more changes needed
-        if splits_this_iter == 0 && collapses_this_iter == 0 {
+        if splits_this_iter == 0 && collapses_this_iter == 0 && flips_this_iter == 0 {
             break;
         }
 
@@ -290,7 +362,7 @@ pub fn tessellate_at_brush_budget(
 
     // Validate chunk after tessellation in debug builds
     #[cfg(debug_assertions)]
-    if stats.edges_split > 0 || stats.edges_collapsed > 0 {
+    if stats.edges_split > 0 || stats.edges_collapsed > 0 || stats.edges_flipped > 0 {
         if let Err(e) = validate_chunk_after_tessellation(chunk) {
             tracing::error!("CHUNK VALIDATION FAILED after budget tessellation: {}", e);
             tracing::error!(
@@ -316,6 +388,8 @@ fn split_pass_budget(
     config: &TessellationConfig,
     budget: &mut VertexBudget,
     next_original_vertex_id: &mut u32,
+    check: &mut dyn FnMut(&MeshChunk) -> bool,
+    edit_budget: &mut usize,
 ) -> usize {
     if !budget.can_split() {
         return 0;
@@ -374,6 +448,9 @@ fn split_pass_budget(
     let mut actual_splits = 0usize;
 
     for (v0, v1, _curvature, _len) in split_candidates {
+        if *edit_budget == 0 {
+            break;
+        }
         // Budget check
         if !budget.can_split() {
             break;
@@ -435,6 +512,7 @@ fn split_pass_budget(
         if let Some(result) = split_result {
             midpoint_map.insert(key, result.new_vertex);
             actual_splits += 1;
+            *edit_budget -= 1;
             budget.record_split();
 
             // Register new vertex with globally unique original ID
@@ -446,6 +524,9 @@ fn split_pass_budget(
             chunk
                 .original_to_local
                 .insert(unique_original_id, result.new_vertex);
+            if !check(chunk) {
+                return actual_splits;
+            }
         }
     }
 
@@ -458,6 +539,7 @@ fn split_pass_budget(
             0.5,
             brush_center,
             influence_radius,
+            &chunk.boundary_vertices.keys().copied().collect(),
         );
     }
 
@@ -477,7 +559,9 @@ fn collapse_pass_budget(
     config: &TessellationConfig,
     budget: &mut VertexBudget,
     next_original_vertex_id: &mut u32,
-) -> usize {
+    check: &mut dyn FnMut(&MeshChunk) -> bool,
+    edit_budget: &mut usize,
+) -> (usize, usize) {
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
     let over_budget = budget.is_over_budget();
 
@@ -536,6 +620,9 @@ fn collapse_pass_budget(
     let influence_sq = influence_radius * influence_radius;
 
     for (v0, v1, _curvature, _len) in collapse_candidates {
+        if *edit_budget == 0 {
+            break;
+        }
         if chunk.mesh.face_count() <= config.min_faces {
             break;
         }
@@ -575,9 +662,10 @@ fn collapse_pass_budget(
         let neighbors_v0 = chunk.mesh.get_adjacent_vertices(v0);
         let neighbors_v1 = chunk.mesh.get_adjacent_vertices(v1);
 
-        match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
+        let changed = match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
             Some(CollapseOrFlipResult::Collapsed(_)) => {
                 actual_collapses += 1;
+                *edit_budget -= 1;
                 budget.record_collapse();
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
@@ -587,9 +675,11 @@ fn collapse_pass_budget(
                 for v in neighbors_v1 {
                     dirty_vertices.insert(v);
                 }
+                true
             }
             Some(CollapseOrFlipResult::Flipped) => {
                 actual_flips += 1;
+                *edit_budget -= 1;
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
                 for v in neighbors_v0 {
@@ -598,14 +688,19 @@ fn collapse_pass_budget(
                 for v in neighbors_v1 {
                     dirty_vertices.insert(v);
                 }
+                true
             }
-            None => {}
+            None => false,
+        };
+        if changed && !check(chunk) {
+            return (actual_collapses, actual_flips);
         }
     }
 
     // Compact after collapses or flips to remove dead elements and rebuild edge_map.
     // Flips can create edge_map inconsistencies that need cleanup even if no collapses occurred.
     if actual_collapses > 0 || actual_flips > 0 {
+        chunk.mark_topology_changed();
         // Save boundary vertex original IDs BEFORE compact can lose them.
         // Compact's liveness detection may falsely mark boundary vertices as dead,
         // causing their local_to_original mapping to be silently lost. We save the
@@ -667,7 +762,7 @@ fn collapse_pass_budget(
         repair_vertex_mappings(chunk, next_original_vertex_id);
     }
 
-    actual_collapses
+    (actual_collapses, actual_flips)
 }
 
 /// Run one split pass: evaluate edges, split those that are too long, rebuild twins, smooth.
@@ -680,6 +775,8 @@ fn split_pass(
     config: &TessellationConfig,
     screen_config: &ScreenSpaceConfig,
     next_original_vertex_id: &mut u32,
+    check: &mut dyn FnMut(&MeshChunk) -> bool,
+    edit_budget: &mut usize,
 ) -> usize {
     // Collect edges as vertex pairs (stable across topology changes)
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
@@ -723,6 +820,9 @@ fn split_pass(
     let mut actual_splits = 0usize;
 
     for (v0, v1, _len) in edges_to_split {
+        if *edit_budget == 0 {
+            break;
+        }
         // Safety: max faces check
         if chunk.mesh.face_count() >= config.max_faces_per_chunk {
             break;
@@ -779,6 +879,7 @@ fn split_pass(
         if let Some(result) = split_result {
             midpoint_map.insert(key, result.new_vertex);
             actual_splits += 1;
+            *edit_budget -= 1;
 
             // Register new vertex with globally unique original ID
             let unique_original_id = VertexId(*next_original_vertex_id);
@@ -789,6 +890,9 @@ fn split_pass(
             chunk
                 .original_to_local
                 .insert(unique_original_id, result.new_vertex);
+            if !check(chunk) {
+                return actual_splits;
+            }
         }
     }
 
@@ -808,6 +912,7 @@ fn split_pass(
             0.5,
             brush_center,
             influence_radius,
+            &chunk.boundary_vertices.keys().copied().collect(),
         );
     }
 
@@ -824,7 +929,9 @@ fn collapse_pass(
     config: &TessellationConfig,
     screen_config: &ScreenSpaceConfig,
     next_original_vertex_id: &mut u32,
-) -> usize {
+    check: &mut dyn FnMut(&MeshChunk) -> bool,
+    edit_budget: &mut usize,
+) -> (usize, usize) {
     let edges_in_range = collect_edges_in_range(chunk, brush_center, influence_radius);
 
     // Collect collapse candidates as vertex pairs with edge lengths
@@ -876,6 +983,9 @@ fn collapse_pass(
     let influence_sq = influence_radius * influence_radius;
 
     for (v0, v1, _len) in edges_to_collapse {
+        if *edit_budget == 0 {
+            break;
+        }
         if chunk.mesh.face_count() <= config.min_faces {
             break;
         }
@@ -912,9 +1022,10 @@ fn collapse_pass(
         let neighbors_v0 = chunk.mesh.get_adjacent_vertices(v0);
         let neighbors_v1 = chunk.mesh.get_adjacent_vertices(v1);
 
-        match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
+        let changed = match collapse_or_flip_edge(&mut chunk.mesh, edge_id) {
             Some(CollapseOrFlipResult::Collapsed(_)) => {
                 actual_collapses += 1;
+                *edit_budget -= 1;
                 // Mark all affected vertices as dirty to prevent cascading corruption
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
@@ -924,9 +1035,11 @@ fn collapse_pass(
                 for v in neighbors_v1 {
                     dirty_vertices.insert(v);
                 }
+                true
             }
             Some(CollapseOrFlipResult::Flipped) => {
                 actual_flips += 1;
+                *edit_budget -= 1;
                 // Flip also modifies topology around these vertices
                 dirty_vertices.insert(v0);
                 dirty_vertices.insert(v1);
@@ -936,14 +1049,19 @@ fn collapse_pass(
                 for v in neighbors_v1 {
                     dirty_vertices.insert(v);
                 }
+                true
             }
-            None => {}
+            None => false,
+        };
+        if changed && !check(chunk) {
+            return (actual_collapses, actual_flips);
         }
     }
 
     // Compact after collapses or flips to remove dead elements and rebuild edge_map.
     // Flips can create edge_map inconsistencies that need cleanup even if no collapses occurred.
     if actual_collapses > 0 || actual_flips > 0 {
+        chunk.mark_topology_changed();
         // Save boundary vertex original IDs BEFORE compact can lose them.
         // Compact's liveness detection may falsely mark boundary vertices as dead,
         // causing their local_to_original mapping to be silently lost. We save the
@@ -1009,7 +1127,7 @@ fn collapse_pass(
         repair_vertex_mappings(chunk, next_original_vertex_id);
     }
 
-    actual_collapses
+    (actual_collapses, actual_flips)
 }
 
 /// Apply tangent-plane smoothing to newly created split vertices and their 1-ring neighbors.
@@ -1030,6 +1148,7 @@ fn tangent_smooth_new_vertices(
     strength: f32,
     brush_center: Vec3,
     influence_radius: f32,
+    locked_vertices: &HashSet<VertexId>,
 ) {
     if new_vertices.is_empty() {
         return;
@@ -1050,6 +1169,9 @@ fn tangent_smooth_new_vertices(
     let mut new_positions: Vec<(VertexId, Vec3)> = Vec::new();
 
     for &vid in &vertices_to_smooth {
+        if locked_vertices.contains(&vid) {
+            continue;
+        }
         let Some(vertex) = mesh.vertex(vid) else {
             continue;
         };
@@ -1110,6 +1232,8 @@ fn tangent_smooth_new_vertices(
 /// Statistics from a tessellation pass.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TessellationStats {
+    /// Edges flipped without collapsing a vertex (also require a GPU rebuild).
+    pub edges_flipped: usize,
     /// Number of edges that were split
     pub edges_split: usize,
     /// Number of edges that were collapsed

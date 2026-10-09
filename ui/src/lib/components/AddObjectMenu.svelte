@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onDestroy, tick } from 'svelte';
     import { bridge } from '$lib/bridge';
+    import { clampMenuPosition } from '$lib/menuPosition';
 
     interface Props {
         show: boolean;
@@ -12,6 +13,7 @@
     let menuElement = $state<HTMLDivElement | null>(null);
     let restoreFocusTo = $state<HTMLElement | null>(null);
     let wasOpen = false;
+    let menuPosition = $state({ x: 0, y: 0 });
     const menuTitleId = 'add-object-menu-title';
 
     const primitives = [
@@ -90,6 +92,23 @@
     }
 
     $effect(() => {
+        if (!show || !menuElement) return;
+        const element = menuElement;
+        const placeMenu = () => {
+            const bounds = element.getBoundingClientRect();
+            menuPosition = clampMenuPosition(position, bounds, { width: innerWidth, height: innerHeight });
+        };
+        placeMenu();
+        const observer = new ResizeObserver(placeMenu);
+        observer.observe(element);
+        window.addEventListener('resize', placeMenu);
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', placeMenu);
+        };
+    });
+
+    $effect(() => {
         if (show && !wasOpen) {
             restoreFocusTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             tick().then(focusDialogEntry);
@@ -120,7 +139,7 @@
             aria-modal="true"
             aria-labelledby={menuTitleId}
             tabindex="-1"
-            style="left: {position.x}px; top: {position.y}px;"
+            style="left: {menuPosition.x}px; top: {menuPosition.y}px;"
             onkeydown={handleDialogKeydown}
         >
             <h3 class="menu-title" id={menuTitleId}>Add Object</h3>
@@ -157,7 +176,11 @@
     .add-menu {
         position: absolute;
         z-index: 1;
-        min-width: 150px;
+        min-width: min(150px, calc(100vw - 16px));
+        max-width: calc(100vw - 16px);
+        max-height: calc(100vh - 16px);
+        box-sizing: border-box;
+        overflow-y: auto;
         background: rgba(30, 30, 30, 0.98);
         backdrop-filter: blur(10px);
         border: 1px solid rgba(255, 255, 255, 0.1);

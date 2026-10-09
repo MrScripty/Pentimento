@@ -1,24 +1,36 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { bridge } from '$lib/bridge';
-    import type { EditMode, PaintBrushSettings, PaintBrushPresetInfo, SculptBrushSettings } from '$lib/types';
+    import type { PaintTargetState, PaintColorSamplingState, EditMode, PaintBrushSettings, PaintBrushPresetInfo, SculptBrushSettings, SculptHistoryState, SavedBrushPresetsState } from '$lib/types';
     import PaintBrushPanel from './PaintBrushPanel.svelte';
     import SculptBrushPanel from './SculptBrushPanel.svelte';
     let { mode }: { mode: EditMode } = $props();
+    let sampling = $state<PaintColorSamplingState>({ enabled: false, source: 'VisibleLayers', active: false });
     let paint = $state<PaintBrushSettings | null>(null);
     let sculpt = $state<SculptBrushSettings | null>(null);
     let presets = $state<PaintBrushPresetInfo[]>([]);
     let sculptReceived = $state(false);
+    let sculptHistory = $state<SculptHistoryState>({ undo_strokes: 0, redo_strokes: 0, active: false, notice: null });
+    let target = $state<PaintTargetState>({ mode: 'Canvas', direct_available: false, target_name: null, active: false, notice: null, retained_bytes: 0, pending_bytes: 0, limit_bytes: 0, evicted_strokes: 0 });
     let canUndo = $state(false);
+    let canRedo = $state(false);
+    let sourceVisible = $state(true);
     let liveProjection = $state(false);
+    let saved = $state<SavedBrushPresetsState>({ paint: [], sculpt: [], selected_paint: null, selected_sculpt: null, active: false, available: false, notice: null });
     onMount(() => {
         const unsubscribe = bridge.subscribe(message => {
-            if (message.type === 'PaintBrushStateChanged') {
-                paint = message.data.settings; presets = message.data.presets; canUndo = message.data.can_undo;
+            if (message.type === 'PaintColorSamplingChanged') {
+                sampling = message.data;
+            } else if (message.type === 'PaintBrushStateChanged') {
+                target = message.data.target ?? { mode: 'Canvas', direct_available: false, target_name: null, active: false, notice: null, retained_bytes: 0, pending_bytes: 0, limit_bytes: 0, evicted_strokes: 0 }; paint = message.data.settings; presets = message.data.presets; canUndo = message.data.can_undo; canRedo = message.data.can_redo; sourceVisible = message.data.source_visible;
             } else if (message.type === 'SculptBrushStateChanged') {
                 sculpt = message.data.settings; sculptReceived = true;
+            } else if (message.type === 'SculptHistoryChanged') {
+                sculptHistory = message.data;
             } else if (message.type === 'ProjectionModeChanged') {
                 liveProjection = message.data.live_projection;
+            } else if (message.type === 'SavedBrushPresetsChanged') {
+                saved = message.data;
             }
         });
         bridge.requestBrushState();
@@ -27,8 +39,8 @@
 </script>
 {#if mode === 'Paint' || mode === 'Sculpt'}
     <aside class="brush-panel panel interactive" data-ui-region="brush-panel" aria-label={mode === 'Paint' ? 'Projection paint controls' : 'Sculpt controls'}>
-        {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {presets} {canUndo} {liveProjection} />
-        {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} />
+        {#if mode === 'Paint' && paint}<PaintBrushPanel settings={paint} {target} {presets} {canUndo} {canRedo} {sourceVisible} {liveProjection} {saved} {sampling} />
+        {:else if mode === 'Sculpt' && sculpt}<SculptBrushPanel settings={sculpt} history={sculptHistory} {saved} />
         {:else if mode === 'Sculpt' && sculptReceived}<p class="notice">Sculpting is not available in this renderer build.</p>
         {:else}<p class="notice">Waiting for brush settings from the renderer.</p>{/if}
     </aside>

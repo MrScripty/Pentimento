@@ -28,6 +28,9 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
+      # Official CEF software-OSR mode for this headless qualification process.
+      # Bevy still renders through Mesa Vulkan; this is not hardware-GPU validation.
+      PENTIMENTO_CEF_RENDERING: 'software'
       # Official CEF documentation links this recognized binary distributor.
       # cef-dll-sys selects and verifies the archive matching its binding version.
       CEF_DOWNLOAD_URL: https://cef-builds.spotifycdn.com
@@ -55,12 +58,13 @@ jobs:
           mkdir -p "$PENTIMENTO_EVIDENCE_DIR"
           {
             git rev-parse HEAD
+            echo "CEF rendering qualification: $PENTIMENTO_CEF_RENDERING"
             rustc --version
             node --version
             npm --version
             uname -a
             dpkg-query -W libgtk-3-dev libwebkit2gtk-4.1-dev mesa-vulkan-drivers xvfb
-          } > "$PENTIMENTO_EVIDENCE_DIR/environment.txt"
+          } > "$PENTIMENTO_EVIDENCE_DIR/environment.log"
       - name: Build the actual canonical CEF app and subprocess helper
         shell: bash
         run: |
@@ -78,6 +82,8 @@ jobs:
           export LD_LIBRARY_PATH="$cef_input_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cargo test --locked -p pentimento --features cef input:: -- --nocapture \
             2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/input-tests.log"
+          cargo test --locked -p pentimento --features cef render::framebuffer_receipt_tests:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/framebuffer-receipt-tests.log"
       - name: Exercise actual native input, panels, painting and sculpting
         shell: bash
         run: |
@@ -85,8 +91,10 @@ jobs:
           unset WAYLAND_DISPLAY CARGO_TARGET_DIR
           export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name '*lvp*.json' -print -quit)"
           test -n "$VK_ICD_FILENAMES"
+          # Original checks plus separate receiver views and layered projection history
+          # need a larger total window; all per-condition limits remain 30s.
           xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' \
-            timeout --signal=TERM --kill-after=10s 360s \
+            timeout --signal=TERM --kill-after=10s 900s \
             node tests/native/cef-paint-sculpt.mjs 2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/test.log"
       - name: Retain inspected evidence and exact resolved dependency graph
         if: always()
