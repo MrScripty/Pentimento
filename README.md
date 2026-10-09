@@ -60,6 +60,7 @@ sudo apt-get install -y \
   libgtk-3-dev \
   libudev-dev \
   libwayland-dev \
+  libwebkit2gtk-4.1-dev \
   libxkbcommon-dev \
   pkg-config
 ```
