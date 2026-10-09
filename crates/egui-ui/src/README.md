@@ -59,8 +59,8 @@ use pentimento_egui_ui::egui;
 use pentimento_egui_ui::{EguiUiRuntime, EguiUiSnapshot, show_root_ui};
 
 let mut runtime = EguiUiRuntime::default();
-let snapshot = EguiUiSnapshot::default();
-let _commands = show_root_ui(&egui::Context::default(), &snapshot, &mut runtime);
+let mut snapshot = EguiUiSnapshot::default();
+let _commands = show_root_ui(&egui::Context::default(), &mut snapshot, &mut runtime);
 ```
 
 ## API Consumer Contract
