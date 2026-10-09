@@ -25,6 +25,21 @@ impl UvBlendMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UvPaintTarget {
+    #[default]
+    Color,
+    Mask,
+}
+impl UvPaintTarget {
+    fn is_color(&self) -> bool {
+        *self == Self::Color
+    }
+}
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UvLayerMeta {
@@ -35,12 +50,18 @@ pub struct UvLayerMeta {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "UvBlendMode::is_normal")]
     pub blend_mode: UvBlendMode,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mask_enabled: bool,
+    #[serde(default, skip_serializing_if = "UvPaintTarget::is_color")]
+    pub paint_target: UvPaintTarget,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UvLayerDocument {
     pub meta: UvLayerMeta,
     pub pixels: Vec<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<Vec<f32>>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +78,54 @@ pub struct UvLayersDocument {
 pub const UV_COMPOSITOR: &str = "linear-premultiplied-normal-v1";
 /// Older Normal-only readers reject this policy rather than reinterpret a stack.
 pub const UV_BLEND_COMPOSITOR: &str = "linear-premultiplied-separable-v1";
+pub const UV_MASK_COMPOSITOR: &str = "linear-premultiplied-masked-separable-v1";
+
+/// Associated linear brightness; identical gray channels keep their exact bits.
+pub fn uv_luminance(p: [f32; 4]) -> f32 {
+    if p[0].to_bits() == p[1].to_bits() && p[0].to_bits() == p[2].to_bits() {
+        p[0]
+    } else {
+        0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+    }
+}
+/// Existing RGBA erase reveals white in a mask; opaque gray decodes exactly.
+pub fn uv_mask_coverage(p: [f32; 4]) -> f32 {
+    if p[3] == 1. {
+        p[0]
+    } else if p[3] == 0. {
+        1.
+    } else {
+        (p[0] + (1. - p[3])).clamp(0., 1.)
+    }
+}
+pub fn same_mask_pixels(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits())
+}
+impl UvLayerDocument {
+    pub fn working_pixels(&self) -> Vec<[f32; 4]> {
+        match self.meta.paint_target {
+            UvPaintTarget::Color => self.pixels.clone(),
+            UvPaintTarget::Mask => self
+                .mask
+                .as_ref()
+                .expect("validated mask target")
+                .iter()
+                .map(|&m| [m, m, m, 1.])
+                .collect(),
+        }
+    }
+    pub fn working_matches(&self, pixels: &[[f32; 4]]) -> bool {
+        match self.meta.paint_target {
+            UvPaintTarget::Color => same_uv_pixels(&self.pixels, pixels),
+            UvPaintTarget::Mask => self.mask.as_ref().is_some_and(|m| {
+                m.len() == pixels.len()
+                    && m.iter()
+                        .zip(pixels)
+                        .all(|(&m, p)| same_uv_pixels(&[[m, m, m, 1.]], &[*p]))
+            }),
+        }
+    }
+}
 pub fn same_uv_pixels(a: &[[f32; 4]], b: &[[f32; 4]]) -> bool {
     a.len() == b.len()
         && a.iter()
@@ -132,8 +201,11 @@ impl UvLayersDocument {
             || self.seam_padding > self.width.min(self.height)
             || self.layers.is_empty()
             || self.layers.len() > UV_MAX_LAYERS
-            || count.saturating_mul(self.layers.len()) > UV_MAX_PIXELS
-            || (self.compositor != UV_COMPOSITOR && self.compositor != UV_BLEND_COMPOSITOR)
+            || self.sample_count() > UV_MAX_PIXELS
+            || ![UV_COMPOSITOR, UV_BLEND_COMPOSITOR, UV_MASK_COMPOSITOR]
+                .contains(&self.compositor.as_str())
+            || (self.compositor != UV_MASK_COMPOSITOR
+                && self.layers.iter().any(|l| l.mask.is_some()))
             || (self.compositor == UV_COMPOSITOR
                 && self
                     .layers
@@ -152,6 +224,12 @@ impl UvLayersDocument {
                 || !l.meta.opacity.is_finite()
                 || !(0.0..=1.0).contains(&l.meta.opacity)
                 || !valid_uv_pixels(&l.pixels, count)
+                || l.mask.as_ref().is_some_and(|m| {
+                    m.len() != count || !m.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                })
+                || (l.meta.mask_enabled && l.mask.is_none())
+                || (l.meta.paint_target == UvPaintTarget::Mask
+                    && (!l.meta.mask_enabled || l.mask.is_none()))
             {
                 return Err("Invalid UV layer identity, metadata or pixels".into());
             }
@@ -160,6 +238,16 @@ impl UvLayersDocument {
             return Err("Missing active UV layer".into());
         }
         Ok(())
+    }
+    pub fn sample_count(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|l| {
+                l.pixels
+                    .len()
+                    .saturating_add(l.mask.as_ref().map_or(0, Vec::len))
+            })
+            .sum()
     }
     pub fn composite(&self) -> Vec<[f32; 4]> {
         self.composite_active(None)
@@ -170,13 +258,31 @@ impl UvLayersDocument {
             if !l.meta.visible || l.meta.opacity == 0. {
                 continue;
             }
-            let pixels = if l.meta.id == self.active_layer {
-                active.unwrap_or(&l.pixels)
-            } else {
-                &l.pixels
-            };
-            for (dst, src) in output.iter_mut().zip(pixels) {
-                *dst = uv_blend_over(src.map(|v| v * l.meta.opacity), *dst, l.meta.blend_mode);
+            let pixels =
+                if l.meta.id == self.active_layer && l.meta.paint_target == UvPaintTarget::Color {
+                    active.unwrap_or(&l.pixels)
+                } else {
+                    &l.pixels
+                };
+            for (i, (dst, src)) in output.iter_mut().zip(pixels).enumerate() {
+                let coverage = if l.meta.mask_enabled {
+                    if l.meta.id == self.active_layer && l.meta.paint_target == UvPaintTarget::Mask
+                    {
+                        active
+                            .map_or_else(|| l.mask.as_ref().unwrap()[i], |p| uv_mask_coverage(p[i]))
+                    } else {
+                        l.mask.as_ref().unwrap()[i]
+                    }
+                } else {
+                    1.
+                };
+                // Retain the exact existing arithmetic for unmasked layers.
+                let source = if l.meta.mask_enabled {
+                    src.map(|v| v * coverage)
+                } else {
+                    *src
+                };
+                *dst = uv_blend_over(source.map(|v| v * l.meta.opacity), *dst, l.meta.blend_mode);
             }
         }
         output
@@ -195,6 +301,10 @@ pub enum UvLayerOp {
     Opacity(u32, f32),
     Lock(u32, bool),
     BlendMode(u32, UvBlendMode),
+    AddMask(u32),
+    RemoveMask(u32),
+    MaskEnabled(u32, bool),
+    PaintTarget(u32, UvPaintTarget),
 }
 #[derive(Clone)]
 struct Layout {
@@ -204,13 +314,18 @@ struct Layout {
 }
 impl Layout {
     fn bytes(&self) -> usize {
-        self.metas.iter().map(|m| m.name.len() + 40).sum::<usize>() + 8 + self.compositor.len()
+        self.metas.iter().map(|m| m.name.len() + 48).sum::<usize>() + 8 + self.compositor.len()
     }
 }
 struct PixelChange {
     id: u32,
     before: Option<Vec<[f32; 4]>>,
     after: Option<Vec<[f32; 4]>>,
+    mask: Option<MaskChange>,
+}
+struct MaskChange {
+    before: Option<Vec<f32>>,
+    after: Option<Vec<f32>>,
 }
 struct Change {
     before: Layout,
@@ -227,6 +342,10 @@ impl Change {
                 .map(|p| {
                     p.before.as_ref().map_or(0, |v| v.len() * 16)
                         + p.after.as_ref().map_or(0, |v| v.len() * 16)
+                        + p.mask.as_ref().map_or(0, |m| {
+                            m.before.as_ref().map_or(0, |v| v.len() * 4)
+                                + m.after.as_ref().map_or(0, |v| v.len() * 4)
+                        })
                 })
                 .sum::<usize>()
     }
@@ -257,8 +376,11 @@ impl UvLayers {
                     opacity: 1.,
                     locked: false,
                     blend_mode: UvBlendMode::Normal,
+                    mask_enabled: false,
+                    paint_target: UvPaintTarget::Color,
                 },
                 pixels: vec![[0.; 4]; width as usize * height as usize],
+                mask: None,
             }],
         })
     }
@@ -357,15 +479,32 @@ impl UvLayers {
                         p.before.as_ref()
                     }
                 });
+                let mut old_layer = old
+                    .iter()
+                    .position(|l| l.meta.id == m.id)
+                    .map(|i| old.swap_remove(i));
+                let mask = if let Some(change) = pixels
+                    .iter()
+                    .find(|p| p.id == m.id)
+                    .and_then(|p| p.mask.as_ref())
+                {
+                    if redo {
+                        change.after.clone()
+                    } else {
+                        change.before.clone()
+                    }
+                } else {
+                    old_layer.as_mut().and_then(|l| l.mask.take())
+                };
                 let data = if let Some(p) = replacement {
                     p.clone()
                 } else {
-                    let index = old.iter().position(|l| l.meta.id == m.id).unwrap();
-                    old.swap_remove(index).pixels
+                    old_layer.unwrap().pixels
                 };
                 UvLayerDocument {
                     meta: m.clone(),
                     pixels: data,
+                    mask,
                 }
             })
             .collect();
@@ -374,6 +513,20 @@ impl UvLayers {
         // next_id is an allocation high-water mark; Undo never reuses identities.
     }
     pub fn edit(&mut self, op: UvLayerOp) -> Result<bool, String> {
+        if let UvLayerOp::PaintTarget(id, target) = op {
+            let l = self
+                .document
+                .layers
+                .iter_mut()
+                .find(|l| l.meta.id == id)
+                .ok_or("Unknown UV layer")?;
+            if target == UvPaintTarget::Mask && (!l.meta.mask_enabled || l.mask.is_none()) {
+                return Err("Add and enable the layer mask before selecting Mask".into());
+            }
+            let changed = l.meta.paint_target != target;
+            l.meta.paint_target = target;
+            return Ok(changed);
+        }
         if let UvLayerOp::Select(id) = op {
             if !self.document.layers.iter().any(|l| l.meta.id == id) {
                 return Err("Unknown UV layer".into());
@@ -397,10 +550,9 @@ impl UvLayers {
                 let id = self.document.next_id;
                 if id >= u32::MAX - 1
                     || after.metas.len() >= UV_MAX_LAYERS
-                    || (after.metas.len() + 1)
-                        * self.document.width as usize
-                        * self.document.height as usize
-                        > UV_MAX_PIXELS
+                    || self.document.sample_count().saturating_add(
+                        self.document.width as usize * self.document.height as usize,
+                    ) > UV_MAX_PIXELS
                 {
                     return Err("UV layer count/pixel/identity limit reached".into());
                 }
@@ -422,6 +574,8 @@ impl UvLayers {
                         opacity: 1.,
                         locked: false,
                         blend_mode: UvBlendMode::Normal,
+                        mask_enabled: false,
+                        paint_target: UvPaintTarget::Color,
                     },
                 );
                 after.active = id;
@@ -434,6 +588,7 @@ impl UvLayers {
                         self.document.width as usize
                             * self.document.height as usize
                     ]),
+                    mask: None,
                 });
             }
             UvLayerOp::Duplicate(source) => {
@@ -441,12 +596,29 @@ impl UvLayers {
                 let id = self.document.next_id;
                 if id >= u32::MAX - 1
                     || after.metas.len() >= UV_MAX_LAYERS
-                    || (after.metas.len() + 1)
-                        * self.document.width as usize
-                        * self.document.height as usize
-                        > UV_MAX_PIXELS
+                    || self.document.sample_count().saturating_add(
+                        self.document.layers[index].pixels.len()
+                            + self.document.layers[index]
+                                .mask
+                                .as_ref()
+                                .map_or(0, Vec::len),
+                    ) > UV_MAX_PIXELS
                 {
                     return Err("UV layer count/pixel/identity limit reached".into());
+                }
+                if self.document.layers[index].pixels.len() * 16
+                    + self.document.layers[index]
+                        .mask
+                        .as_ref()
+                        .map_or(0, |m| m.len() * 4)
+                    + before.bytes()
+                    + after.bytes()
+                    + 48
+                    + self.document.layers[index].meta.name.len()
+                    + 5
+                    > UV_HISTORY_BYTES
+                {
+                    return Err("Duplicate exceeds retained payload limit".into());
                 }
                 let mut meta = after.metas[index].clone();
                 meta.id = id;
@@ -461,12 +633,27 @@ impl UvLayers {
                     id,
                     before: None,
                     after: Some(self.document.layers[index].pixels.clone()),
+                    mask: Some(MaskChange {
+                        before: None,
+                        after: self.document.layers[index].mask.clone(),
+                    }),
                 });
             }
             UvLayerOp::Delete(id) => {
                 let index = find(id, &after.metas)?;
                 if after.metas.len() == 1 {
                     return Err("Keep at least one UV layer".into());
+                }
+                if self.document.layers[index].pixels.len() * 16
+                    + self.document.layers[index]
+                        .mask
+                        .as_ref()
+                        .map_or(0, |m| m.len() * 4)
+                    + before.bytes()
+                    + after.bytes()
+                    > UV_HISTORY_BYTES
+                {
+                    return Err("Delete exceeds retained payload limit".into());
                 }
                 after.metas.remove(index);
                 if after.active == id {
@@ -476,6 +663,10 @@ impl UvLayers {
                     id,
                     before: Some(self.document.layers[index].pixels.clone()),
                     after: None,
+                    mask: Some(MaskChange {
+                        before: self.document.layers[index].mask.clone(),
+                        after: None,
+                    }),
                 });
             }
             UvLayerOp::Select(id) => {
@@ -516,11 +707,77 @@ impl UvLayers {
                 let i = find(id, &after.metas)?;
                 after.metas[i].blend_mode = mode;
             }
+            UvLayerOp::AddMask(id) => {
+                let i = find(id, &after.metas)?;
+                if self.document.layers[i].mask.is_some() {
+                    return Ok(false);
+                }
+                let count = self.document.layers[i].pixels.len();
+                if self.document.sample_count().saturating_add(count) > UV_MAX_PIXELS
+                    || count * 4 > UV_PENDING_BYTES
+                    || count * 4 + before.bytes() + after.bytes() > UV_HISTORY_BYTES
+                {
+                    return Err("Mask exceeds UV sample/history payload limits".into());
+                }
+                after.metas[i].mask_enabled = true;
+                pixels.push(PixelChange {
+                    id,
+                    before: None,
+                    after: None,
+                    mask: Some(MaskChange {
+                        before: None,
+                        after: Some(vec![1.; count]),
+                    }),
+                });
+            }
+            UvLayerOp::RemoveMask(id) => {
+                let i = find(id, &after.metas)?;
+                let Some(mask) = self.document.layers[i].mask.as_ref() else {
+                    return Ok(false);
+                };
+                if mask.len() * 4 + before.bytes() + after.bytes() > UV_HISTORY_BYTES {
+                    return Err("Mask exceeds history payload limit".into());
+                }
+                after.metas[i].mask_enabled = false;
+                after.metas[i].paint_target = UvPaintTarget::Color;
+                pixels.push(PixelChange {
+                    id,
+                    before: None,
+                    after: None,
+                    mask: Some(MaskChange {
+                        before: Some(mask.clone()),
+                        after: None,
+                    }),
+                });
+            }
+            UvLayerOp::MaskEnabled(id, enabled) => {
+                let i = find(id, &after.metas)?;
+                if self.document.layers[i].mask.is_none() {
+                    return Err("Add a layer mask first".into());
+                }
+                after.metas[i].mask_enabled = enabled;
+                if !enabled {
+                    after.metas[i].paint_target = UvPaintTarget::Color;
+                }
+            }
+            UvLayerOp::PaintTarget(_, _) => unreachable!(),
         }
-        if before.metas == after.metas && before.active == after.active {
+        if before.metas == after.metas && before.active == after.active && pixels.is_empty() {
             return Ok(false);
         }
-        after.compositor = if after
+        let has_mask = self.document.layers.iter().any(|l| {
+            after.metas.iter().any(|m| m.id == l.meta.id)
+                && pixels
+                    .iter()
+                    .find(|p| p.id == l.meta.id)
+                    .and_then(|p| p.mask.as_ref())
+                    .map_or(l.mask.is_some(), |m| m.after.is_some())
+        }) || pixels
+            .iter()
+            .any(|p| p.mask.as_ref().is_some_and(|m| m.after.is_some()));
+        after.compositor = if has_mask {
+            UV_MASK_COMPOSITOR
+        } else if after
             .metas
             .iter()
             .any(|m| m.blend_mode != UvBlendMode::Normal)
@@ -547,9 +804,20 @@ impl UvLayers {
     }
     /// A complete accepted stroke/project commit to the current selected source.
     pub fn paint(&mut self, id: u32, after: Vec<[f32; 4]>) -> Result<bool, String> {
+        self.paint_on(id, self.active().meta.paint_target, after)
+    }
+    pub fn paint_on(
+        &mut self,
+        id: u32,
+        target: UvPaintTarget,
+        after: Vec<[f32; 4]>,
+    ) -> Result<bool, String> {
         self.paintable()?;
-        if id != self.document.active_layer {
+        if id != self.document.active_layer || target != self.active().meta.paint_target {
             return Err("The UV paint target changed during the transaction".into());
+        }
+        if target == UvPaintTarget::Mask {
+            return self.paint_mask_workspace(id, after);
         }
         let before = &self.active().pixels;
         if !valid_uv_pixels(&after, before.len()) {
@@ -569,6 +837,7 @@ impl UvLayers {
                 id,
                 before: Some(before.clone()),
                 after: Some(after),
+                mask: None,
             }],
         };
         if change.bytes() > UV_HISTORY_BYTES {
@@ -578,16 +847,83 @@ impl UvLayers {
         self.record(change)?;
         Ok(true)
     }
+    fn paint_mask_workspace(&mut self, id: u32, after: Vec<[f32; 4]>) -> Result<bool, String> {
+        let before = self.active().mask.as_ref().ok_or("Missing active mask")?;
+        if !self.active().meta.mask_enabled
+            || !valid_uv_pixels(&after, before.len())
+            || after
+                .iter()
+                .any(|p| p[0].to_bits() != p[1].to_bits() || p[0].to_bits() != p[2].to_bits())
+        {
+            return Err("Invalid grayscale mask workspace".into());
+        }
+        if after.len() * 16 > UV_PENDING_BYTES {
+            return Err("Mask workspace exceeds pending payload limit".into());
+        }
+        let result: Vec<f32> = before
+            .iter()
+            .zip(after)
+            .map(|(&m, p)| {
+                if same_uv_pixels(&[[m, m, m, 1.]], &[p]) {
+                    m
+                } else {
+                    uv_mask_coverage(p)
+                }
+            })
+            .collect();
+        if same_mask_pixels(before, &result) {
+            return Ok(false);
+        }
+        let layout = self.layout();
+        let change = Change {
+            before: layout.clone(),
+            after: layout,
+            pixels: vec![PixelChange {
+                id,
+                before: None,
+                after: None,
+                mask: Some(MaskChange {
+                    before: Some(before.clone()),
+                    after: Some(result),
+                }),
+            }],
+        };
+        if change.bytes() > UV_HISTORY_BYTES {
+            return Err("Mask stroke exceeds retained payload limit".into());
+        }
+        self.apply_layout(&change.after, &change.pixels, true);
+        self.record(change)?;
+        Ok(true)
+    }
+    pub fn projected_workspace(&self, source: &[[f32; 4]]) -> Result<Vec<[f32; 4]>, String> {
+        self.paintable()?;
+        if !valid_uv_pixels(source, self.active().pixels.len()) {
+            return Err("Invalid projection snapshot dimensions/pixels".into());
+        }
+        let baseline = self.active().working_pixels();
+        Ok(source
+            .iter()
+            .zip(baseline)
+            .map(|(src, dst)| {
+                if src[3] == 0. {
+                    return dst;
+                }
+                let src = if self.active().meta.paint_target == UvPaintTarget::Mask {
+                    let gray = uv_luminance(*src).clamp(0., src[3]);
+                    [gray, gray, gray, src[3]]
+                } else {
+                    *src
+                };
+                uv_over(src, dst)
+            })
+            .collect())
+    }
     pub fn project(&mut self, source: &[[f32; 4]]) -> Result<bool, String> {
         self.paintable()?;
         if !valid_uv_pixels(source, self.active().pixels.len()) {
             return Err("Invalid projection snapshot dimensions/pixels".into());
         }
-        let output = source
-            .iter()
-            .zip(&self.active().pixels)
-            .map(|(src, dst)| uv_over(*src, *dst))
-            .collect();
+        let output = self.projected_workspace(source)?;
         self.paint(self.document.active_layer, output)
     }
     pub fn exchange(&mut self, redo: bool) -> bool {
@@ -959,5 +1295,209 @@ mod tests {
         assert_eq!(l.active().pixels[0], [0., 0., 0.5, 0.5]);
         l.exchange(false);
         assert_eq!(l.active().pixels[0], [1., 0., 0., 0.]);
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+    fn masked() -> UvLayers {
+        let mut l = UvLayers::new(2, 2).unwrap();
+        l.paint(0, vec![[0.2, 0.3, 0.1, 0.5]; 4]).unwrap();
+        l.edit(UvLayerOp::AddMask(0)).unwrap();
+        l.edit(UvLayerOp::PaintTarget(0, UvPaintTarget::Mask))
+            .unwrap();
+        l
+    }
+    #[test]
+    fn mask_compositor_scales_associated_rgba_then_opacity_for_all_modes() {
+        let mut l = masked();
+        l.edit(UvLayerOp::Create("top".into())).unwrap();
+        l.paint(1, vec![[0.08, 0.28, 0.16, 0.4]; 4]).unwrap();
+        l.edit(UvLayerOp::AddMask(1)).unwrap();
+        l.edit(UvLayerOp::PaintTarget(1, UvPaintTarget::Mask))
+            .unwrap();
+        l.paint(1, vec![[0.25, 0.25, 0.25, 1.]; 4]).unwrap();
+        l.edit(UvLayerOp::Opacity(1, 0.5)).unwrap();
+        for mode in [
+            UvBlendMode::Normal,
+            UvBlendMode::Multiply,
+            UvBlendMode::Screen,
+            UvBlendMode::Overlay,
+        ] {
+            l.edit(UvLayerOp::BlendMode(1, mode)).unwrap();
+            let expected = uv_blend_over([0.01, 0.035, 0.02, 0.05], [0.2, 0.3, 0.1, 0.5], mode);
+            for p in l.document().composite() {
+                for c in 0..4 {
+                    assert!((p[c] - expected[c]).abs() < 1e-7);
+                }
+            }
+            let zero = vec![[0., 0., 0., 1.]; 4];
+            assert_eq!(
+                l.document().composite_active(Some(&zero)),
+                vec![[0.2, 0.3, 0.1, 0.5]; 4]
+            );
+            l.edit(UvLayerOp::MaskEnabled(1, false)).unwrap();
+            assert_eq!(
+                l.document().composite(),
+                vec![uv_blend_over([0.04, 0.14, 0.08, 0.2], [0.2, 0.3, 0.1, 0.5], mode); 4]
+            );
+            l.edit(UvLayerOp::MaskEnabled(1, true)).unwrap();
+            l.edit(UvLayerOp::PaintTarget(1, UvPaintTarget::Mask))
+                .unwrap();
+        }
+    }
+    #[test]
+    fn mask_untouched_bits_noops_erase_and_rejection_preserve_redo() {
+        let mut d = masked().document().clone();
+        d.layers[0].mask = Some(vec![-0., f32::from_bits(1), f32::from_bits(0x3eaaaaab), 1.]);
+        let mut l = UvLayers::restore(d).unwrap();
+        let before = l.active().mask.clone().unwrap();
+        let mut pixels = l.active().working_pixels();
+        assert!(!l.paint(0, pixels.clone()).unwrap());
+        pixels[3] = [0., 0., 0., 1.];
+        assert!(l.paint(0, pixels).unwrap());
+        for i in 0..3 {
+            assert_eq!(
+                l.active().mask.as_ref().unwrap()[i].to_bits(),
+                before[i].to_bits()
+            );
+        }
+        assert!(l.exchange(false));
+        assert!(!l.paint(0, l.active().working_pixels()).unwrap());
+        let mut invalid = l.active().working_pixels();
+        invalid[1] = [1., 0., 0., 1.];
+        assert!(l.paint(0, invalid).is_err());
+        assert_eq!((l.undo_count(), l.redo_count()), (0, 1));
+        assert!(l.exchange(true));
+        let mut erased = l.active().working_pixels();
+        erased[3] = [0., 0., 0., 0.4];
+        l.paint(0, erased).unwrap();
+        assert_eq!(l.active().mask.as_ref().unwrap()[3], 0.6);
+        assert!(same_uv_pixels(
+            &l.active().pixels,
+            &vec![[0.2, 0.3, 0.1, 0.5]; 4]
+        ));
+    }
+    #[test]
+    fn mask_projection_skips_transparent_latent_rgb_and_uses_linear_brightness() {
+        let mut l = masked();
+        l.paint(0, vec![[0.25, 0.25, 0.25, 1.]; 4]).unwrap();
+        let raw = l.active().pixels.clone();
+        let n = l.undo_count();
+        assert!(!l.project(&[[1., 0.7, 0.9, 0.]; 4]).unwrap());
+        assert_eq!(l.undo_count(), n);
+        l.project(&[[0.4, 0.1, 0.2, 0.5]; 4]).unwrap();
+        let expected = 0.2126 * 0.4 + 0.7152 * 0.1 + 0.0722 * 0.2 + 0.25 * 0.5;
+        for &m in l.active().mask.as_ref().unwrap() {
+            assert!((m - expected).abs() < 1e-7);
+        }
+        assert_eq!(l.active().pixels, raw);
+        assert!(l.exchange(false));
+        assert_eq!(l.active().mask, Some(vec![0.25; 4]));
+    }
+    #[test]
+    fn mask_lifecycle_selection_and_scalar_history_are_atomic() {
+        let mut l = masked();
+        let raw_ptr = l.active().pixels.as_ptr();
+        let mask_ptr = l.active().mask.as_ref().unwrap().as_ptr();
+        l.edit(UvLayerOp::Opacity(0, 0.5)).unwrap();
+        assert_eq!(l.active().pixels.as_ptr(), raw_ptr);
+        assert_eq!(l.active().mask.as_ref().unwrap().as_ptr(), mask_ptr);
+        l.clear_history();
+        let layout_bytes = l.layout().bytes() * 2;
+        l.paint(0, vec![[0.3, 0.3, 0.3, 1.]; 4]).unwrap();
+        assert_eq!(l.history_bytes(), layout_bytes + 4 * 8);
+        let painted = l.document().clone();
+        assert!(l.exchange(false));
+        l.edit(UvLayerOp::PaintTarget(0, UvPaintTarget::Color))
+            .unwrap();
+        assert_eq!(l.redo_count(), 1);
+        assert!(l.exchange(true));
+        assert_eq!(l.document(), &painted);
+        l.edit(UvLayerOp::Duplicate(0)).unwrap();
+        assert_eq!(l.active().mask, Some(vec![0.3; 4]));
+        l.edit(UvLayerOp::Delete(1)).unwrap();
+        assert!(l.exchange(false));
+        assert_eq!(l.active().meta.id, 1);
+        let before = l.document().clone();
+        l.edit(UvLayerOp::RemoveMask(1)).unwrap();
+        assert!(l.active().mask.is_none());
+        assert_eq!(l.active().meta.paint_target, UvPaintTarget::Color);
+        assert!(l.exchange(false));
+        assert_eq!(l.document(), &before);
+        l.edit(UvLayerOp::MaskEnabled(1, false)).unwrap();
+        assert_eq!(l.active().mask, Some(vec![0.3; 4]));
+        assert_eq!(l.active().meta.paint_target, UvPaintTarget::Color);
+        assert!(
+            l.edit(UvLayerOp::PaintTarget(1, UvPaintTarget::Mask))
+                .is_err()
+        );
+        assert!(l.exchange(false));
+        assert_eq!(l.document(), &before);
+        assert_eq!(l.redo_count(), 1);
+        l.edit(UvLayerOp::Select(0)).unwrap();
+        assert_eq!(l.redo_count(), 1);
+        l.paint(0, vec![[0.5, 0.5, 0.5, 1.]; 4]).unwrap();
+        assert_eq!(l.redo_count(), 0);
+    }
+    #[test]
+    fn mask_documents_require_explicit_policy_and_validate_before_install() {
+        let legacy = UvLayers::new(2, 2).unwrap().document().clone();
+        let json = serde_json::to_string(&legacy).unwrap();
+        assert!(!json.contains("mask"));
+        assert!(!json.contains("paint_target"));
+        assert_eq!(
+            serde_json::from_str::<UvLayersDocument>(&json).unwrap(),
+            legacy
+        );
+        let good = masked().document().clone();
+        assert_eq!(good.compositor, UV_MASK_COMPOSITOR);
+        let json = serde_json::to_string(&good).unwrap();
+        assert_eq!(
+            serde_json::from_str::<UvLayersDocument>(&json).unwrap(),
+            good
+        );
+        for kind in 0..6 {
+            let mut bad = good.clone();
+            match kind {
+                0 => bad.compositor = UV_BLEND_COMPOSITOR.into(),
+                1 => bad.layers[0]
+                    .mask
+                    .as_mut()
+                    .unwrap()
+                    .pop()
+                    .map(|_| ())
+                    .unwrap(),
+                2 => bad.layers[0].mask.as_mut().unwrap()[0] = f32::NAN,
+                3 => bad.layers[0].mask.as_mut().unwrap()[0] = 1.1,
+                4 => bad.layers[0].mask = None,
+                _ => bad.layers[0].meta.mask_enabled = false,
+            }
+            assert!(UvLayers::restore(bad).is_err());
+        }
+    }
+    #[test]
+    fn masks_share_sample_bound_and_history_entry_cap() {
+        let mut l = UvLayers::new(1024, 1024).unwrap();
+        l.edit(UvLayerOp::AddMask(0)).unwrap();
+        l.edit(UvLayerOp::Duplicate(0)).unwrap();
+        assert_eq!(l.document().sample_count(), UV_MAX_PIXELS);
+        let d = l.document().clone();
+        let n = l.undo_count();
+        assert!(l.edit(UvLayerOp::Create("overflow".into())).is_err());
+        assert!(l.edit(UvLayerOp::Duplicate(0)).is_err());
+        assert_eq!(l.document(), &d);
+        assert_eq!(l.undo_count(), n);
+        assert!(l.history_bytes() <= UV_HISTORY_BYTES);
+        let mut small = masked();
+        // Use valid opaque grayscale workspaces for retained scalar strokes.
+        for n in 0..300 {
+            let m = if n % 2 == 0 { 0. } else { 1. };
+            small.paint(0, vec![[m, m, m, 1.]; 4]).unwrap();
+        }
+        assert_eq!(small.undo_count(), UV_HISTORY_ENTRIES);
+        assert!(small.evicted() > 0);
+        assert!(small.history_bytes() <= UV_HISTORY_BYTES);
     }
 }

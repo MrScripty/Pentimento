@@ -824,8 +824,7 @@ impl ProjectDocument {
                 }) {
                     return Err("UV layer receiver has a competing projection owner".into());
                 }
-                pixels = pixels
-                    .saturating_add(layers.layers.iter().map(|l| l.pixels.len()).sum::<usize>());
+                pixels = pixels.saturating_add(layers.sample_count());
             }
             match (&o.paintable, &o.mesh_uv) {
                 (Some((_, StorageDocument::Uv(w, h))), Some(uv)) if self.version >= 2 => {

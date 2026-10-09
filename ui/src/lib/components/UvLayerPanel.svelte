@@ -1,6 +1,6 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
-    import type { UvLayerState, UvLayerCommand, UvLayerBlendMode, PaintTargetState } from '$lib/types';
+    import type { UvLayerState, UvLayerCommand, UvLayerBlendMode, UvLayerPaintTarget, PaintTargetState } from '$lib/types';
     let { layerState, history }: {layerState:UvLayerState;history:PaintTargetState} = $props();
     let name=$state('');
     let locked=$derived(layerState.active || layerState.conflicted);
@@ -20,7 +20,7 @@
         <button class="wide" disabled={locked || layerState.receiver===null} onclick={()=>send('Enable')}>Enable UV texture layers</button>
         <p class="hint">Keep exact existing pixels as editable layers. This enables linear Normal compositing; legacy appearance may change. Existing canvas projections become independent snapshots.</p>
     {:else}
-        <p class="hint">DirectUV and Canvas Apply paint the selected layer. Modes blend with lower visible UV layers in linear color; the UV stack then overlays the original material. A lone layer behaves like Normal. Hidden or locked layers refuse painting.</p>
+        <p class="hint">DirectUV and Canvas Apply paint the selected layer’s Color or Mask target. Modes blend with lower visible UV layers in linear color; the UV stack then overlays the original material. A lone layer behaves like Normal. Hidden or locked layers refuse painting.</p>
         <label class="select-label" for="uv-new-name">New UV layer name</label>
         <input id="uv-new-name" type="text" bind:value={name} maxlength="256" disabled={locked} />
         <button class="wide" disabled={locked} onclick={()=>send({Create:{name}})}>Create UV layer</button>
@@ -33,6 +33,21 @@
                         <label><input type="checkbox" aria-label={`Lock UV layer ${layer.name}`} checked={layer.locked} disabled={locked} onchange={e=>{const locked=e.currentTarget.checked;e.currentTarget.checked=layer.locked;send({Lock:{layer_id:layer.id,locked}});}} /> Lock paint</label>
                     </div>
                     {#if layer.is_active}
+                        <div class="uv-actions">
+                            {#if layer.has_mask}
+                                <button disabled={locked} onclick={()=>send({RemoveMask:{layer_id:layer.id}})}>Remove layer mask</button>
+                            {:else}
+                                <button disabled={locked} onclick={()=>send({AddMask:{layer_id:layer.id}})}>Add layer mask</button>
+                            {/if}
+                        </div>
+                        {#if layer.has_mask}
+                            <label class="check-row"><input type="checkbox" aria-label="Enable layer mask" checked={layer.mask_enabled} disabled={locked} onchange={e=>{const enabled=e.currentTarget.checked;e.currentTarget.checked=layer.mask_enabled;send({MaskEnabled:{layer_id:layer.id,enabled}});}} /> Enable layer mask</label>
+                        {/if}
+                        <label class="select-label" for={`uv-target-${layer.id}`}>Paint color or mask</label>
+                        <select id={`uv-target-${layer.id}`} value={layer.paint_target} disabled={locked} onchange={e=>{const target=e.currentTarget.value as UvLayerPaintTarget;e.currentTarget.value=layer.paint_target;send({PaintTarget:{layer_id:layer.id,target}});}}>
+                            <option value="Color">Color</option><option value="Mask" disabled={!layer.has_mask || !layer.mask_enabled}>Mask</option>
+                        </select>
+                        <p class="hint">Masks begin white. White reveals layer color; black hides it. Disabling a mask keeps its pixels and selects Color. Mask edits have their own stroke history within UV Undo.</p>
                         <label class="select-label" for={`uv-blend-${layer.id}`}>UV layer blend mode</label>
                         <select id={`uv-blend-${layer.id}`} value={layer.blend_mode} disabled={locked} onchange={e=>{const mode=e.currentTarget.value as UvLayerBlendMode;e.currentTarget.value=layer.blend_mode;send({BlendMode:{layer_id:layer.id,mode}});}}>
                             {#each blendModes as mode}<option value={mode}>{mode}</option>{/each}
@@ -56,9 +71,9 @@
         <button class="wide" disabled={locked || !layerState.can_undo} onclick={()=>send('Undo')}>Undo UV layer edit</button>
         <button class="wide" disabled={locked || !layerState.can_redo} onclick={()=>send('Redo')}>Redo UV layer edit</button>
         <p class="hint" role="status">History payload: {(history.retained_bytes/1048576).toFixed(1)} / {(history.limit_bytes/1048576).toFixed(0)} MiB retained; {(history.pending_bytes/1048576).toFixed(1)} MiB pending.{history.evicted_strokes>0 ? ` ${history.evicted_strokes} older edits expired.` : ''}</p>
-        <p class="hint">UV Undo includes strokes, Apply and layer changes. Selection preserves Redo. Canvas stroke Undo edits the source canvas separately. Delete is recoverable while its bounded history remains available.</p>
+        <p class="hint">UV Undo includes strokes, Apply and layer changes. Layer and paint-target selection preserve Redo. Canvas stroke Undo edits the source canvas separately. Delete is recoverable while its bounded history remains available.</p>
     {/if}
-    {#if layerState.projection_preview}<p class="notice" role="status">Live preview owns this receiver and layer. Apply or Cancel preview before changing the stack.</p>{/if}
+    {#if layerState.projection_preview}<p class="notice" role="status">Live preview owns this receiver, layer and paint target. Apply or Cancel preview before changing the stack.</p>{/if}
     {#if layerState.conflicted}<p role="status" class="notice">UV ownership changed. Reopen the owned project before editing this receiver.</p>{/if}
 </section>
 <style>

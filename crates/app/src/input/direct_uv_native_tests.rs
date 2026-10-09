@@ -2971,3 +2971,670 @@ fn shared_live_actual_two_focus_cycles_are_consumed_before_new_preview() {
     f.command(PaintCommand::CancelUvProjection);
     f.settle();
 }
+
+fn mask_fixture() -> Fixture {
+    let mut f = Fixture::new_with_projection(true);
+    f.enable_layers();
+    f.direct();
+    f.command(PaintCommand::SetBrushColor {
+        color: [0.8, 0.3, 0.5, 1.],
+    });
+    f.gesture();
+    f.settle();
+    f.uv(UvLayerCommand::AddMask { layer_id: 0 });
+    f.uv(UvLayerCommand::PaintTarget {
+        layer_id: 0,
+        target: pentimento_ipc::UvLayerPaintTarget::Mask,
+    });
+    f
+}
+
+#[test]
+fn shared_masks_actual_direct_strokes_scalar_history_erase_cancel_noop_and_reopen() {
+    let mut f = mask_fixture();
+    let baseline = f.layers();
+    let image = f.image();
+    let n = counts(&f).0;
+    let bytes = f
+        .app
+        .world()
+        .resource::<MeshPaintingResource>()
+        .history_bytes();
+    f.command(PaintCommand::SetBrushColor { color: [1.; 4] });
+    f.gesture();
+    f.settle();
+    assert_eq!(f.layers(), baseline);
+    assert_eq!(counts(&f), (n, 0));
+    f.command(PaintCommand::SetBrushColor {
+        color: [0., 0., 0., 1.],
+    });
+    f.gesture();
+    f.settle();
+    let masked = f.layers();
+    let masked_image = f.image();
+    assert_eq!(masked.layers[0].pixels, baseline.layers[0].pixels);
+    assert!(
+        masked.layers[0]
+            .mask
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|&m| m < 1.)
+    );
+    assert_ne!(masked_image, image);
+    assert_eq!(counts(&f), (n + 1, 0));
+    let delta = f
+        .app
+        .world()
+        .resource::<MeshPaintingResource>()
+        .history_bytes()
+        - bytes;
+    assert!(
+        delta >= 64 * 64 * 8 && delta < 64 * 64 * 16,
+        "retains two scalar snapshots, not color snapshots: {delta}"
+    );
+    f.uv(UvLayerCommand::Undo);
+    assert_eq!(f.layers(), baseline);
+    assert_eq!(f.image(), image);
+    f.uv(UvLayerCommand::PaintTarget {
+        layer_id: 0,
+        target: pentimento_ipc::UvLayerPaintTarget::Color,
+    });
+    assert_eq!(counts(&f), (n, 1));
+    f.uv(UvLayerCommand::PaintTarget {
+        layer_id: 0,
+        target: pentimento_ipc::UvLayerPaintTarget::Mask,
+    });
+    f.command(PaintCommand::SetBrushOpacity { opacity: 0. });
+    f.gesture();
+    f.settle();
+    assert_eq!(counts(&f), (n, 1));
+    assert_eq!(f.layers(), baseline);
+    f.command(PaintCommand::SetBrushOpacity { opacity: 1. });
+    f.batch(vec![movement(f.window, 500.), button(f.window, true)]);
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .pending_history_bytes(),
+        64 * 64 * 16
+    );
+    f.command(PaintCommand::CancelStroke);
+    f.batch(vec![button(f.window, false)]);
+    f.settle();
+    assert_eq!(f.layers(), baseline);
+    assert_eq!(counts(&f), (n, 1));
+    f.uv(UvLayerCommand::Redo);
+    assert_eq!(f.layers(), masked);
+    assert_eq!(f.image(), masked_image);
+    f.command(PaintCommand::SetBlendMode {
+        mode: pentimento_ipc::BlendMode::Erase,
+    });
+    f.gesture();
+    f.settle();
+    let erased = f.layers();
+    assert_ne!(erased, masked);
+    assert_eq!(erased.layers[0].pixels, baseline.layers[0].pixels);
+    assert!(
+        erased.layers[0]
+            .mask
+            .as_ref()
+            .unwrap()
+            .iter()
+            .zip(masked.layers[0].mask.as_ref().unwrap())
+            .any(|(a, b)| a > b)
+    );
+    f.uv(UvLayerCommand::Undo);
+    assert_eq!(f.layers(), masked);
+    let path = f.path.join("mask-direct.json");
+    assert!(f.save(&path));
+    assert!(f.open(&path));
+    f.settle();
+    assert_eq!(f.layers(), masked);
+    assert_eq!(f.image(), masked_image);
+    assert_eq!(counts(&f), (0, 0));
+    f.batch(vec![
+        key(f.window, KeyCode::ShiftLeft, true),
+        key(f.window, KeyCode::Tab, true),
+    ]);
+    f.batch(vec![
+        key(f.window, KeyCode::Tab, false),
+        key(f.window, KeyCode::ShiftLeft, false),
+    ]);
+    f.direct();
+    f.command(PaintCommand::SetBlendMode {
+        mode: pentimento_ipc::BlendMode::Erase,
+    });
+    f.gesture();
+    f.settle();
+    assert_eq!(counts(&f), (1, 0));
+    f.uv(UvLayerCommand::Undo);
+    assert_eq!(f.layers(), masked);
+    assert_eq!(f.image(), masked_image);
+}
+
+#[test]
+fn shared_masks_actual_modes_opacity_enable_order_selection_and_lifecycle() {
+    use pentimento_ipc::{UvLayerBlendMode as Mode, UvLayerPaintTarget as Target};
+    for mode in [Mode::Normal, Mode::Multiply, Mode::Screen, Mode::Overlay] {
+        let mut f = mask_fixture();
+        f.uv(UvLayerCommand::PaintTarget {
+            layer_id: 0,
+            target: Target::Color,
+        });
+        f.uv(UvLayerCommand::Create {
+            name: "Masked top".into(),
+        });
+        let id = f.layers().active_layer;
+        f.command(PaintCommand::SetBrushOpacity { opacity: 0.55 });
+        f.command(PaintCommand::SetBrushColor {
+            color: [0.2, 0.7, 0.4, 1.],
+        });
+        f.gesture();
+        f.settle();
+        f.uv(UvLayerCommand::BlendMode { layer_id: id, mode });
+        let colors = f
+            .layers()
+            .layers
+            .iter()
+            .map(|l| l.pixels.clone())
+            .collect::<Vec<_>>();
+        f.uv(UvLayerCommand::AddMask { layer_id: id });
+        f.uv(UvLayerCommand::PaintTarget {
+            layer_id: id,
+            target: Target::Mask,
+        });
+        f.command(PaintCommand::SetBrushColor {
+            color: [0., 0., 0., 1.],
+        });
+        f.gesture();
+        f.settle();
+        let before = f.layers();
+        let image = f.image();
+        f.uv(UvLayerCommand::Opacity {
+            layer_id: id,
+            opacity: 0.4,
+        });
+        let faded = f.layers();
+        let faded_image = f.image();
+        assert_ne!(faded_image, image);
+        f.uv(UvLayerCommand::Reorder {
+            layer_id: id,
+            new_index: 0,
+        });
+        let reordered = f.layers();
+        let reordered_image = f.image();
+        assert_ne!(reordered_image, faded_image);
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), faded);
+        assert_eq!(f.image(), faded_image);
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), before);
+        assert_eq!(f.image(), image);
+        f.uv(UvLayerCommand::Select { layer_id: 0 });
+        assert_eq!(counts(&f).1, 2);
+        f.uv(UvLayerCommand::Redo);
+        f.uv(UvLayerCommand::Redo);
+        assert_eq!(f.layers(), reordered);
+        assert_eq!(f.image(), reordered_image);
+        f.uv(UvLayerCommand::MaskEnabled {
+            layer_id: id,
+            enabled: false,
+        });
+        let disabled = f.layers();
+        assert_ne!(f.image(), reordered_image);
+        let selected = disabled.layers.iter().find(|l| l.meta.id == id).unwrap();
+        assert_eq!(
+            selected.meta.paint_target,
+            painting::uv_layers::UvPaintTarget::Color
+        );
+        f.uv(UvLayerCommand::PaintTarget {
+            layer_id: id,
+            target: Target::Mask,
+        });
+        assert_eq!(f.layers(), disabled);
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), reordered);
+        assert_eq!(f.image(), reordered_image);
+        for (layer, color) in before.layers.iter().zip(&colors) {
+            assert_eq!(&layer.pixels, color);
+        }
+        f.uv(UvLayerCommand::Duplicate { layer_id: id });
+        let duplicate = f.layers();
+        let copy = duplicate.active_layer;
+        assert_eq!(
+            duplicate
+                .layers
+                .iter()
+                .find(|l| l.meta.id == copy)
+                .unwrap()
+                .mask,
+            reordered
+                .layers
+                .iter()
+                .find(|l| l.meta.id == id)
+                .unwrap()
+                .mask
+        );
+        f.uv(UvLayerCommand::Delete { layer_id: copy });
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), duplicate);
+        f.uv(UvLayerCommand::RemoveMask { layer_id: copy });
+        assert!(
+            f.layers()
+                .layers
+                .iter()
+                .find(|l| l.meta.id == copy)
+                .unwrap()
+                .mask
+                .is_none()
+        );
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), duplicate);
+        let path = f.path.join(format!("mask-{mode:?}.json"));
+        assert!(f.save(&path));
+        assert!(f.open(&path));
+        f.settle();
+        assert_eq!(f.layers(), duplicate);
+    }
+}
+
+#[test]
+fn shared_masks_actual_projection_and_live_recompute_baseline_apply_once_cancel_keep_source() {
+    use pentimento_ipc::{UvLayerBlendMode as Mode, UvLayerPaintTarget as Target};
+    for mode in [Mode::Normal, Mode::Multiply, Mode::Screen, Mode::Overlay] {
+        let mut f = mask_fixture();
+        f.uv(UvLayerCommand::BlendMode { layer_id: 0, mode });
+        f.command(PaintCommand::SetTarget {
+            target: PaintTarget::Canvas,
+        });
+        f.command(PaintCommand::SetBrushColor {
+            color: [0., 0., 0., 1.],
+        });
+        f.gesture();
+        f.settle();
+        let before = f.layers();
+        let n = counts(&f);
+        let image = f.image();
+        f.command(PaintCommand::SetLiveProjection { enabled: true });
+        f.settle();
+        let one = f.image();
+        let work = f.raw();
+        assert_ne!(one, image);
+        assert_eq!(f.layers(), before);
+        assert_eq!(counts(&f), n);
+        f.settle();
+        assert_eq!(f.raw(), work, "preview must not compound on itself");
+        for op in [
+            UvLayerCommand::PaintTarget {
+                layer_id: 0,
+                target: Target::Color,
+            },
+            UvLayerCommand::MaskEnabled {
+                layer_id: 0,
+                enabled: false,
+            },
+            UvLayerCommand::RemoveMask { layer_id: 0 },
+        ] {
+            f.uv(op);
+            assert_eq!(f.layers(), before);
+        }
+        f.command(PaintCommand::SetBrushColor {
+            color: [0.2, 0.7, 0.4, 1.],
+        });
+        f.gesture();
+        f.settle();
+        let two = f.image();
+        assert_ne!(two, one);
+        f.command(PaintCommand::Undo);
+        f.settle();
+        assert_eq!(f.image(), one);
+        f.command(PaintCommand::Redo);
+        f.settle();
+        assert_eq!(f.image(), two);
+        let source = f.source();
+        f.command(PaintCommand::CancelUvProjection);
+        f.settle();
+        assert_eq!(f.layers(), before);
+        assert_eq!(f.image(), image);
+        assert_eq!(f.source(), source);
+        assert_eq!(counts(&f), n);
+        f.command(PaintCommand::ProjectToScene);
+        f.settle();
+        let applied = f.layers();
+        assert_eq!(f.image(), two);
+        assert_eq!(applied.layers[0].pixels, before.layers[0].pixels);
+        assert_ne!(applied.layers[0].mask, before.layers[0].mask);
+        assert_eq!(counts(&f).0, n.0 + 1);
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), before);
+        assert_eq!(f.source(), source);
+        f.command(PaintCommand::SetLiveProjection { enabled: true });
+        f.settle();
+        f.command(PaintCommand::ProjectToScene);
+        f.settle();
+        assert_eq!(f.layers(), applied);
+        assert_eq!(f.image(), two);
+        assert_eq!(counts(&f).1, 0);
+        assert!(!f.app.world().resource::<ProjectionMode>().live_projection);
+        f.settle();
+        assert_eq!(counts(&f).0, n.0 + 1);
+    }
+}
+
+#[test]
+fn shared_masks_actual_held_direct_pending_apply_and_unmasked_target_refuse_channel_changes() {
+    use pentimento_ipc::UvLayerPaintTarget as Target;
+    let mut f = mask_fixture();
+    let before = f.layers();
+    let n = counts(&f);
+    f.command(PaintCommand::SetBrushColor {
+        color: [0., 0., 0., 1.],
+    });
+    f.batch(vec![movement(f.window, 500.), button(f.window, true)]);
+    f.uv(UvLayerCommand::PaintTarget {
+        layer_id: 0,
+        target: Target::Color,
+    });
+    assert_eq!(f.layers(), before);
+    f.command(PaintCommand::CancelStroke);
+    f.batch(vec![button(f.window, false)]);
+    f.settle();
+    assert_eq!(f.layers(), before);
+    assert_eq!(counts(&f), n);
+    f.command(PaintCommand::SetTarget {
+        target: PaintTarget::Canvas,
+    });
+    f.command(PaintCommand::SetBrushColor {
+        color: [0., 0., 0., 1.],
+    });
+    f.gesture();
+    f.settle();
+    crate::render::dispatch_ui_commands(
+        f.app.world_mut(),
+        [
+            UiToBevy::PaintCommand(PaintCommand::ProjectToScene),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::PaintTarget {
+                    layer_id: 0,
+                    target: Target::Color,
+                },
+            }),
+        ],
+    );
+    assert_eq!(f.layers(), before);
+    f.settle();
+    let applied = f.layers();
+    assert_eq!(
+        applied.layers[0].meta.paint_target,
+        painting::uv_layers::UvPaintTarget::Mask
+    );
+    assert_ne!(applied.layers[0].mask, before.layers[0].mask);
+    assert_eq!(applied.layers[0].pixels, before.layers[0].pixels);
+    f.uv(UvLayerCommand::Create {
+        name: "No mask".into(),
+    });
+    let clean = f.layers();
+    let id = clean.active_layer;
+    f.uv(UvLayerCommand::PaintTarget {
+        layer_id: id,
+        target: Target::Mask,
+    });
+    assert_eq!(f.layers(), clean);
+}
+
+#[test]
+fn shared_masks_actual_invalid_v3_open_keeps_document_images_history_source_and_files() {
+    let mut f = mask_fixture();
+    f.command(PaintCommand::SetBrushColor {
+        color: [0., 0., 0., 1.],
+    });
+    f.gesture();
+    f.settle();
+    let path = f.path.join("mask-good.json");
+    assert!(f.save(&path));
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let baseline = f.layers();
+    let image = f.image();
+    let source = f.source();
+    let n = counts(&f);
+    let good_bytes = std::fs::read(&path).unwrap();
+    for kind in [
+        "count",
+        "range",
+        "disabled-target",
+        "absent",
+        "policy",
+        "unknown-target",
+    ] {
+        let mut invalid = saved.clone();
+        let uv = invalid["objects"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|o| o["uv_layers"].is_object())
+            .unwrap()
+            .get_mut("uv_layers")
+            .unwrap();
+        match kind {
+            "count" => {
+                uv["layers"][0]["mask"] = serde_json::json!([1.]);
+            }
+            "range" => {
+                uv["layers"][0]["mask"][0] = serde_json::json!(-0.1);
+            }
+            "disabled-target" => {
+                uv["layers"][0]["meta"]["mask_enabled"] = serde_json::json!(false);
+            }
+            "absent" => {
+                uv["layers"][0].as_object_mut().unwrap().remove("mask");
+            }
+            "policy" => {
+                uv["compositor"] = serde_json::json!(painting::uv_layers::UV_BLEND_COMPOSITOR);
+            }
+            _ => {
+                uv["layers"][0]["meta"]["paint_target"] = serde_json::json!("Alpha");
+            }
+        }
+        let bad = f.path.join(format!("mask-bad-{kind}.json"));
+        let bytes = serde_json::to_vec(&invalid).unwrap();
+        std::fs::write(&bad, &bytes).unwrap();
+        assert!(!f.open(&bad), "{kind}");
+        assert_eq!(f.layers(), baseline);
+        assert_eq!(f.image(), image);
+        assert_eq!(f.source(), source);
+        assert_eq!(counts(&f), n);
+        assert_eq!(std::fs::read(&bad).unwrap(), bytes);
+        assert_eq!(std::fs::read(&path).unwrap(), good_bytes);
+    }
+}
+
+#[test]
+fn shared_masks_actual_external_display_conflict_keeps_foreign_pixels_and_refuses_history() {
+    let mut f = mask_fixture();
+    f.command(PaintCommand::SetBrushColor {
+        color: [0., 0., 0., 1.],
+    });
+    f.gesture();
+    f.settle();
+    let before = f.layers();
+    let handle = f
+        .app
+        .world()
+        .get::<MeshPaintTexture>(f.a)
+        .unwrap()
+        .image_handle
+        .clone();
+    let foreign = {
+        let mut images = f.app.world_mut().resource_mut::<Assets<Image>>();
+        let data = images.get_mut(&handle).unwrap().data.as_mut().unwrap();
+        data[0] ^= 127;
+        data.clone()
+    };
+    f.settle();
+    f.uv(UvLayerCommand::Undo);
+    assert_eq!(f.layers(), before);
+    assert!(
+        f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .history_conflicted(12)
+    );
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(&handle)
+            .unwrap()
+            .data
+            .as_ref()
+            .unwrap(),
+        &foreign
+    );
+    assert!(!f.save(&f.path.join("mask-conflicted.json")));
+}
+
+#[test]
+fn shared_masks_actual_mixed_receiver_history_cap_and_global_redo_invalidation() {
+    let mut f = mask_fixture();
+    for i in 0..80 {
+        f.uv(UvLayerCommand::MaskEnabled {
+            layer_id: 0,
+            enabled: i % 2 == 0,
+        });
+    }
+    f.uv(UvLayerCommand::SelectReceiver { mesh_id: 44 });
+    f.uv(UvLayerCommand::Enable);
+    f.uv(UvLayerCommand::AddMask { layer_id: 0 });
+    for i in 0..80 {
+        f.uv(UvLayerCommand::MaskEnabled {
+            layer_id: 0,
+            enabled: i % 2 == 0,
+        });
+    }
+    let r = f.app.world().resource::<MeshPaintingResource>();
+    assert_eq!(r.undo_count(12) + r.undo_count(44), 128);
+    assert!(r.evicted_history_strokes() > 0);
+    assert!(r.history_bytes() <= r.history_limit_bytes());
+    f.uv(UvLayerCommand::Undo);
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .redo_count(44),
+        1
+    );
+    f.uv(UvLayerCommand::SelectReceiver { mesh_id: 12 });
+    f.uv(UvLayerCommand::PaintTarget {
+        layer_id: 0,
+        target: pentimento_ipc::UvLayerPaintTarget::Color,
+    });
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .redo_count(44),
+        1
+    );
+    f.uv(UvLayerCommand::MaskEnabled {
+        layer_id: 0,
+        enabled: true,
+    });
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .redo_count(44),
+        0
+    );
+}
+
+#[test]
+fn shared_masks_actual_untouched_scalar_bits_and_disabled_mask_survive_owned_reopen() {
+    let mut f = mask_fixture();
+    let path = f.path.join("mask-bits.json");
+    assert!(f.save(&path));
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let uv = saved["objects"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|o| o["uv_layers"].is_object())
+        .unwrap()
+        .get_mut("uv_layers")
+        .unwrap();
+    let exact = [-0., f32::from_bits(1), f32::from_bits(0x3eaaaaab)];
+    for (i, m) in exact.iter().enumerate() {
+        uv["layers"][0]["mask"][i] = serde_json::to_value(m).unwrap();
+    }
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    assert!(f.open(&path));
+    f.settle();
+    let baseline = f.layers();
+    let raw_color = baseline.layers[0].pixels.clone();
+    for (i, m) in exact.iter().enumerate() {
+        assert_eq!(
+            baseline.layers[0].mask.as_ref().unwrap()[i].to_bits(),
+            m.to_bits()
+        );
+    }
+    f.batch(vec![
+        key(f.window, KeyCode::ShiftLeft, true),
+        key(f.window, KeyCode::Tab, true),
+    ]);
+    f.batch(vec![
+        key(f.window, KeyCode::Tab, false),
+        key(f.window, KeyCode::ShiftLeft, false),
+    ]);
+    f.direct();
+    f.command(PaintCommand::SetBrushColor {
+        color: [0.17, 0.17, 0.17, 1.],
+    });
+    f.gesture();
+    f.settle();
+    let painted = f.layers();
+    assert_ne!(painted.layers[0].mask, baseline.layers[0].mask);
+    for (i, m) in exact.iter().enumerate() {
+        assert_eq!(
+            painted.layers[0].mask.as_ref().unwrap()[i].to_bits(),
+            m.to_bits()
+        );
+    }
+    assert!(painting::uv_layers::same_uv_pixels(
+        &painted.layers[0].pixels,
+        &raw_color
+    ));
+    f.uv(UvLayerCommand::Undo);
+    assert!(painting::uv_layers::same_mask_pixels(
+        f.layers().layers[0].mask.as_ref().unwrap(),
+        baseline.layers[0].mask.as_ref().unwrap()
+    ));
+    f.uv(UvLayerCommand::Redo);
+    f.uv(UvLayerCommand::MaskEnabled {
+        layer_id: 0,
+        enabled: false,
+    });
+    let disabled = f.layers();
+    let image = f.image();
+    let disabled_path = f.path.join("mask-disabled.json");
+    assert!(f.save(&disabled_path));
+    assert!(f.open(&disabled_path));
+    f.settle();
+    let reopened = f.layers();
+    assert_eq!(
+        reopened.layers[0].meta.paint_target,
+        painting::uv_layers::UvPaintTarget::Color
+    );
+    assert!(!reopened.layers[0].meta.mask_enabled);
+    assert!(painting::uv_layers::same_mask_pixels(
+        reopened.layers[0].mask.as_ref().unwrap(),
+        disabled.layers[0].mask.as_ref().unwrap()
+    ));
+    assert!(painting::uv_layers::same_uv_pixels(
+        &reopened.layers[0].pixels,
+        &raw_color
+    ));
+    assert_eq!(f.image(), image);
+    assert_eq!(counts(&f), (0, 0));
+}

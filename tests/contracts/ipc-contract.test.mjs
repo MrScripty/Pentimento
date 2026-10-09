@@ -262,3 +262,13 @@ test('native keyboard samples preserve physical keys, native text, and additive 
    const state=samples.bevy_to_ui.find(m=>m.type==='PaintBrushStateChanged').data.target.uv_layers;
    assert.equal(state.projection_preview,false);
  });
+
+ test('mask protocol exposes canonical state and explicit channel operations',()=>{
+   const samples=loadSamples();
+   const state=samples.bevy_to_ui.find(m=>m.type==='PaintBrushStateChanged').data.target.uv_layers.layers[0];
+   assert.equal(state.has_mask,true);assert.equal(state.mask_enabled,true);assert.equal(state.paint_target,'Mask');
+   const commands=samples.ui_to_bevy.filter(m=>m.type==='PaintCommand' && m.data?.UvLayers).map(m=>m.data.UvLayers.command);
+   assert.ok(commands.some(c=>c.AddMask?.layer_id===3));assert.ok(commands.some(c=>c.RemoveMask?.layer_id===3));
+   assert.ok(commands.some(c=>c.MaskEnabled?.layer_id===3 && c.MaskEnabled.enabled===false));
+   assert.ok(commands.some(c=>c.PaintTarget?.layer_id===3 && c.PaintTarget.target==='Mask'));
+ });

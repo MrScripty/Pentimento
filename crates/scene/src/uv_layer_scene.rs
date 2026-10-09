@@ -3,11 +3,12 @@
 use crate::{MeshPaintTexture, MeshPaintingResource, PaintMode, PaintableMesh};
 use bevy::prelude::*;
 use painting::uv_layers::{
-    UV_COMPOSITOR, UvBlendMode, UvLayerDocument, UvLayerMeta, UvLayerOp, UvLayers, UvLayersDocument,
+    UV_COMPOSITOR, UvBlendMode, UvLayerDocument, UvLayerMeta, UvLayerOp, UvLayers,
+    UvLayersDocument, UvPaintTarget,
 };
 use pentimento_ipc::{
     PaintCommand, UvLayerBlendMode as WireBlend, UvLayerCommand as Command, UvLayerInfo,
-    UvLayerState, UvReceiverInfo,
+    UvLayerPaintTarget as WireTarget, UvLayerState, UvReceiverInfo,
 };
 
 pub(crate) fn composite_display(
@@ -158,12 +159,8 @@ pub(crate) fn validate_display(
     }
     if !r.has_active_stroke()
         && !r.preview_owned(p.mesh_id)
-        && r.get_uv_surface(p.mesh_id).is_none_or(|s| {
-            !painting::uv_layers::same_uv_pixels(
-                s.atlas.surface().pixels(),
-                &layers.active().pixels,
-            )
-        })
+        && r.get_uv_surface(p.mesh_id)
+            .is_none_or(|s| !layers.active().working_matches(s.atlas.surface().pixels()))
     {
         return Err("Selected UV pixels changed outside their layer owner".into());
     }
@@ -256,6 +253,12 @@ pub(crate) fn state(world: &mut World) -> UvLayerState {
                         UvBlendMode::Multiply => WireBlend::Multiply,
                         UvBlendMode::Screen => WireBlend::Screen,
                         UvBlendMode::Overlay => WireBlend::Overlay,
+                    },
+                    has_mask: l.mask.is_some(),
+                    mask_enabled: l.meta.mask_enabled,
+                    paint_target: match l.meta.paint_target {
+                        UvPaintTarget::Color => WireTarget::Color,
+                        UvPaintTarget::Mask => WireTarget::Mask,
                     },
                     is_active: l.meta.id == l_document_active(r, id),
                 })
@@ -421,7 +424,10 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
                 visible: true,
                 opacity: 1.,
                 locked: false,
+                mask_enabled: false,
+                paint_target: UvPaintTarget::Color,
             },
+            mask: None,
             pixels,
         });
     }
@@ -433,7 +439,10 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
             visible: true,
             opacity: 1.,
             locked: false,
+            mask_enabled: false,
+            paint_target: UvPaintTarget::Color,
         },
+        mask: None,
         pixels: raw,
     });
     for layer in &data {
@@ -656,6 +665,18 @@ pub(crate) fn command(world: &mut World, command: &PaintCommand) -> bool {
             };
         }
         let op = match command {
+            Command::AddMask { layer_id } => UvLayerOp::AddMask(*layer_id),
+            Command::RemoveMask { layer_id } => UvLayerOp::RemoveMask(*layer_id),
+            Command::MaskEnabled { layer_id, enabled } => {
+                UvLayerOp::MaskEnabled(*layer_id, *enabled)
+            }
+            Command::PaintTarget { layer_id, target } => UvLayerOp::PaintTarget(
+                *layer_id,
+                match target {
+                    WireTarget::Color => UvPaintTarget::Color,
+                    WireTarget::Mask => UvPaintTarget::Mask,
+                },
+            ),
             Command::Create { name } => UvLayerOp::Create(name.clone()),
             Command::Duplicate { layer_id } => UvLayerOp::Duplicate(*layer_id),
             Command::Delete { layer_id } => UvLayerOp::Delete(*layer_id),
@@ -702,8 +723,7 @@ pub(crate) fn install(
         .iter()
         .find(|l| l.meta.id == document.active_layer)
         .unwrap()
-        .pixels
-        .clone();
+        .working_pixels();
     let original = world
         .resource::<Assets<StandardMaterial>>()
         .get(&material)

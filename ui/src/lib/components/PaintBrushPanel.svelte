@@ -8,6 +8,8 @@
     interface Props { target: PaintTargetState; settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; canUndo: boolean; canRedo: boolean; sourceVisible: boolean; liveProjection: boolean; saved: SavedBrushPresetsState; sampling: PaintColorSamplingState }
     let { target, settings, presets, canUndo, canRedo, sourceVisible, liveProjection, saved, sampling }: Props = $props();
     let direct = $derived(target.mode === 'DirectUv');
+    let maskTarget = $derived(target.uv_layers?.layers.find(l=>l.is_active)?.paint_target === 'Mask');
+    let maskGray = $derived(settings.color[0] === settings.color[1] && settings.color[0] === settings.color[2] ? settings.color[0] : 0.2126*settings.color[0]+0.7152*settings.color[1]+0.0722*settings.color[2]);
     let brushLocked = $derived(direct && target.active);
     let sampleSource = $state<ColorSampleSource>('VisibleLayers');
     $effect(() => { if (sampling.active) { sampleSource = sampling.source; return; } sampleSource = sampling.source; });
@@ -56,7 +58,13 @@
     <BrushControl disabled={brushLocked} id="paint-opacity" label="Opacity" value={Math.round(settings.opacity * 100)} min={0} max={100} unit="%" onchange={(opacity) => bridge.paintCommand({ SetBrushOpacity: { opacity: opacity / 100 } })} />
     <BrushControl disabled={brushLocked} id="paint-hardness" label="Hardness / falloff" value={Math.round(settings.hardness * 100)} min={0} max={100} unit="%" onchange={(hardness) => bridge.paintCommand({ SetBrushHardness: { hardness: hardness / 100 } })} />
     <BrushControl disabled={brushLocked} id="paint-spacing" label="Dab spacing" value={Math.round(settings.spacing * 100)} min={1} max={100} unit="% of diameter" onchange={(spacing) => bridge.paintCommand({ SetBrushSpacing: { spacing: spacing / 100 } })} />
+    {#if direct && maskTarget}
+        <BrushControl disabled={brushLocked || settings.blend_mode === 'Erase'} id="paint-mask-gray" label="Mask grayscale" value={Number((maskGray*100).toFixed(3))} min={0} max={100} step={0.1} unit="%" onchange={gray=>bridge.paintCommand({SetBrushColor:{color:[gray/100,gray/100,gray/100,1]}})} />
+        <p class="hint">0% hides layer color; 100% reveals it. Opacity and pressure control coverage. Eraser reveals white in the mask.</p>
+    {:else}
     <label class="color-row" for="paint-color">Color <input id="paint-color" type="color" value={toHex(settings.color)} disabled={brushLocked || settings.blend_mode === 'Erase'} oninput={colorChange} /><input class="hex-color" aria-label="Hex color" type="text" maxlength="7" pattern="#[0-9A-Fa-f]{6}" value={toHex(settings.color)} disabled={brushLocked || settings.blend_mode === 'Erase'} onchange={colorChange} /></label>
+        {#if maskTarget}<p class="hint">Apply and live preview use the source canvas’s linear brightness as mask coverage. White reveals; black hides. Transparent source pixels leave the mask unchanged.</p>{/if}
+    {/if}
     <div class="divider"></div>
     <button class="wide" type="button" disabled={!canUndo} title={direct ? (target.uv_layers?.enabled ? 'Undo the last UV edit (Ctrl+Z)' : 'Undo the last DirectUV stroke (Ctrl+Z)') : 'Undo the active canvas stroke (Ctrl+Z)'} onclick={() => bridge.paintCommand('Undo')}>{direct ? (target.uv_layers?.enabled ? 'Undo UV edit' : 'Undo surface stroke') : 'Undo canvas stroke'}</button>
     <button class="wide" type="button" disabled={!canRedo} title={direct ? (target.uv_layers?.enabled ? 'Redo the last UV edit (Ctrl+Shift+Z)' : 'Redo the last DirectUV stroke (Ctrl+Shift+Z)') : 'Redo the active canvas stroke (Ctrl+Shift+Z)'} onclick={() => bridge.paintCommand('Redo')}>{direct ? (target.uv_layers?.enabled ? 'Redo UV edit' : 'Redo surface stroke') : 'Redo canvas stroke'}</button>
@@ -68,7 +76,7 @@
     <label class="check-row"><input type="checkbox" checked={liveProjection} disabled={target.active || (target.uv_layers?.enabled && target.uv_layers.conflicted)} onchange={(e) => {const enabled=e.currentTarget.checked;if(target.uv_layers?.enabled)e.currentTarget.checked=liveProjection;bridge.paintCommand({ SetLiveProjection: { enabled } });}} /> {target.uv_layers?.enabled ? 'Live UV preview' : 'Live projection'}</label>
     <label class="check-row"><input type="checkbox" checked={sourceVisible} onchange={(e) => bridge.paintCommand({ SetSourceVisible: { visible: e.currentTarget.checked } })} /> Show source canvas</label>
     <button class="wide primary" type="button" disabled={target.active} onclick={() => bridge.paintCommand('ProjectToScene')}>{target.uv_layers?.enabled ? 'Apply canvas to active UV layer' : 'Apply canvas to UV surfaces'}</button>
-    {#if target.uv_layers?.enabled}<button class="wide" type="button" disabled={!target.uv_layers.projection_preview} onclick={()=>bridge.paintCommand('CancelUvProjection')}>Cancel UV preview</button><p class="hint">Live preview follows Canvas strokes and source Undo/Redo on the pinned UV layer. Apply commits once and pauses live. Cancel preview retains Canvas edits and UV history. Apply or Cancel before DirectUV, layer edits or Save.</p>{:else}<p class="hint">Paint on the source canvas, then apply to visible UV-mapped meshes. Live projection also follows stroke Undo and Redo. Hide the source to inspect or paint the projected surface; the canvas remains the brush target.</p>{/if}
+    {#if target.uv_layers?.enabled}<button class="wide" type="button" disabled={!target.uv_layers.projection_preview} onclick={()=>bridge.paintCommand('CancelUvProjection')}>Cancel UV preview</button><p class="hint">Live preview follows Canvas strokes and source Undo/Redo on the pinned UV layer and Color / Mask target. Apply commits once and pauses live. Cancel preview retains Canvas edits and UV history. Apply or Cancel before DirectUV, layer edits or Save.</p>{:else}<p class="hint">Paint on the source canvas, then apply to visible UV-mapped meshes. Live projection also follows stroke Undo and Redo. Hide the source to inspect or paint the projected surface; the canvas remains the brush target.</p>{/if}
     {/if}
     {#if target.uv_layers}<UvLayerPanel layerState={target.uv_layers} history={target} />{/if}
     <div class="divider"></div>

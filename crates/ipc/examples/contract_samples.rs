@@ -141,6 +141,9 @@ fn main() {
                             id: 3,
                             name: "Detail".into(),
                             blend_mode: pentimento_ipc::UvLayerBlendMode::Overlay,
+                            has_mask: true,
+                            mask_enabled: true,
+                            paint_target: pentimento_ipc::UvLayerPaintTarget::Mask,
                             visible: true,
                             opacity: 0.5,
                             locked: false,
@@ -203,6 +206,24 @@ fn main() {
                 command: UvLayerCommand::BlendMode {
                     layer_id: 3,
                     mode: pentimento_ipc::UvLayerBlendMode::Multiply,
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::AddMask { layer_id: 3 },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::RemoveMask { layer_id: 3 },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::MaskEnabled {
+                    layer_id: 3,
+                    enabled: false,
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::PaintTarget {
+                    layer_id: 3,
+                    target: pentimento_ipc::UvLayerPaintTarget::Mask,
                 },
             }),
             UiToBevy::PaintCommand(PaintCommand::UvLayers {

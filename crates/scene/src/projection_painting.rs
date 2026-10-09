@@ -485,6 +485,7 @@ struct UvApplyAdmission {
     source: Entity,
     receiver: Entity,
     layer: u32,
+    paint_target: painting::uv_layers::UvPaintTarget,
     mesh_tick: bevy::ecs::change_detection::Tick,
     context: ProjectionContext,
     geometry: Vec<MeshStamp>,
@@ -633,6 +634,13 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         .ok_or("Enable UV layers")?
         .document()
         .active_layer;
+    let paint_target = world
+        .resource::<crate::MeshPaintingResource>()
+        .uv_layers(id)
+        .unwrap()
+        .active()
+        .meta
+        .paint_target;
     let source = world
         .resource::<ActiveCanvasPlane>()
         .entity
@@ -697,6 +705,7 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         if pin.source != source
             || pin.receiver != receiver
             || pin.layer != layer
+            || pin.paint_target != paint_target
             || pin.mesh_tick != mesh_tick
             || pin.context != context
             || pin.geometry != geometry
@@ -712,6 +721,7 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         if previous.source != source
             || previous.receiver != receiver
             || previous.layer != layer
+            || previous.paint_target != paint_target
             || previous.mesh_tick != mesh_tick
             || previous.context != context
             || previous.geometry != geometry
@@ -741,6 +751,7 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         source,
         receiver,
         layer,
+        paint_target,
         mesh_tick,
         context,
         geometry,
@@ -1597,6 +1608,15 @@ fn live_projection_system(
                             .unwrap()
                             .document()
                             .active_layer
+                    || a.paint_target
+                        != shared
+                            .as_ref()
+                            .unwrap()
+                            .uv_layers(id)
+                            .unwrap()
+                            .active()
+                            .meta
+                            .paint_target
                     || a.mesh_tick != meshes.last_changed()
                     || a.context != context
                     || a.geometry != geometry

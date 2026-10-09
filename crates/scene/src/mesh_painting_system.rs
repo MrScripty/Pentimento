@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use painting::BrushPreset;
 use painting::mesh_surface::{MeshPtexSurface, MeshUvSurface};
 use painting::types::{BlendMode, MeshHit, MeshStorageMode};
+use painting::uv_layers::UvPaintTarget;
 
 use crate::mesh_paint_mode::{MeshPaintEvent, PaintableMesh};
 use crate::mesh_uv_history::{UvEntry, UvHistory, same_pixels};
@@ -18,6 +19,7 @@ use crate::mesh_uv_history::{UvEntry, UvHistory, same_pixels};
 struct UvProjectionPreview {
     mesh_id: u32,
     layer: u32,
+    target: UvPaintTarget,
     pixels: Vec<[f32; 4]>,
 }
 
@@ -28,6 +30,7 @@ struct ActiveMeshStroke {
     dimensions: (u32, u32),
     before_bound: bool,
     layer: Option<u32>,
+    target: UvPaintTarget,
     brush: painting::brush::BrushEngine,
     last_face: Option<u32>,
     color: [f32; 4],
@@ -248,7 +251,7 @@ impl MeshPaintingResource {
             .atlas
             .surface_mut()
             .pixels_mut()
-            .copy_from_slice(&layers.active().pixels);
+            .copy_from_slice(&layers.active().working_pixels());
         let (w, h) = surface.dimensions();
         surface.atlas.mark_region_dirty(0, 0, w, h);
     }
@@ -260,7 +263,11 @@ impl MeshPaintingResource {
         if self.has_active_stroke() || self.has_projection_preview() || self.blocked.contains(&id) {
             return Err("Finish the UV transaction or reopen its conflicted owner".into());
         }
-        let authoring = !matches!(&op, painting::uv_layers::UvLayerOp::Select(_));
+        let authoring = !matches!(
+            &op,
+            painting::uv_layers::UvLayerOp::Select(_)
+                | painting::uv_layers::UvLayerOp::PaintTarget(_, _)
+        );
         let changed = self
             .uv_layers
             .get_mut(&id)
@@ -309,10 +316,11 @@ impl MeshPaintingResource {
     pub(crate) fn preview_valid(&self) -> bool {
         self.projection_preview.as_ref().is_some_and(|p| {
             !self.blocked.contains(&p.mesh_id)
-                && self
-                    .uv_layers
-                    .get(&p.mesh_id)
-                    .is_some_and(|l| l.document().active_layer == p.layer && l.paintable().is_ok())
+                && self.uv_layers.get(&p.mesh_id).is_some_and(|l| {
+                    l.document().active_layer == p.layer
+                        && l.active().meta.paint_target == p.target
+                        && l.paintable().is_ok()
+                })
                 && self.uv_surfaces.get(&p.mesh_id).is_some_and(|s| {
                     painting::uv_layers::same_uv_pixels(s.atlas.surface().pixels(), &p.pixels)
                 })
@@ -330,7 +338,8 @@ impl MeshPaintingResource {
         self.projection_preview = Some(UvProjectionPreview {
             mesh_id: id,
             layer: layers.document().active_layer,
-            pixels: layers.active().pixels.clone(),
+            target: layers.active().meta.paint_target,
+            pixels: layers.active().working_pixels(),
         });
         Ok(())
     }
@@ -350,14 +359,7 @@ impl MeshPaintingResource {
         if preview.mesh_id != id {
             return Err("UV preview receiver changed".into());
         }
-        for ((out, src), dst) in preview
-            .pixels
-            .iter_mut()
-            .zip(source)
-            .zip(&layers.active().pixels)
-        {
-            *out = painting::uv_layers::uv_over(*src, *dst);
-        }
+        preview.pixels = layers.projected_workspace(source)?;
         let surface = self.uv_surfaces.get_mut(&id).unwrap();
         surface
             .atlas
@@ -386,7 +388,7 @@ impl MeshPaintingResource {
             .uv_layers
             .get_mut(&p.mesh_id)
             .unwrap()
-            .paint(p.layer, p.pixels);
+            .paint_on(p.layer, p.target, p.pixels);
         if result.as_ref().is_ok_and(|v| *v) {
             self.discard_uv_redo();
             self.trim_shared_history(p.mesh_id);
@@ -570,6 +572,16 @@ impl MeshPaintingResource {
             }
             MeshStorageMode::Ptex { .. } => (None, (0, 0)),
         };
+        let target = self
+            .uv_layers
+            .get(&paintable.mesh_id)
+            .map_or(UvPaintTarget::Color, |l| l.active().meta.paint_target);
+        let color = if target == UvPaintTarget::Mask {
+            let gray = painting::uv_layers::uv_luminance(self.brush_color);
+            [gray, gray, gray, self.brush_color[3]]
+        } else {
+            self.brush_color
+        };
         self.active_stroke = Some(ActiveMeshStroke {
             last_face: None,
             entity,
@@ -582,7 +594,8 @@ impl MeshPaintingResource {
                 .get(&paintable.mesh_id)
                 .map(|l| l.document().active_layer),
             brush: painting::brush::BrushEngine::new(self.brush_preset.clone()),
-            color: self.brush_color,
+            target,
+            color,
             blend: self.blend_mode,
         });
         true
@@ -625,11 +638,11 @@ impl MeshPaintingResource {
             return;
         }
         if let Some(layer_id) = active.layer {
-            let result = self
-                .uv_layers
-                .get_mut(&active.mesh_id)
-                .unwrap()
-                .paint(layer_id, surface.atlas.surface().pixels().to_vec());
+            let result = self.uv_layers.get_mut(&active.mesh_id).unwrap().paint_on(
+                layer_id,
+                active.target,
+                surface.atlas.surface().pixels().to_vec(),
+            );
             if result.is_err() {
                 surface
                     .atlas
@@ -644,6 +657,7 @@ impl MeshPaintingResource {
                 self.discard_uv_redo();
             }
             self.trim_shared_history(active.mesh_id);
+            self.sync_active_layer(active.mesh_id);
             return;
         }
         let after = surface.atlas.surface().pixels().to_vec();
