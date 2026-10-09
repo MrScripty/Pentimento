@@ -6,6 +6,7 @@ This directory contains the Electron shell that hosts the Svelte UI and Bevy WAS
 ## Contents
 | File/Folder | Description |
 |-------------|-------------|
+| `check-install.cjs` | Non-downloading installed runtime/version readiness check. |
 | `dist/` | Compiled Electron main/preload output consumed at runtime. |
 | `main.ts` | Electron main-process window bootstrap compiled to `dist/main.js`. |
 | `preload.ts` | Secure preload bridge that exposes the Electron runtime marker. |
@@ -21,7 +22,10 @@ Pentimento needs a Chromium host for the WASM frontend path without letting shel
 - The shell has to load `dist/ui/index.html` for packaged flows.
 
 ## Decision
-Use `main.ts` and `preload.ts` as the only source files and compile them to `dist/` before launch.
+Use `main.ts` and `preload.ts` as runtime sources and compile them to `dist/` before launch.
+The bootstrap checker is a separate CommonJS tooling script, not a duplicate
+runtime entrypoint. Electron 44 requires external Node.js 22.12+; the launcher
+explicitly runs the installed `install-electron` command during bootstrap.
 
 ## Alternatives Rejected
 - Keeping hand-edited `.js` and `.ts` copies side by side: rejected because runtime drift already occurred.
@@ -35,7 +39,7 @@ Use `main.ts` and `preload.ts` as the only source files and compile them to `dis
 - Packaging or code signing is added to the repo.
 
 ## Dependencies
-**Internal:** `crates/app-wasm`, `ui/dist` output, `launcher.sh`  
+**Internal:** `crates/app-wasm`, root `dist/ui` output, `launcher.sh`  
 **External:** Electron, TypeScript
 
 ## Related ADRs

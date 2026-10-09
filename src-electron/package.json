@@ -9,6 +9,6 @@
     "start": "npm run build && electron ."
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^44.5.1"
   }
 }
