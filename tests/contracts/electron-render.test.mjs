@@ -38,3 +38,21 @@ test('pending scene evidence keeps statistics and reasons without accepting a bl
     assert.ok(report.pending.includes('missing canonical red object pixels'));
     assert.throws(() => measureScene(Buffer.alloc(3), 100, 100));
 });
+
+
+test('software rendering opt-in is confined to CI production qualification', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const read = name => readFile(new URL('../../' + name, import.meta.url), 'utf8');
+    const workflow = await read('.github/workflows/electron-runtime.yml');
+    const production = workflow.split('\n').find(line => line.includes('supervise.py production'));
+    const environment = workflow.split('\n').find(line => line.includes('supervise.py environment'));
+    for (const flag of ['--use-gl=angle', '--use-angle=swiftshader-webgl', '--enable-unsafe-swiftshader']) {
+        assert.ok(production.includes(flag));
+        assert.ok(!environment.includes(flag));
+        assert.ok(!(await read('src-electron/main.ts')).includes(flag));
+        assert.ok(!(await read('launcher.sh')).includes(flag));
+    }
+    for (const flag of ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security']) {
+        assert.ok(!production.includes(flag));
+    }
+});

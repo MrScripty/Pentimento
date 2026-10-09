@@ -13,6 +13,8 @@ const phase = preflight ? 'environment' : 'production';
 const evidence = path.join(root, 'electron-runtime-evidence');
 fs.mkdirSync(evidence, { recursive: true });
 const result = { phase, electron: process.versions.electron, console: [], errors: [], network: [], success: false, willQuit: false };
+result.graphics = { useGL: app.commandLine.getSwitchValue('use-gl'), useANGLE: app.commandLine.getSwitchValue('use-angle'),
+    unsafeSwiftShader: app.commandLine.hasSwitch('enable-unsafe-swiftshader') };
 const save = () => fs.writeFileSync(path.join(evidence, `${phase}.json`), JSON.stringify(result, null, 2) + '\n');
 async function prepareShutdown() {
     const channel = process.env.PENTIMENTO_SHUTDOWN_CHANNEL;
@@ -188,6 +190,7 @@ if (preflight) {
     });
     // Prove the canonical production layout is self-contained once installed.
     app.whenReady().then(() => {
+        result.graphics.featureStatus = app.getGPUFeatureStatus();
         productionObserver = createSandboxObserver({ ipcMain, session: session.defaultSession,
             expectedUrl: pathToFileURL(expectedDocument).href, onFailure: fail });
         session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
