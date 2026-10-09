@@ -7,7 +7,7 @@ use bevy::asset::{AssetEventSystems, RenderAssetUsages};
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::ecs::system::SystemParam;
 use bevy::mesh::{Indices, VertexAttributeValues};
-use bevy::pbr::UvChannel;
+use bevy::mesh::UvChannel;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     Extent3d, Face, PrimitiveTopology, TextureDimension, TextureFormat,
@@ -1865,7 +1865,7 @@ fn upload_projection_textures(
                     ]);
                 }
             }
-            if let Some(image) = images.get_mut(&texture)
+            if let Some(mut image) = images.get_mut(&texture)
                 && let Some(bytes) = &mut image.data
             {
                 let row_bytes = (region.size.0 * 4) as usize;
@@ -1889,7 +1889,7 @@ fn upload_projection_textures(
             // Replacing Image data can replace its GPU texture view. A material
             // added directly to Assets has to rebuild its texture bind group,
             // otherwise the renderer may keep sampling the previous GPU image.
-            if let Some(material) = materials.get_mut(&*painted) {
+            if let Some(mut material) = materials.get_mut(&*painted) {
                 material.base_color_texture = Some(texture.clone());
             }
             handle.0 = painted.clone();

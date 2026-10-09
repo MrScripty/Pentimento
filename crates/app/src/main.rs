@@ -70,10 +70,10 @@ fn main() {
                     ..default()
                 })
                 .set(BevyRenderPlugin {
-                    render_creation: RenderCreation::Automatic(WgpuSettings {
+                    render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
                         features: WgpuFeatures::POLYGON_MODE_LINE,
                         ..default()
-                    }),
+                    })),
                     ..default()
                 }),
         );

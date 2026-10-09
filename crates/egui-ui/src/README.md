@@ -9,7 +9,14 @@ experimental Bevy-integrated frontend path.
 |-------------|-------------|
 | `lib.rs` | Public facade for the egui UI crate and its exported state types. |
 | `state.rs` | Framework-neutral egui-facing snapshot/runtime state and inbound message application. |
-| `app.rs` | Immediate-mode egui layout for the current frontend spike. |
+| `app.rs` | Toolbar, panels, popup/modal capture geometry and startup state requests. |
+| `paint_panel.rs` | Acknowledged Canvas/DirectUV brushes, sampling, projection and Canvas layers. |
+| `sculpt_panel.rs` | Supported sculpt tools, controls and actual stroke Undo/Redo commands. |
+| `uv_layer_panel.rs` | Receiver stacks, linear blend modes, Color/Mask targeting and shared UV history. |
+| `presets.rs` | Backend-owned saved paint/sculpt catalogs. |
+| `project_dialog.rs` | Local Save/Open/New workflows, frozen owner confirmation and pending receipts. |
+| `controls.rs` | Shared typed command and widget helpers. |
+| `tests.rs` | Actual headless egui frames and pointer/key interaction regressions. |
 
 ## Problem
 Pentimento needs an egui implementation path that can mirror the existing native
@@ -66,10 +73,60 @@ let _commands = show_root_ui(&egui::Context::default(), &mut snapshot, &mut runt
 ## API Consumer Contract
 - Consumers provide the current backend snapshot and a mutable runtime state.
 - The root UI returns typed `UiToBevy` commands for the host to dispatch.
-- The host owns command timing, retry behavior, and any scene/resource side
-  effects.
+- The host owns command timing and scene/resource side effects. It applies backend
+  receipts before drawing and dispatches returned commands through the shared owner.
+- Brush settings, selection, history availability, projection status and document
+  ownership come from acknowledged snapshots. Editing controls send commands;
+  they do not optimistically change accepted settings.
+- `runtime.ui_regions()` supplies real panel/window/menu/picker rectangles in egui
+  points. The native adapter converts by `pixels_per_point / window_scale_factor`
+  and publishes `LayoutUpdate`; an open document modal includes the whole viewport.
+- New freezes the exact decimal generation on confirmation creation. Pending
+  operations suppress duplicate submission and cancellation; only a newer matching
+  operation receipt closes the modal. The shared native reducer retains exactly
+  three latest operation receipts so a different operation cannot hide completion.
+- Rename drafts reconcile with changed accepted names and reset on submission.
+  Draft maps retain live layer identities and clear on document/receiver replacement.
+- UV history counters describe retained/pending payload, not total process memory.
+  Backend notices expose expiration, admission refusal and external-edit conflicts.
+  Sculpt Undo/Redo restores committed strokes through the existing validated owner;
+  these controls do not add nondestructive sculpt deformation layers.
+
+## Validation
+`cargo test -p pentimento-egui-ui --lib` exercises real egui widgets without the
+Bevy renderer. Production native-controller tests in
+`crates/app/src/input/direct_uv_native_tests.rs` also drive egui widgets through
+shared commands into CPU paint assets and input arbitration. Those headless checks
+are separate from native GUI, GPU and stylus qualification. Dependency migration
+and the egui version coupling remain a separate workstream.
 
 ## Structured Producer Contract
 - Produces in-process `UiToBevy` command values only.
 - Command shapes and enum variants must remain aligned with `crates/ipc`.
 - No persisted artifact or stable external serialization is produced here.
+
+## Native Input Contract
+The egui producer publishes admitted keys with chronological modifiers, focus and
+cursor origins. One Scene dispatcher orders Canvas, DirectUV and Sculpt pointer
+segments with Undo/Redo, Escape, Ctrl+Tab, Shift+Tab and F/Enter brush adjustments.
+Each segment settles through the existing owner before the next intent. Scheduled
+and explicit queue processing share one cached reader; other message observers
+retain their messages. Mode changes resolve against accepted state.
+
+Empty or stale document frames do not fall back to raw keys. Frame reconciliation
+samples held Canvas gestures once and touches only verified native strokes.
+Public Canvas and DirectUV strokes retain their owner; native mode changes refuse
+until those strokes finish. Public Sculpt events retain their existing Exit
+semantics. A public replacement or termination detaches stale native input ownership,
+including reused IDs, without cancelling the public stroke. Open discards old
+input and starts fresh history. Existing validated geometry restoration, memory
+limits and external-edit conflict handling remain authoritative. Other frontends
+retain their existing routes.
+
+Production CPU regressions exercise real egui fields, mouse/touch capture, held
+modifiers, repeated chords, AltGraph, focus return, stroke/history order, rejected
+targets, public lifecycle ownership and New/Open replacement. Fresh Scene/App/Core/
+UI compilation against compatible official Bevy 0.18.1 and egui 0.33.3 libraries
+qualified 154 controller tests, 135 Scene tests and 14 widget tests; two manual tests
+remain ignored. Native GUI, GPU, physical stylus and Bevy 0.20 renderer/UI migration
+remain separate qualifications.

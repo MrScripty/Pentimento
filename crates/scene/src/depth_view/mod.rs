@@ -8,25 +8,21 @@
 use bevy::asset::embedded_asset;
 use bevy::camera::primitives::Aabb;
 use bevy::core_pipeline::FullscreenShader;
-use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::core_pipeline::{Core3dSystems, schedule::Core3d, tonemapping::tonemapping};
 use bevy::prelude::*;
 use bevy::render::{
-    Render, RenderApp, RenderSystems,
+    GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
     extract_component::{ExtractComponent, ExtractComponentPlugin},
     extract_resource::{ExtractResource, ExtractResourcePlugin},
-    render_graph::{
-        NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
-    },
     render_resource::{
-        BindGroupEntries, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
-        BindingType, Buffer, BufferBindingType, BufferInitDescriptor, BufferUsages,
-        CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, MultisampleState,
-        Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-        RenderPipelineDescriptor, ShaderStages, ShaderType, TextureFormat, TextureSampleType,
-        TextureViewDimension,
+        BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, Buffer,
+        BufferBindingType, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
+        ColorTargetState, ColorWrites, FragmentState, MultisampleState, Operations, PipelineCache,
+        PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
+        ShaderStages, ShaderType, TextureFormat, TextureSampleType, TextureViewDimension,
     },
-    renderer::{RenderContext, RenderDevice},
+    renderer::{RenderContext, RenderDevice, ViewQuery},
     view::ViewTarget,
 };
 
@@ -38,17 +34,19 @@ use crate::lighting::SunLight;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Render graph label for the depth view pass.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+/// Render schedule set for the depth view pass.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub struct DepthViewLabel;
 
-/// Marker component added to the main camera so the depth view node can
+/// Marker component added to the main camera so the depth view pass can
 /// filter to the correct view.  Extracted to the render world automatically.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct DepthViewCamera;
 
 /// Settings for depth view mode.  Extracted to the render world each frame.
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct DepthViewSettings {
     pub enabled: bool,
     /// Cached previous shadow state so we can restore on toggle-off.
@@ -71,6 +69,7 @@ impl Default for DepthViewSettings {
 /// Kept separate from `DepthViewSettings` to avoid triggering `is_changed()`
 /// on the settings resource every frame.
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct DepthViewBounds {
     /// Camera near clipping plane (for depth linearization).
     pub near_plane: f32,
@@ -98,7 +97,7 @@ pub struct DepthViewPlugin;
 
 impl Plugin for DepthViewPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/depth_view.wgsl");
+        embedded_asset!(app, "shaders/depth_view.wesl");
 
         app.init_resource::<DepthViewSettings>();
         app.init_resource::<DepthViewBounds>();
@@ -122,30 +121,31 @@ impl Plugin for DepthViewPlugin {
             return;
         };
 
-        render_app.add_render_graph_node::<ViewNodeRunner<DepthViewNode>>(Core3d, DepthViewLabel);
+        // Prepared textures and buffers belong to the previous device on recovery.
+        render_app.add_systems(RenderStartup, clear_prepare_depth_view_resources);
 
-        // Insert between Tonemapping and EndMainPassPostProcessing.
-        // EdgeDetectionPlugin (if present) will add its own edge
-        // DepthViewLabel → EdgeDetectionLabel so outlines render on top.
-        render_app.add_render_graph_edges(
+        // Post-process the current view after tonemapping; outlines follow depth.
+        render_app.add_systems(
             Core3d,
-            (
-                Node3d::Tonemapping,
-                DepthViewLabel,
-                Node3d::EndMainPassPostProcessing,
-            ),
+            render_depth_view
+                .in_set(Core3dSystems::PostProcess)
+                .in_set(DepthViewLabel)
+                .after(tonemapping),
         );
 
-        render_app.add_systems(Render, prepare_depth_view.in_set(RenderSystems::Prepare));
+        render_app.add_systems(
+            Render,
+            prepare_depth_view.in_set(RenderSystems::PrepareBindGroups),
+        );
 
-        info!("DepthViewPlugin: render graph node registered");
+        info!("DepthViewPlugin: per-view render system registered");
     }
 
     fn finish(&self, app: &mut App) {
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
-        render_app.init_resource::<DepthViewPipeline>();
+        render_app.init_gpu_resource::<DepthViewPipeline>();
         info!("DepthViewPlugin: pipeline initialized");
     }
 }
@@ -190,12 +190,12 @@ fn toggle_expensive_features(
     if settings.enabled {
         // Capture current state before disabling.
         for light in sun_query.iter() {
-            settings.shadows_were_enabled = light.shadows_enabled;
+            settings.shadows_were_enabled = light.shadow_maps_enabled;
         }
         settings.ao_was_enabled = ao_resource.settings.enabled;
 
         for mut light in sun_query.iter_mut() {
-            light.shadows_enabled = false;
+            light.shadow_maps_enabled = false;
         }
         if ao_resource.settings.enabled {
             ao_resource.settings.enabled = false;
@@ -204,7 +204,7 @@ fn toggle_expensive_features(
     } else {
         // Restore previous state.
         for mut light in sun_query.iter_mut() {
-            light.shadows_enabled = settings.shadows_were_enabled;
+            light.shadow_maps_enabled = settings.shadows_were_enabled;
         }
         if settings.ao_was_enabled {
             ao_resource.settings.enabled = true;
@@ -309,73 +309,53 @@ pub struct DepthViewUniform {
     pub _padding0: f32,
 }
 
-#[derive(Default)]
-pub struct DepthViewNode;
-
-impl ViewNode for DepthViewNode {
-    type ViewQuery = (&'static ViewTarget, Option<&'static DepthViewCamera>);
-
-    fn run<'w>(
-        &self,
-        _graph: &mut RenderGraphContext,
-        render_context: &mut RenderContext<'w>,
-        (view_target, depth_view_camera): bevy::ecs::query::QueryItem<'w, 'w, Self::ViewQuery>,
-        world: &'w World,
-    ) -> Result<(), NodeRunError> {
-        // Only run on the main camera.
-        if depth_view_camera.is_none() {
-            return Ok(());
-        }
-
-        let Some(settings) = world.get_resource::<DepthViewSettings>() else {
-            return Ok(());
-        };
-        if !settings.enabled {
-            return Ok(());
-        }
-
-        let Some(prepared) = world.get_resource::<DepthViewPrepared>() else {
-            return Ok(());
-        };
-        let Some(pipeline_res) = world.get_resource::<DepthViewPipeline>() else {
-            return Ok(());
-        };
-        let pipeline_cache = world.resource::<PipelineCache>();
-        let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline_res.pipeline_id)
-        else {
-            return Ok(());
-        };
-
-        let post_process = view_target.post_process_write();
-
-        let bind_group = render_context.render_device().create_bind_group(
-            "depth_view_bind_group",
-            &pipeline_res.layout,
-            &BindGroupEntries::sequential((
-                prepared.uniform_buffer.as_entire_binding(),
-                &prepared.depth_texture_view,
-            )),
-        );
-
-        let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("depth_view_pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: post_process.destination,
-                resolve_target: None,
-                ops: Operations::default(),
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        render_pass.set_render_pipeline(render_pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-
-        Ok(())
+fn render_depth_view(
+    view: ViewQuery<&ViewTarget, With<DepthViewCamera>>,
+    settings: Option<Res<DepthViewSettings>>,
+    prepared: Option<Res<DepthViewPrepared>>,
+    pipeline: Option<Res<DepthViewPipeline>>,
+    pipeline_cache: Res<PipelineCache>,
+    render_device: Res<RenderDevice>,
+    mut render_context: RenderContext,
+) {
+    let (Some(settings), Some(prepared), Some(pipeline)) = (settings, prepared, pipeline) else {
+        return;
+    };
+    if !settings.enabled {
+        return;
     }
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
+        return;
+    };
+
+    let post_process = view.into_inner().post_process_write();
+    let bind_group = render_device.create_bind_group(
+        "depth_view_bind_group",
+        &pipeline_cache.get_bind_group_layout(&pipeline.layout),
+        &BindGroupEntries::sequential((
+            prepared.uniform_buffer.as_entire_binding(),
+            &prepared.depth_texture_view,
+        )),
+    );
+    let mut render_pass =
+        render_context
+            .command_encoder()
+            .begin_render_pass(&RenderPassDescriptor {
+                label: Some("depth_view_pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: post_process.destination,
+                    resolve_target: None,
+                    ops: Operations::default(),
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+    render_pass.set_pipeline(render_pipeline);
+    render_pass.set_bind_group(0, &bind_group, &[]);
+    render_pass.draw(0..3, 0..1);
 }
 
 // ---------------------------------------------------------------------------
@@ -384,14 +364,12 @@ impl ViewNode for DepthViewNode {
 
 #[derive(Resource)]
 pub struct DepthViewPipeline {
-    pub layout: BindGroupLayout,
+    pub layout: BindGroupLayoutDescriptor,
     pub pipeline_id: CachedRenderPipelineId,
 }
 
 impl FromWorld for DepthViewPipeline {
     fn from_world(world: &mut World) -> Self {
-        let render_device = world.resource::<RenderDevice>();
-
         // @binding(0) — uniform buffer
         // @binding(1) — depth texture (texture_depth_multisampled_2d when MSAA active)
         let entries_vec = vec![
@@ -420,11 +398,8 @@ impl FromWorld for DepthViewPipeline {
         let layout_descriptor =
             BindGroupLayoutDescriptor::new("depth_view_bind_group_layout", &entries_vec);
 
-        let layout =
-            render_device.create_bind_group_layout("depth_view_bind_group_layout", &entries_vec);
-
         let shader =
-            world.load_asset("embedded://pentimento_scene/depth_view/shaders/depth_view.wgsl");
+            world.load_asset("embedded://pentimento_scene/depth_view/shaders/depth_view.wesl");
 
         let fullscreen_shader = world.resource::<FullscreenShader>();
         let vertex_state = fullscreen_shader.to_vertex_state();
@@ -434,9 +409,10 @@ impl FromWorld for DepthViewPipeline {
                 .resource_mut::<PipelineCache>()
                 .queue_render_pipeline(RenderPipelineDescriptor {
                     label: Some("depth_view_pipeline".into()),
-                    layout: vec![layout_descriptor],
+                    layout: vec![layout_descriptor.clone()],
                     vertex: vertex_state,
                     fragment: Some(FragmentState {
+                        constants: vec![],
                         shader,
                         shader_defs: vec![],
                         entry_point: Some("fragment".into()),
@@ -449,12 +425,12 @@ impl FromWorld for DepthViewPipeline {
                     primitive: PrimitiveState::default(),
                     depth_stencil: None,
                     multisample: MultisampleState::default(),
-                    push_constant_ranges: vec![],
+                    immediate_size: 0,
                     zero_initialize_workgroup_memory: false,
                 });
 
         Self {
-            layout,
+            layout: layout_descriptor,
             pipeline_id,
         }
     }
@@ -464,7 +440,7 @@ impl FromWorld for DepthViewPipeline {
 // Prepare system (render world)
 // ---------------------------------------------------------------------------
 
-/// Prepared per-frame data consumed by `DepthViewNode`.
+/// Prepared per-frame data consumed by `render_depth_view`.
 #[derive(Resource)]
 pub struct DepthViewPrepared {
     pub uniform_buffer: Buffer,
@@ -495,11 +471,10 @@ fn prepare_depth_view(
         return;
     };
 
-    let Some(depth) = prepass_textures.depth.as_ref() else {
+    let Some(depth_view) = prepass_textures.depth_only_view() else {
         return;
     };
-
-    let depth_texture_view = depth.texture.default_view.clone();
+    let depth_texture_view = depth_view.clone();
 
     let uniform = DepthViewUniform {
         near_plane: bounds.near_plane,
@@ -521,4 +496,8 @@ fn prepare_depth_view(
         uniform_buffer,
         depth_texture_view,
     });
+}
+
+fn clear_prepare_depth_view_resources(mut commands: Commands) {
+    commands.remove_resource::<DepthViewPrepared>();
 }

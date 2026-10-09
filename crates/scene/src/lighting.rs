@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use pentimento_ipc::LightingSettings;
 
 #[cfg(feature = "atmosphere")]
-use bevy::pbr::ScatteringMedium;
+use bevy::light::atmosphere::ScatteringMedium;
 #[cfg(feature = "atmosphere")]
 use bevy::prelude::light_consts::lux;
 
@@ -235,7 +235,7 @@ fn setup_lighting(
         DirectionalLight {
             illuminance: lux::RAW_SUNLIGHT,
             color: Color::WHITE, // Atmosphere handles color tinting
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_rotation(Quat::from_rotation_x(sun_angle)),
@@ -268,7 +268,7 @@ fn setup_lighting(mut commands: Commands, lighting: Res<SceneLighting>) {
                 settings.sun_color[1],
                 settings.sun_color[2],
             ),
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         // looking_to takes the forward direction; sun shines in -direction

@@ -24,7 +24,7 @@ pub struct EntityIdMaterial {
 
 impl Material for EntityIdMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://pentimento_scene/outline/shaders/entity_id.wgsl".into()
+        "embedded://pentimento_scene/outline/shaders/entity_id.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {

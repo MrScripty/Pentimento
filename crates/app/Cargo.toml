@@ -20,6 +20,8 @@ pollster = { version = "0.4", optional = true }
 
 bevy = { workspace = true, features = [
     "3d",
+    "bevy_ui",
+    "bevy_ui_render",
     "wayland",
     "x11",
     "ktx2",

@@ -496,9 +496,10 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
         targets.detach_shared(entity, (w, h));
     }
     let mut material = world.resource_mut::<Assets<StandardMaterial>>();
-    let m = material.get_mut(&current_handle).unwrap();
+    let mut m = material.get_mut(&current_handle).unwrap();
     m.base_color = t.original_color_source;
     m.base_color_texture = t.original_texture.clone();
+    drop(m);
     drop(material);
     world.get_mut::<MeshPaintTexture>(entity).unwrap().has_paint = false;
     if let Some(mut p) = world.get_mut::<crate::ProjectionTarget>(entity) {
@@ -764,7 +765,7 @@ pub(crate) fn install(
         .data = Some(display.clone());
     if bound {
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        let m = materials.get_mut(&material).unwrap();
+        let mut m = materials.get_mut(&material).unwrap();
         m.base_color = Color::WHITE;
         m.base_color_texture = Some(image);
     }

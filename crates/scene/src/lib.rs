@@ -10,9 +10,11 @@ use pentimento_ipc::BevyToUi;
 #[cfg(feature = "atmosphere")]
 use bevy::camera::Exposure;
 #[cfg(feature = "atmosphere")]
+use bevy::light::Atmosphere;
+#[cfg(feature = "atmosphere")]
 use bevy::light::AtmosphereEnvironmentMapLight;
 #[cfg(feature = "atmosphere")]
-use bevy::pbr::{Atmosphere, AtmosphereSettings};
+use bevy::pbr::AtmosphereSettings;
 
 mod add_object;
 mod ambient_occlusion;
@@ -77,7 +79,8 @@ pub use depth_view::{
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use frontend_input::{
-    FrontendInputBlockState, FrontendScenePointerInput, FrontendUiLayout, touch_pressure,
+    FrontendInputBlockState, FrontendSceneKeyboardInput, FrontendScenePointerInput,
+    FrontendUiLayout, NativeSceneHistoryOwner, touch_pressure,
 };
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]
@@ -323,10 +326,12 @@ fn setup_atmosphere(
     camera_query: Query<Entity, With<MainCamera>>,
     atmosphere_state: Res<lighting::AtmosphereState>,
 ) {
+    // Atmosphere is a world-space planet in Bevy 0.20. Keep its surface at Y=0.
+    let atmosphere = Atmosphere::earth(atmosphere_state.medium.clone());
+    let planet_center = -Vec3::Y * atmosphere.inner_radius;
+    commands.spawn((atmosphere, GlobalTransform::from_translation(planet_center)));
     for camera_entity in camera_query.iter() {
         commands.entity(camera_entity).insert((
-            // Earth-like atmosphere with the scattering medium from lighting setup
-            Atmosphere::earthlike(atmosphere_state.medium.clone()),
             AtmosphereSettings::default(),
             // Enable atmosphere-driven IBL (image-based lighting / reflections)
             AtmosphereEnvironmentMapLight::default(),

@@ -856,7 +856,7 @@ pub(crate) fn sync_mesh_paint_owners(world: &mut World) {
 }
 
 /// Set up paint textures for newly added PaintableMesh entities.
-fn setup_mesh_paint_textures(
+pub(crate) fn setup_mesh_paint_textures(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -979,7 +979,13 @@ fn setup_mesh_paint_textures(
 }
 
 /// Process mesh paint events and apply dabs to surfaces.
-pub(crate) fn process_mesh_paint_events(
+pub(crate) fn process_mesh_paint_events(world: &mut World) {
+    world
+        .run_system_cached(apply_mesh_paint_events)
+        .expect("DirectUV owner resources available");
+}
+
+fn apply_mesh_paint_events(
     mut mesh_paint_events: MessageReader<MeshPaintEvent>,
     mut painting_res: ResMut<MeshPaintingResource>,
     mesh_query: Query<(&PaintableMesh, &MeshPaintTexture)>,
@@ -1249,7 +1255,7 @@ fn apply_uv_input(r: &mut MeshPaintingResource, id: u32, hit: &MeshHit, pressure
 }
 
 /// Upload dirty tiles to GPU for UV surfaces, compositing paint over original texture.
-fn upload_mesh_dirty_tiles(
+pub(crate) fn upload_mesh_dirty_tiles(
     mut painting_res: ResMut<MeshPaintingResource>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1301,14 +1307,14 @@ fn upload_mesh_dirty_tiles(
                         },
                         |pixels| pixels.iter().any(|p| p[3] > 0.),
                     );
-                    if let Some(image) = images.get_mut(&paint_texture.image_handle) {
+                    if let Some(mut image) = images.get_mut(&paint_texture.image_handle) {
                         painting_res
                             .shared_display_bytes
                             .insert(paintable.mesh_id, data.clone());
                         image.data = Some(data);
                     }
                     if let Some(material_ref) = material_handle {
-                        if let Some(material) = materials.get_mut(&material_ref.0) {
+                        if let Some(mut material) = materials.get_mut(&material_ref.0) {
                             if bound {
                                 material.base_color_texture =
                                     Some(paint_texture.image_handle.clone());

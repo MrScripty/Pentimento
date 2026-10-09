@@ -2,7 +2,7 @@
 use bevy::{
     asset::RenderAssetUsages,
     mesh::{Indices, VertexAttributeValues},
-    pbr::UvChannel,
+    mesh::UvChannel,
     prelude::*,
     render::render_resource::{Extent3d, Face, PrimitiveTopology, TextureDimension, TextureFormat},
 };

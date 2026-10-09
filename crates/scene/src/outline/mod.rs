@@ -31,6 +31,7 @@ pub use outline_settings::OutlineSettings;
 /// Marker component for cameras that need outline post-processing
 /// This is extracted to the render world and used by EdgeDetectionNode's ViewQuery
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct OutlineCamera;
 
 use crate::camera::MainCamera;
@@ -40,6 +41,7 @@ use id_material::entity_to_color;
 
 /// Resource holding the render targets for outline rendering
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct OutlineRenderTargets {
     /// Texture where entity IDs are rendered
     pub id_buffer: Handle<Image>,
@@ -55,7 +57,7 @@ pub struct OutlinePlugin;
 impl Plugin for OutlinePlugin {
     fn build(&self, app: &mut App) {
         // Embed the entity ID shader
-        embedded_asset!(app, "shaders/entity_id.wgsl");
+        embedded_asset!(app, "shaders/entity_id.wesl");
 
         app.init_resource::<OutlineSettings>()
             .add_plugins(MaterialPlugin::<EntityIdMaterial>::default())

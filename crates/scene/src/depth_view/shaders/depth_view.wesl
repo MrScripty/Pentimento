@@ -2,7 +2,7 @@
 // Reads the depth buffer and outputs linearized greyscale
 // Gradient is auto-normalized to the scene's depth range
 
-#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
+import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 
 struct DepthViewUniform {
     near_plane: f32,

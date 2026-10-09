@@ -16,6 +16,20 @@ use crate::config::PentimentoConfig;
 #[cfg(feature = "cef")]
 use crate::render::FrontendResource;
 
+/// Native forwarding publishes only admitted shortcuts for this frame.
+/// Keep actions rather than a key count: focus return can admit a suffix after
+/// earlier rejected keys, and modifier releases may follow a UI focus click.
+#[derive(Resource, Default)]
+pub(super) struct EguiPaintHistory {
+    pub(super) actions: Vec<PaintHistoryAction>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum PaintHistoryAction {
+    Undo,
+    Redo,
+}
+
 /// Handle Ctrl+Shift+I to open DevTools (CEF mode only)
 #[cfg(feature = "cef")]
 pub fn handle_devtools_hotkey(
@@ -48,6 +62,9 @@ pub fn handle_paint_undo_hotkey(
     mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     mut window_events: MessageReader<bevy::window::WindowEvent>,
     input_blocks: Res<FrontendInputBlockState>,
+    config: Option<Res<crate::config::PentimentoConfig>>,
+    admitted: Option<Res<EguiPaintHistory>>,
+    scene_history_owner: Option<Res<pentimento_scene::NativeSceneHistoryOwner>>,
     mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     active_canvas: Res<pentimento_scene::ActiveCanvasPlane>,
@@ -68,23 +85,44 @@ pub fn handle_paint_undo_hotkey(
         return;
     }
 
-    // A full shortcut can arrive within one frame. Restore modifiers at each
-    // native event instead of using the final (possibly released) state.
-    let translated = super::keyboard::translate_keyboard_events(
-        &events,
-        &key_input,
-        &mut ButtonInput::default(),
-        false,
-    );
-    for (native, event) in events.iter().zip(translated) {
-        if native.key_code != KeyCode::KeyZ
-            || !event.pressed
-            || native.repeat
-            || !event.modifiers.ctrl
-        {
-            continue;
-        }
-        let shift = event.modifiers.shift;
+    if config
+        .as_ref()
+        .is_some_and(|c| c.composite_mode == crate::config::CompositeMode::Egui)
+        && scene_history_owner.is_some()
+    {
+        return;
+    }
+    let actions = if config
+        .as_ref()
+        .is_some_and(|c| c.composite_mode == crate::config::CompositeMode::Egui)
+    {
+        admitted.map_or_else(Vec::new, |input| input.actions.clone())
+    } else {
+        // Other frontends retain their full-batch chronological modifier route.
+        let translated = super::keyboard::translate_keyboard_events(
+            &events,
+            &key_input,
+            &mut ButtonInput::default(),
+            false,
+        );
+        events
+            .iter()
+            .zip(translated)
+            .filter_map(|(native, event)| {
+                (native.key_code == KeyCode::KeyZ
+                    && event.pressed
+                    && !native.repeat
+                    && event.modifiers.ctrl)
+                    .then_some(if event.modifiers.shift {
+                        PaintHistoryAction::Redo
+                    } else {
+                        PaintHistoryAction::Undo
+                    })
+            })
+            .collect()
+    };
+    for action in actions {
+        let shift = matches!(action, PaintHistoryAction::Redo);
         if let Some(ref mut painting) = painting_res {
             if let Some(canvas) = active_canvas
                 .entity

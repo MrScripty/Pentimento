@@ -252,7 +252,7 @@ pub(crate) fn install(
     drop(resource);
     if document.display_bound {
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        let material = materials.get_mut(&material).unwrap();
+        let mut material = materials.get_mut(&material).unwrap();
         material.base_color = Color::WHITE;
         material.base_color_texture = Some(image_handle.clone());
     }

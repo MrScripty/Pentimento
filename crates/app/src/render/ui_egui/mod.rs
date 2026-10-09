@@ -84,7 +84,9 @@ fn drain_pending_egui_commands(world: &mut World) {
 fn sync_egui_input_blocks(
     egui_wants_input: Res<EguiWantsInput>,
     mut input_blocks: ResMut<FrontendInputBlockState>,
+    frontend: Res<EguiFrontendState>,
 ) {
-    input_blocks.block_pointer = egui_wants_input.wants_any_pointer_input();
-    input_blocks.block_keyboard = egui_wants_input.wants_any_keyboard_input();
+    let modal = frontend.runtime.modal_open();
+    input_blocks.block_pointer = modal || egui_wants_input.wants_any_pointer_input();
+    input_blocks.block_keyboard = modal || egui_wants_input.wants_any_keyboard_input();
 }

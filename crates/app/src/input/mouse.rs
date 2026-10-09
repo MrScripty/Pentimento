@@ -69,9 +69,14 @@ pub struct NativeInputState {
     ui_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     scene_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     alt_graph: ButtonInput<KeyCode>,
+    egui_keys: ButtonInput<KeyCode>,
+    egui_alt_graph: ButtonInput<KeyCode>,
+    egui_active: bool,
     layout_reported: bool,
     focus_suspended: bool,
+    focus_known: bool,
     scene_cursor: Option<Vec2>,
+    cursor_seen: bool,
     touch: Option<NativeTouch>,
 }
 
@@ -115,10 +120,17 @@ pub fn forward_native_input(
     mut layout: ResMut<pentimento_scene::FrontendUiLayout>,
     mut input_blocks: ResMut<pentimento_scene::FrontendInputBlockState>,
     mut scene_input: ResMut<pentimento_scene::FrontendScenePointerInput>,
+    mut paint_history: ResMut<super::hotkeys::EguiPaintHistory>,
+    mut scene_keyboard: ResMut<pentimento_scene::FrontendSceneKeyboardInput>,
     mut state: Local<NativeInputState>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     owner: Option<Res<pentimento_scene::ProjectOwner>>,
 ) {
+    paint_history.actions.clear();
+    scene_keyboard.begin_frame(
+        owner.as_ref().map_or(0, |p| p.generation()),
+        config.composite_mode == crate::config::CompositeMode::Egui,
+    );
     let Ok((window_id, window)) = windows.single() else {
         events.clear();
         scene_input.clear();
@@ -133,6 +145,7 @@ pub fn forward_native_input(
             .map(|t| t.last.id)
             .or(state.suppressed_touch);
         let suspended = state.focus_suspended;
+        let focus_known = state.focus_known;
         state.pending_move = None;
         release_on_focus_loss(&mut state, &mut mouse, &mut backend);
         *state = NativeInputState {
@@ -141,6 +154,7 @@ pub fn forward_native_input(
             buttons,
             suppressed_touch: touch,
             focus_suspended: suspended,
+            focus_known,
             ..default()
         };
         scene_input.clear();
@@ -154,9 +168,11 @@ pub fn forward_native_input(
             | crate::config::CompositeMode::Overlay
             | crate::config::CompositeMode::Cef
     );
-    let arbitrates = svelte_browser
+    let region_frontend =
+        svelte_browser || config.composite_mode == crate::config::CompositeMode::Egui;
+    let arbitrates = region_frontend
         || (config.composite_mode == crate::config::CompositeMode::Dioxus && layout.received);
-    let scene_ready = !svelte_browser || layout.received;
+    let scene_ready = !region_frontend || layout.received;
     let mut scene_events = Vec::new();
     let direct = paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv;
     if !direct {
@@ -172,6 +188,7 @@ pub fn forward_native_input(
         if let Some(position) = window.cursor_position().filter(|p| p.is_finite()) {
             let (x, y) =
                 backend.scale_coordinates(position.x, position.y, window.resolution.scale_factor());
+            state.cursor_seen = true;
             mouse.window_x = position.x;
             mouse.window_y = position.y;
             mouse.webview_x = x;
@@ -190,14 +207,45 @@ pub fn forward_native_input(
             _ => None,
         })
         .collect();
+    let egui = config.composite_mode == crate::config::CompositeMode::Egui;
     let translated = super::keyboard::translate_keyboard_events(
         &keys,
         &key_input,
         &mut state.alt_graph,
         focus_lost,
     );
+    let focus_transition = batch.iter().find_map(|event| match event {
+        WindowEvent::WindowFocused(event) if event.window == window_id => Some(event.focused),
+        _ => None,
+    });
+    if !state.focus_known {
+        state.focus_suspended = !focus_transition.map_or(window.focused, |focused| !focused);
+        state.focus_known = true;
+    } else if focus_transition.is_none() && !window.focused {
+        state.focus_suspended = true;
+    }
+    if egui != state.egui_active {
+        state.egui_keys.reset_all();
+        state.egui_alt_graph.reset_all();
+        state.egui_active = egui;
+    }
+    if egui && !focus_lost && !state.focus_suspended {
+        state.egui_keys = super::keyboard::keyboard_state_before_batch(&keys, &key_input);
+    }
     let mut translated = translated.into_iter();
+    scene_keyboard.set_pointer_origin(
+        !state.focus_suspended,
+        state
+            .scene_buttons
+            .pressed(bevy::input::mouse::MouseButton::Left),
+        state.scene_cursor,
+    );
     let mut ui_owned_in_frame = state.ui_buttons.get_pressed().next().is_some();
+    // egui focus is normally acknowledged in PostUpdate. A fresh UI press owns
+    // subsequent keys in this native batch, while valid earlier keys keep order.
+    let mut egui_keyboard_owned = input_blocks.blocks_keyboard()
+        || ui_owned_in_frame
+        || state.touch.as_ref().is_some_and(|touch| touch.ui);
     if layout.received && !state.layout_reported {
         debug!(
             "Native input layout received: {} regions",
@@ -216,6 +264,7 @@ pub fn forward_native_input(
                     event.position.y,
                     window.resolution.scale_factor(),
                 );
+                state.cursor_seen = true;
                 mouse.window_x = event.position.x;
                 mouse.window_y = event.position.y;
                 mouse.webview_x = x;
@@ -268,6 +317,7 @@ pub fn forward_native_input(
                     }
                     if !state.buttons.pressed(event.button) && over_ui(&layout, position) {
                         state.ui_buttons.press(event.button);
+                        egui_keyboard_owned |= egui;
                     }
                     state.buttons.press(event.button);
                     ui_owned_in_frame |= state.ui_buttons.get_pressed().next().is_some();
@@ -323,6 +373,7 @@ pub fn forward_native_input(
                     window.resolution.scale_factor(),
                     &mut scene_events,
                 );
+                egui_keyboard_owned |= egui && state.touch.as_ref().is_some_and(|touch| touch.ui);
             }
             WindowEvent::MouseWheel(event) if event.window == window_id => {
                 flush_move(&mut state, &mut mouse, &mut backend);
@@ -335,15 +386,54 @@ pub fn forward_native_input(
                 });
             }
             WindowEvent::KeyboardInput(event) if event.window == window_id => {
-                if !input_blocks.blocks_keyboard() && !state.focus_suspended {
+                let admitted = !input_blocks.blocks_keyboard()
+                    && !(egui && egui_keyboard_owned)
+                    && (!egui || scene_ready)
+                    && !state.focus_suspended;
+                if admitted {
                     scene_events.push(WindowEvent::KeyboardInput(event.clone()));
                 }
                 flush_move(&mut state, &mut mouse, &mut backend);
-                if let Some(event) = translated.next() {
-                    backend.send_keyboard_event(event);
+                let keyboard_event = if egui {
+                    let NativeInputState {
+                        egui_keys,
+                        egui_alt_graph,
+                        ..
+                    } = &mut *state;
+                    let translated =
+                        super::keyboard::translate_keyboard_event(event, egui_keys, egui_alt_graph);
+                    (!state.focus_suspended).then_some(translated)
+                } else {
+                    translated.next()
+                };
+                if let Some(translated) = keyboard_event {
+                    if egui && admitted && !event.repeat {
+                        scene_keyboard.push(
+                            translated.clone(),
+                            state
+                                .cursor_seen
+                                .then_some(Vec2::new(mouse.window_x, mouse.window_y)),
+                        );
+                    }
+                    if egui
+                        && admitted
+                        && event.key_code == KeyCode::KeyZ
+                        && translated.pressed
+                        && !event.repeat
+                        && translated.modifiers.ctrl
+                    {
+                        paint_history.actions.push(if translated.modifiers.shift {
+                            super::hotkeys::PaintHistoryAction::Redo
+                        } else {
+                            super::hotkeys::PaintHistoryAction::Undo
+                        });
+                    }
+                    backend.send_keyboard_event(translated);
                 }
             }
             WindowEvent::KeyboardFocusLost(_) => {
+                state.egui_keys.reset_all();
+                state.egui_alt_graph.reset_all();
                 close_scene_buttons(&mut state, window_id, &mut scene_events);
                 close_scene_touch(&mut state, true, &mut scene_events);
                 scene_events.push(WindowEvent::WindowFocused(bevy::window::WindowFocused {
@@ -353,6 +443,8 @@ pub fn forward_native_input(
                 release_on_focus_loss(&mut state, &mut mouse, &mut backend);
             }
             WindowEvent::WindowFocused(event) if event.window == window_id => {
+                state.egui_keys.reset_all();
+                state.egui_alt_graph.reset_all();
                 scene_events.push(WindowEvent::WindowFocused(event.clone()));
                 if event.focused {
                     flush_move(&mut state, &mut mouse, &mut backend);
@@ -368,8 +460,9 @@ pub fn forward_native_input(
     }
     layout.pointer_captured = state.ui_buttons.get_pressed().next().is_some()
         || state.touch.as_ref().is_some_and(|t| t.ui);
-    // egui owns its own flags. Browser startup blocks scene input until native
-    // hit-testing has rectangles; Dioxus/Tauri do not use the Svelte reporter.
+    // Region frontends block scene input until hit-testing has rectangles.
+    // egui also publishes real panel/modal geometry, so the first press and a
+    // stationary release cannot leak through a widget into a sculpt/paint stroke.
     if arbitrates {
         if !scene_ready
             || state.focus_suspended
@@ -381,7 +474,7 @@ pub fn forward_native_input(
             close_scene_touch(&mut state, suspended, &mut scene_events);
         }
         scene_input.publish(window_id, scene_events);
-        input_blocks.block_pointer = (svelte_browser && !layout.received)
+        input_blocks.block_pointer = (region_frontend && !layout.received)
             || focus_lost
             || state.focus_suspended
             || ui_owned_in_frame

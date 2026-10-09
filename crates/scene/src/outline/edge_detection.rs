@@ -1,31 +1,28 @@
 //! Edge detection post-process for Surface ID outline rendering
 //!
-//! This module implements a render graph node that reads the ID buffer
+//! This module implements a per-view render system that reads the ID buffer
 //! and composites orange outlines onto the scene where entity IDs differ.
 //! Uses the standard Bevy post-processing pattern with ViewTarget::post_process_write().
 
 use bevy::asset::embedded_asset;
 use bevy::core_pipeline::FullscreenShader;
-use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
+use bevy::core_pipeline::{Core3dSystems, schedule::Core3d};
 use bevy::prelude::*;
 use bevy::render::{
-    Render, RenderApp, RenderSystems,
+    GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
     extract_component::ExtractComponentPlugin,
     extract_resource::ExtractResourcePlugin,
     render_asset::RenderAssets,
-    render_graph::{
-        NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
-    },
     render_resource::{
-        BindGroupEntries, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
-        Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
-        ColorWrites, FragmentState, MultisampleState, Operations, PipelineCache, PrimitiveState,
+        BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
+        BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites,
+        FragmentState, MultisampleState, Operations, PipelineCache, PrimitiveState,
         RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
         SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType, TextureFormat,
         TextureSampleType,
         binding_types::{sampler, texture_2d, uniform_buffer},
     },
-    renderer::{RenderContext, RenderDevice},
+    renderer::{RenderContext, RenderDevice, ViewQuery},
     texture::GpuImage,
     view::ViewTarget,
 };
@@ -40,7 +37,7 @@ pub struct EdgeDetectionPlugin;
 impl Plugin for EdgeDetectionPlugin {
     fn build(&self, app: &mut App) {
         // Embed the shader
-        embedded_asset!(app, "shaders/edge_detection.wgsl");
+        embedded_asset!(app, "shaders/edge_detection.wesl");
 
         // Extract OutlineCamera component to render world
         app.add_plugins(ExtractComponentPlugin::<OutlineCamera>::default());
@@ -52,26 +49,21 @@ impl Plugin for EdgeDetectionPlugin {
             return;
         };
 
-        bevy::log::info!("EdgeDetectionPlugin: Setting up render graph node");
+        // Prepared textures and buffers belong to the previous device on recovery.
+        render_app.add_systems(RenderStartup, clear_prepare_edge_detection_resources);
 
-        // Use ViewNodeRunner with ViewQuery filtering to OutlineCamera
-        // This ensures proper per-view execution in Core3d subgraph (required for WASM/WebGL2)
-        render_app
-            .add_render_graph_node::<ViewNodeRunner<EdgeDetectionNode>>(Core3d, EdgeDetectionLabel);
-        // Run after DepthViewLabel (which itself runs after Tonemapping)
-        // so that outlines composite on top of the depth view when active.
-        render_app.add_render_graph_edges(
+        // Post-process the current view after tonemapping; outlines follow depth.
+        render_app.add_systems(
             Core3d,
-            (
-                crate::DepthViewLabel,
-                EdgeDetectionLabel,
-                Node3d::EndMainPassPostProcessing,
-            ),
+            render_edge_detection
+                .in_set(Core3dSystems::PostProcess)
+                .in_set(EdgeDetectionLabel)
+                .after(crate::DepthViewLabel),
         );
 
         render_app.add_systems(
             Render,
-            prepare_edge_detection.in_set(RenderSystems::Prepare),
+            prepare_edge_detection.in_set(RenderSystems::PrepareBindGroups),
         );
     }
 
@@ -81,13 +73,13 @@ impl Plugin for EdgeDetectionPlugin {
             return;
         };
 
-        render_app.init_resource::<EdgeDetectionPipeline>();
+        render_app.init_gpu_resource::<EdgeDetectionPipeline>();
         bevy::log::info!("EdgeDetectionPlugin: Pipeline initialized");
     }
 }
 
-/// Render graph label for edge detection
-#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+/// Render schedule set for edge detection
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub struct EdgeDetectionLabel;
 
 /// Uniform data for edge detection shader
@@ -99,94 +91,63 @@ pub struct EdgeDetectionUniform {
     pub _padding: f32,
 }
 
-/// Render graph node for edge detection
-/// Uses the standard Bevy post-processing pattern with ViewTarget
-#[derive(Default)]
-pub struct EdgeDetectionNode;
-
-impl ViewNode for EdgeDetectionNode {
-    /// Query ViewTarget + optional OutlineCamera to filter to main camera only
-    type ViewQuery = (&'static ViewTarget, Option<&'static OutlineCamera>);
-
-    fn run<'w>(
-        &self,
-        _graph: &mut RenderGraphContext,
-        render_context: &mut RenderContext<'w>,
-        (view_target, outline_camera): bevy::ecs::query::QueryItem<'w, 'w, Self::ViewQuery>,
-        world: &'w World,
-    ) -> Result<(), NodeRunError> {
-        // Skip cameras without OutlineCamera marker (like ID buffer camera)
-        if outline_camera.is_none() {
-            return Ok(());
-        }
-
-        let Some(settings) = world.get_resource::<OutlineSettings>() else {
-            return Ok(());
-        };
-
-        if !settings.enabled {
-            return Ok(());
-        }
-
-        let Some(prepared) = world.get_resource::<EdgeDetectionPrepared>() else {
-            return Ok(());
-        };
-
-        let Some(pipeline) = world.get_resource::<EdgeDetectionPipeline>() else {
-            return Ok(());
-        };
-        let pipeline_cache = world.resource::<PipelineCache>();
-
-        let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
-            return Ok(());
-        };
-
-        // Use ViewTarget's post_process_write() for proper ping-pong buffer handling
-        // This returns source (current scene) and destination (where we write)
-        let post_process = view_target.post_process_write();
-
-        // Create bind group with:
-        // - uniforms
-        // - id_buffer (for edge detection)
-        // - scene source texture (to composite onto)
-        let bind_group = render_context.render_device().create_bind_group(
-            "edge_detection_bind_group",
-            &pipeline.layout,
-            &BindGroupEntries::sequential((
-                prepared.uniform_buffer.as_entire_binding(),
-                &prepared.id_texture_view,
-                &pipeline.sampler,
-                post_process.source, // Scene texture to read from
-                &pipeline.sampler,   // Re-use sampler for scene
-            )),
-        );
-
-        // Render to ViewTarget's destination (composited scene + outlines)
-        let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("edge_detection_pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: post_process.destination, // Write to ViewTarget's destination
-                resolve_target: None,
-                ops: Operations::default(),
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        render_pass.set_render_pipeline(render_pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-
-        Ok(())
+/// Render the outline composite for the current main view.
+fn render_edge_detection(
+    view: ViewQuery<&ViewTarget, With<OutlineCamera>>,
+    settings: Option<Res<OutlineSettings>>,
+    prepared: Option<Res<EdgeDetectionPrepared>>,
+    pipeline: Option<Res<EdgeDetectionPipeline>>,
+    pipeline_cache: Res<PipelineCache>,
+    render_device: Res<RenderDevice>,
+    mut render_context: RenderContext,
+) {
+    let (Some(settings), Some(prepared), Some(pipeline)) = (settings, prepared, pipeline) else {
+        return;
+    };
+    if !settings.enabled {
+        return;
     }
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
+        return;
+    };
+
+    let post_process = view.into_inner().post_process_write();
+    let bind_group = render_device.create_bind_group(
+        "edge_detection_bind_group",
+        &pipeline_cache.get_bind_group_layout(&pipeline.layout),
+        &BindGroupEntries::sequential((
+            prepared.uniform_buffer.as_entire_binding(),
+            &prepared.id_texture_view,
+            &pipeline.sampler,
+            post_process.source,
+            &pipeline.sampler,
+        )),
+    );
+    let mut render_pass =
+        render_context
+            .command_encoder()
+            .begin_render_pass(&RenderPassDescriptor {
+                label: Some("edge_detection_pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: post_process.destination,
+                    resolve_target: None,
+                    ops: Operations::default(),
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+    render_pass.set_pipeline(render_pipeline);
+    render_pass.set_bind_group(0, &bind_group, &[]);
+    render_pass.draw(0..3, 0..1);
 }
 
 /// Pipeline for edge detection
 #[derive(Resource)]
 pub struct EdgeDetectionPipeline {
-    pub layout: BindGroupLayout,
+    pub layout: BindGroupLayoutDescriptor,
     pub sampler: Sampler,
     pub pipeline_id: CachedRenderPipelineId,
 }
@@ -214,14 +175,10 @@ impl FromWorld for EdgeDetectionPipeline {
             &layout_entries.to_vec(),
         );
 
-        // Create the actual layout for bind group creation
-        let layout = render_device
-            .create_bind_group_layout("edge_detection_bind_group_layout", &layout_entries);
-
         let sampler = render_device.create_sampler(&SamplerDescriptor::default());
 
         let shader =
-            world.load_asset("embedded://pentimento_scene/outline/shaders/edge_detection.wgsl");
+            world.load_asset("embedded://pentimento_scene/outline/shaders/edge_detection.wesl");
 
         let fullscreen_shader = world.resource::<FullscreenShader>();
         let vertex_state = fullscreen_shader.to_vertex_state();
@@ -231,9 +188,10 @@ impl FromWorld for EdgeDetectionPipeline {
                 .resource_mut::<PipelineCache>()
                 .queue_render_pipeline(RenderPipelineDescriptor {
                     label: Some("edge_detection_pipeline".into()),
-                    layout: vec![layout_descriptor],
+                    layout: vec![layout_descriptor.clone()],
                     vertex: vertex_state,
                     fragment: Some(FragmentState {
+                        constants: vec![],
                         shader,
                         shader_defs: vec![],
                         entry_point: Some("fragment".into()),
@@ -247,12 +205,12 @@ impl FromWorld for EdgeDetectionPipeline {
                     primitive: PrimitiveState::default(),
                     depth_stencil: None,
                     multisample: MultisampleState::default(),
-                    push_constant_ranges: vec![],
+                    immediate_size: 0,
                     zero_initialize_workgroup_memory: false,
                 });
 
         Self {
-            layout,
+            layout: layout_descriptor,
             sampler,
             pipeline_id,
         }
@@ -294,7 +252,7 @@ fn prepare_edge_detection(
             1.0,
         ),
         thickness: settings.thickness,
-        texture_size: Vec2::new(id_texture.size.width as f32, id_texture.size.height as f32),
+        texture_size: Vec2::new(id_texture.texture_descriptor.size.width as f32, id_texture.texture_descriptor.size.height as f32),
         _padding: 0.0,
     };
 
@@ -311,4 +269,8 @@ fn prepare_edge_detection(
         uniform_buffer,
         id_texture_view: id_texture.texture_view.clone(),
     });
+}
+
+fn clear_prepare_edge_detection_resources(mut commands: Commands) {
+    commands.remove_resource::<EdgeDetectionPrepared>();
 }

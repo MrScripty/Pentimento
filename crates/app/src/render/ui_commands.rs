@@ -174,7 +174,7 @@ fn handle_material_command(world: &mut World, command: MaterialCommand) {
         return;
     };
     #[cfg(feature = "selection")]
-    let Some(material) = materials.get_mut(&material_handle) else {
+    let Some(mut material) = materials.get_mut(&material_handle) else {
         return;
     };
 

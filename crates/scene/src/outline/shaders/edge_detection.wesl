@@ -4,7 +4,7 @@
 // The ID buffer provides current-frame boundary information.
 // Outlines are drawn at boundary positions, scene passes through elsewhere.
 
-#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
+import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 
 struct EdgeDetectionUniform {
     outline_color: vec4<f32>,

@@ -97,7 +97,7 @@ pub fn sync_chunks_to_gpu(
 
         if chunk.topology_changed {
             // Full rebuild - topology has changed
-            if let Some(mesh) = meshes.get_mut(handle) {
+            if let Some(mut mesh) = meshes.get_mut(handle) {
                 *mesh = chunk.mesh.to_bevy_mesh();
             }
             chunk.topology_changed = false;
@@ -106,7 +106,7 @@ pub fn sync_chunks_to_gpu(
         } else if chunk.dirty {
             // For now, also do full rebuild for dirty chunks
             // Future optimization: patch vertex buffers in-place
-            if let Some(mesh) = meshes.get_mut(handle) {
+            if let Some(mut mesh) = meshes.get_mut(handle) {
                 *mesh = chunk.mesh.to_bevy_mesh();
             }
             chunk.dirty = false;
@@ -128,7 +128,7 @@ pub fn sync_chunk_to_gpu(
         return false;
     }
 
-    if let Some(mesh) = meshes.get_mut(handle) {
+    if let Some(mut mesh) = meshes.get_mut(handle) {
         *mesh = chunk.mesh.to_bevy_mesh();
     }
 

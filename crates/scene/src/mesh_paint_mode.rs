@@ -152,12 +152,23 @@ struct DirectPointer {
 }
 /// Consume the actual app-arbitrated WindowEvent stream, including native contact
 /// identity and force. Never synthesize scene mouse buttons from touch input.
-fn handle_mesh_paint_input(world: &mut World, mut previous: Local<DirectPointer>) {
+pub(crate) fn handle_mesh_paint_input(world: &mut World) {
+    world
+        .run_system_cached(collect_mesh_paint_input)
+        .expect("DirectUV input resources available");
+}
+
+fn collect_mesh_paint_input(world: &mut World, mut previous: Local<DirectPointer>) {
     use bevy::input::touch::TouchPhase;
     let raw: Vec<_> = world
         .get_resource::<Messages<WindowEvent>>()
         .map(|m| previous.reader.read(m).cloned().collect())
         .unwrap_or_default();
+    if crate::frontend_input::native_scene_managed(world)
+        && !world.contains_resource::<crate::frontend_input::NativePointerSegment>()
+    {
+        return;
+    }
     let Some((window, focused, current_cursor)) = world
         .query_filtered::<(Entity, &Window), With<PrimaryWindow>>()
         .iter(world)
@@ -180,8 +191,31 @@ fn handle_mesh_paint_input(world: &mut World, mut previous: Local<DirectPointer>
         .get_resource::<crate::FrontendScenePointerInput>()
         .and_then(|s| s.events(window))
         .map(|e| e.to_vec());
-    let using_arbitration = arbitrated.is_some();
-    let batch = arbitrated.unwrap_or_else(|| raw.clone());
+    let segment = world.get_resource::<crate::frontend_input::NativePointerSegment>();
+    let using_arbitration = segment.is_some() || arbitrated.is_some();
+    let segment_native = segment.is_some();
+    let finish = segment.is_none_or(|segment| segment.finish);
+    let focused = segment.map_or(focused, |segment| segment.focused);
+    let current_cursor = segment.map_or(current_cursor, |segment| segment.cursor);
+    let left_down = segment.map_or_else(
+        || {
+            world
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        },
+        |segment| segment.left_down,
+    );
+    let batch = segment.map_or_else(
+        || arbitrated.unwrap_or_else(|| raw.clone()),
+        |segment| segment.events.clone(),
+    );
+    if segment_native {
+        if segment.is_some_and(|segment| segment.reset_direct_contact) {
+            previous.touch = None;
+            previous.pressure = 1.;
+        }
+        previous.cursor = current_cursor;
+    }
     let blocks = *world.resource::<FrontendInputBlockState>();
     // Retain chronological modifiers across frames: focus loss clears Bevy's
     // final ButtonInput before Update, even for a valid shortcut before the loss.
@@ -319,11 +353,21 @@ fn handle_mesh_paint_input(world: &mut World, mut previous: Local<DirectPointer>
                 } else {
                     keys.release(e.key_code);
                 }
-                if e.state.is_pressed() && !e.repeat && !focus_lost && !blocks.blocks_keyboard() {
+                if e.state.is_pressed()
+                    && !e.repeat
+                    && !focus_lost
+                    && (segment_native || !blocks.blocks_keyboard())
+                {
                     if e.key_code == KeyCode::Escape {
                         crate::direct_uv_tool::cancel(world);
                     }
                     if e.key_code == KeyCode::KeyZ
+                        && !(world.contains_resource::<crate::NativeSceneHistoryOwner>()
+                            && world
+                                .get_resource::<crate::FrontendSceneKeyboardInput>()
+                                .is_some_and(|input| {
+                                    input.events(crate::project_generation(world)).is_some()
+                                }))
                         && (keys.pressed(KeyCode::ControlLeft)
                             || keys.pressed(KeyCode::ControlRight))
                     {
@@ -340,11 +384,7 @@ fn handle_mesh_paint_input(world: &mut World, mut previous: Local<DirectPointer>
             _ => {}
         }
     }
-    if previous.touch.is_none()
-        && !world
-            .resource::<ButtonInput<MouseButton>>()
-            .pressed(MouseButton::Left)
-    {
+    if finish && previous.touch.is_none() && !left_down {
         close_direct(world, false);
     }
     if !focused {

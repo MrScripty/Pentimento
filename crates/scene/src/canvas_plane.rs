@@ -435,7 +435,7 @@ fn update_canvas_materials(
 ) {
     for (entity, canvas_texture, mesh_material) in query.iter() {
         // Update the material to use the canvas texture
-        if let Some(material) = materials.get_mut(&mesh_material.0) {
+        if let Some(mut material) = materials.get_mut(&mesh_material.0) {
             material.base_color_texture = Some(canvas_texture.image_handle.clone());
             material.base_color = Color::WHITE;
             // Keep alpha blending so transparent parts of the texture are see-through

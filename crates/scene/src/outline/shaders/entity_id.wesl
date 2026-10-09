@@ -1,15 +1,14 @@
 // Entity ID shader - outputs entity ID as fragment color
 // Used for the ID pass in Surface ID outline rendering
 
-#import bevy_pbr::forward_io::VertexOutput
+import bevy_pbr::render::forward_io::VertexOutput;
 
 struct EntityIdUniform {
     entity_color: vec4<f32>,
 }
 
-// Material bind group is @group(3) in Bevy 0.18
-// Use the MATERIAL_BIND_GROUP placeholder which Bevy replaces at compile time
-@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+// Bevy supplies the material bind group through its WESL constants module.
+@group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> entity_id: EntityIdUniform;
 
 @fragment

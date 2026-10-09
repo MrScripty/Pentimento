@@ -274,7 +274,7 @@ pub fn setup_frontend(world: &mut World) {
     let texture_format = frontend.texture_format;
 
     // Insert the frontend resource (NonSend because GTK is single-threaded)
-    world.insert_non_send_resource(frontend);
+    world.insert_non_send(frontend);
 
     // Create the UI texture
     let mut image = Image::new_fill(
@@ -441,7 +441,7 @@ fn upload_texture_data(
         status.first_capture_done = true;
     }
 
-    if let Some(image) = images.get_mut(handle) {
+    if let Some(mut image) = images.get_mut(handle) {
         // Resize texture if dimensions changed
         if image.width() != width || image.height() != height {
             info!(
@@ -522,7 +522,7 @@ pub fn handle_frontend_resize(
 
     // Resize the texture (only if using capture-based mode)
     if !matches!(status.mode, CompositeMode::Overlay) {
-        if let Some(image) = images.get_mut(&ui_texture.handle) {
+        if let Some(mut image) = images.get_mut(&ui_texture.handle) {
             image.resize(Extent3d {
                 width,
                 height,
@@ -551,7 +551,7 @@ fn handle_frontend_ipc_messages(world: &mut World) {
     };
 
     if !outbound_msgs.is_empty() {
-        if let Some(mut frontend) = world.get_non_send_resource_mut::<FrontendResource>() {
+        if let Some(mut frontend) = world.get_non_send_mut::<FrontendResource>() {
             for msg in outbound_msgs {
                 if let Err(e) = frontend.backend.send_to_ui(msg) {
                     warn!("Failed to send message to UI: {:?}", e);
@@ -562,7 +562,7 @@ fn handle_frontend_ipc_messages(world: &mut World) {
 
     // Collect inbound messages (avoid borrow conflicts)
     let messages: Vec<UiToBevy> = {
-        let Some(mut frontend) = world.get_non_send_resource_mut::<FrontendResource>() else {
+        let Some(mut frontend) = world.get_non_send_mut::<FrontendResource>() else {
             return;
         };
         let mut msgs = Vec::new();
