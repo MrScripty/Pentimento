@@ -23,7 +23,7 @@ ARCHIVE_NAME = f'electron-v{VERSION}-linux-x64.zip'
 RELEASE_URL = f'https://github.com/electron/electron/releases/download/v{VERSION}'
 # Official SHASUMS256.txt and the locked npm package's checksums.json agree.
 ARCHIVE_SHA256 = '5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5'
-DESTINATION = Path(f'/opt/pentimento-ci/electron-{VERSION}')
+DESTINATION = Path(f'/usr/lib/pentimento-ci/electron-{VERSION}')
 MAX_ARCHIVE = 300 * 1024 * 1024
 MAX_UNPACKED = 1024 * 1024 * 1024
 

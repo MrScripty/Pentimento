@@ -12,7 +12,7 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
-      PENTIMENTO_CI_ELECTRON: /opt/pentimento-ci/electron-44.5.1/electron
+      PENTIMENTO_CI_ELECTRON: /usr/lib/pentimento-ci/electron-44.5.1/electron
     steps:
       - uses: actions/checkout@v4
       - name: Report protected runtime ancestor metadata
