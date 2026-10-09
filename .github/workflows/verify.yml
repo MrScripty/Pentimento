@@ -40,3 +40,24 @@ jobs:
 
       - name: Verify active frontends
         run: ./launcher.sh --test
+
+  sculpting:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check normal codec source formatting
+        run: rustfmt --edition 2024 --check crates/sculpting/src/types.rs crates/sculpting/src/brush.rs
+
+      - name: Test sculpting library
+        run: cargo test -p sculpting --lib
+
+      - name: Lint sculpting library
+        run: cargo clippy -p sculpting --lib --tests

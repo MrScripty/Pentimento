@@ -481,6 +481,7 @@ run_verification_suite() {
         cd "$PROJECT_ROOT"
         ./scripts/check-source-readmes.sh --all
         ./scripts/rustfmt-active.sh --check
+        cargo test -p sculpting --lib
         npm run verify
         cargo check -p pentimento --features egui
         cargo check -p pentimento --features dioxus
