@@ -26,6 +26,6 @@ Live expected UV pixels are capped at 32 MiB, and frozen source plus geometry ad
 
 ## Qualification
 
-Actual app dispatcher/native window forwarding and production CPU asset tests cover repeated source strokes, source Undo/Redo, Apply once, UV Undo/Redo, both cancellation meanings, locked/hidden layer refusal, mid-operation layer/receiver/target switches, same-batch Apply cancellation, persistence/Open cleanup, mapping/external ownership conflicts and default1024² admission. Rendered Svelte tests use the same app driver and a labeled external CPU texture diagnostic. They do not qualify native CEF, GPU extraction/material shading or physical stylus hardware. JPEG screenshots use quality 85 and all generated files remain outside Git.
+Actual app dispatcher/native window forwarding and production CPU asset tests cover repeated source strokes, source Undo/Redo, Apply once, UV Undo/Redo, both cancellation meanings, locked/hidden layer refusal, mid-operation layer/receiver/target switches, same-batch Apply cancellation, persistence/Open cleanup, mapping/external ownership conflicts and default 1024² admission. Rendered Svelte tests use the same app driver and a labeled external CPU texture diagnostic. They do not qualify native CEF, GPU extraction/material shading or physical stylus hardware. JPEG screenshots use quality 85 and all generated files remain outside Git.
 
 Normal is the supported layer compositor. Richer blend modes, masks, a continuously armed post-Apply workflow and automatic admission of newly added geometry as receivers are not implemented.

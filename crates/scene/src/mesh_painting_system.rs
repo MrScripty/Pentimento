@@ -658,6 +658,7 @@ impl MeshPaintingResource {
             before,
             after,
         });
+        self.trim_shared_history(active.mesh_id);
     }
 }
 
@@ -1409,4 +1410,110 @@ fn linear_to_srgb_u8(linear: f32) -> u8 {
         1.055 * linear.powf(1.0 / 2.4) - 0.055
     };
     (srgb.clamp(0.0, 1.0) * 255.0) as u8
+}
+
+#[cfg(test)]
+mod mixed_history_regression_tests {
+    use super::*;
+    use painting::uv_layers::{UvLayerOp, UvLayers};
+
+    fn legacy_commit(r: &mut MeshPaintingResource, size: u32, value: f32) {
+        let p = PaintableMesh {
+            mesh_id: 44,
+            storage_mode: MeshStorageMode::UvAtlas {
+                resolution: (size, size),
+            },
+        };
+        assert!(r.begin(Entity::PLACEHOLDER, &p, false));
+        r.uv_surfaces
+            .get_mut(&44)
+            .unwrap()
+            .atlas
+            .surface_mut()
+            .pixels_mut()[0] = [value, 0., 0., 1.];
+        r.finish(false);
+        assert!(!r.has_active_stroke());
+        assert_eq!(
+            r.uv_surfaces[&44].atlas.surface().pixels()[0],
+            [value, 0., 0., 1.],
+            "history eviction must retain committed pixels"
+        );
+    }
+
+    #[test]
+    fn legacy_commit_enforces_combined_shared_history_entry_limit() {
+        for shared_entries in [127, 128] {
+            let mut r = MeshPaintingResource::default();
+            r.get_or_create_uv_surface(44, 2, 2);
+            let mut shared = UvLayers::new(1, 1).unwrap();
+            for n in 0..shared_entries {
+                shared
+                    .edit(UvLayerOp::Rename(0, format!("Shared {n}")))
+                    .unwrap();
+            }
+            r.uv_layers.insert(12, shared);
+            legacy_commit(&mut r, 2, 0.2);
+            assert_eq!(
+                r.undo_count(12),
+                shared_entries,
+                "documented legacy-first eviction preserves shared entries"
+            );
+            assert_eq!(r.undo_count(44), usize::from(shared_entries == 127));
+            assert_eq!(r.undo_count(12) + r.undo_count(44), 128);
+            assert!(r.history_bytes() <= r.history_limit_bytes());
+            let evicted = r.evicted_history_strokes();
+            assert_eq!(evicted, usize::from(shared_entries == 128));
+            let p = PaintableMesh {
+                mesh_id: 44,
+                storage_mode: MeshStorageMode::UvAtlas { resolution: (2, 2) },
+            };
+            assert!(r.begin(Entity::PLACEHOLDER, &p, true));
+            r.finish(false); // no-op
+            assert!(r.begin(Entity::PLACEHOLDER, &p, true));
+            r.uv_surfaces
+                .get_mut(&44)
+                .unwrap()
+                .atlas
+                .surface_mut()
+                .pixels_mut()[0] = [0.4, 0., 0., 1.];
+            r.finish(true); // cancellation
+            assert_eq!(r.evicted_history_strokes(), evicted);
+            assert_eq!(r.undo_count(12) + r.undo_count(44), 128);
+            assert_eq!(
+                r.uv_surfaces[&44].atlas.surface().pixels()[0],
+                [0.2, 0., 0., 1.]
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_commit_enforces_combined_shared_history_byte_limit() {
+        let mut r = MeshPaintingResource::default();
+        r.get_or_create_uv_surface(44, 512, 512);
+        let mut shared = UvLayers::new(512, 512).unwrap();
+        for n in 1..=7 {
+            shared
+                .paint(0, vec![[n as f32 / 10., 0., 0., 1.]; 512 * 512])
+                .unwrap();
+        }
+        let shared_before = shared.document().clone();
+        let retained = shared.history_bytes();
+        assert!(retained < r.history_limit_bytes());
+        assert!(
+            retained + 512 * 512 * 32 > r.history_limit_bytes(),
+            "this actual legacy stroke must cross the combined payload cap"
+        );
+        r.uv_layers.insert(12, shared);
+        legacy_commit(&mut r, 512, 0.2);
+        assert!(r.history_bytes() <= r.history_limit_bytes());
+        assert_eq!(r.history_bytes(), retained);
+        assert_eq!(r.undo_count(12), 7);
+        assert_eq!(
+            r.undo_count(44),
+            0,
+            "legacy-first policy can immediately expire the new entry"
+        );
+        assert_eq!(r.evicted_history_strokes(), 1);
+        assert_eq!(r.uv_layers[&12].document(), &shared_before);
+    }
 }
