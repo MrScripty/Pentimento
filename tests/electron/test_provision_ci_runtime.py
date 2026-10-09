@@ -1,4 +1,4 @@
-"""Offline safety regressions; no sudo, setuid, or /opt mutations are executed."""
+"""Offline safety regressions; no sudo, setuid, or system-directory mutations are executed."""
 import hashlib
 import importlib.util
 import os
@@ -113,6 +113,14 @@ class ProvisionTests(unittest.TestCase):
             provision.source_parents(self.source, os.getuid())
             with self.assertRaisesRegex(ValueError, 'ancestor'):
                 provision.source_parents(link, os.getuid())
+
+    def test_protected_ancestors_still_reject_writable_system_parent(self):
+        metadata = list(self.root.stat())
+        metadata[0] = stat.S_IFDIR | 0o777
+        metadata[4:6] = [0, 0]
+        with patch.object(Path, 'lstat', return_value=os.stat_result(metadata)):
+            with self.assertRaisesRegex(ValueError, 'Unsafe protected ancestor .*writable'):
+                provision.protected_parent(Path('/usr/lib'))
 
     def test_existing_destination_refuses_privileged_commands(self):
         calls = []

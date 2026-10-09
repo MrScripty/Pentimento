@@ -120,7 +120,10 @@ def validate_metadata(metadata, owner, *, directory=False, expected_mode=None):
 
 def protected_parent(path):
     for component in reversed((path, *path.parents)):
-        validate_metadata(component.lstat(), 0, directory=True)
+        try:
+            validate_metadata(component.lstat(), 0, directory=True)
+        except ValueError as error:
+            raise ValueError(f'Unsafe protected ancestor {component}: {error}') from error
 
 
 def source_parents(path, owner):

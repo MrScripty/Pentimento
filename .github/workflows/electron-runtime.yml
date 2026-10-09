@@ -15,6 +15,8 @@ jobs:
       PENTIMENTO_CI_ELECTRON: /opt/pentimento-ci/electron-44.5.1/electron
     steps:
       - uses: actions/checkout@v4
+      - name: Report protected runtime ancestor metadata
+        run: stat -c '%n uid=%u gid=%g mode=%a type=%F' / /opt /usr /usr/lib
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
