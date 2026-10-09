@@ -6,7 +6,7 @@
  * - WASM modes (Tauri/Electron): Uses CustomEvents for WASM <-> JS communication
  */
 
-import type { BevyToUi, UiToBevy, LayoutInfo, PaintCommand, SculptCommand } from './types';
+import type { BevyToUi, UiToBevy, LayoutInfo, PaintCommand, SculptCommand, ProjectCommand } from './types';
 
 // Declare the IPC interface injected by Rust (native modes)
 declare global {
@@ -378,6 +378,8 @@ class BevyBridge {
     requestBrushState(): void {
         this.send({ type: 'RequestBrushState' });
     }
+
+    projectCommand(data:ProjectCommand):void {this.send({type:"ProjectCommand",data});}
 
     // Depth view
     setDepthView(enabled: boolean): void {

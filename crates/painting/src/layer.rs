@@ -6,6 +6,102 @@
 
 use crate::constants::DEFAULT_TILE_SIZE;
 use crate::tiles::TiledSurface;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerDocument {
+    pub id: u32,
+    pub name: String,
+    pub visible: bool,
+    pub opacity: f32,
+    pub pixels: Vec<[f32; 4]>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerStackDocument {
+    pub width: u32,
+    pub height: u32,
+    pub active_layer_id: u32,
+    pub next_id: u32,
+    pub layers: Vec<LayerDocument>,
+}
+impl LayerStackDocument {
+    pub fn validate(&self) -> Result<(), String> {
+        let count = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .ok_or("Layer dimensions overflow")?;
+        if self.width == 0
+            || self.height == 0
+            || self.width > 1048
+            || self.height > 1048
+            || self.layers.is_empty()
+            || self.layers.len() > 64
+            || self.next_id == u32::MAX
+        {
+            return Err("Invalid or over-limit project layer dimensions/count/counter".into());
+        }
+        let mut ids = std::collections::HashSet::new();
+        for layer in &self.layers {
+            if !ids.insert(layer.id)
+                || layer.id >= self.next_id
+                || layer.name.len() > 256
+                || layer.pixels.len() != count
+                || !layer.opacity.is_finite()
+                || !(0.0..=1.0).contains(&layer.opacity)
+                || layer
+                    .pixels
+                    .iter()
+                    .flatten()
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            {
+                return Err("Invalid project layer IDs, pixels or metadata".into());
+            }
+        }
+        if !ids.contains(&self.active_layer_id) {
+            return Err("Missing active project layer".into());
+        }
+        Ok(())
+    }
+    pub fn restore(self) -> Result<LayerStack, String> {
+        self.validate()?;
+        let mut stack = LayerStack {
+            layers: Vec::new(),
+            active_layer_id: self.active_layer_id,
+            next_id: self.next_id,
+            composite: TiledSurface::with_default_tile_size(self.width, self.height),
+            width: self.width,
+            height: self.height,
+        };
+        for layer in self.layers {
+            let mut restored = Layer::new(layer.id, layer.name, self.width, self.height);
+            restored.visible = layer.visible;
+            restored.opacity = layer.opacity;
+            restored
+                .surface
+                .surface_mut()
+                .pixels_mut()
+                .copy_from_slice(&layer.pixels);
+            stack.layers.push(restored);
+        }
+        stack.composite();
+        Ok(stack)
+    }
+}
+
+fn composite_pixel(dst: &mut [f32; 4], src: [f32; 4], opacity: f32) {
+    let src_a = src[3] * opacity;
+    if src_a <= 0.0 {
+        return;
+    }
+    let inv_src_a = 1.0 - src_a;
+    *dst = [
+        src[0] * src_a + dst[0] * inv_src_a,
+        src[1] * src_a + dst[1] * inv_src_a,
+        src[2] * src_a + dst[2] * inv_src_a,
+        src_a + dst[3] * inv_src_a,
+    ];
+}
 
 /// A single painting layer
 pub struct Layer {
@@ -50,6 +146,37 @@ pub struct LayerStack {
 }
 
 impl LayerStack {
+    /// Compose editable pixels without changing the cached surface or dirty tiles.
+    pub fn document_composite_pixels(&self) -> Vec<[f32; 4]> {
+        let mut pixels = vec![[0.0; 4]; self.width as usize * self.height as usize];
+        for layer in &self.layers {
+            if layer.visible && layer.opacity > 0.0 {
+                for (dst, src) in pixels.iter_mut().zip(layer.surface.surface().pixels()) {
+                    composite_pixel(dst, *src, layer.opacity);
+                }
+            }
+        }
+        pixels
+    }
+    pub fn document(&self) -> LayerStackDocument {
+        LayerStackDocument {
+            width: self.width,
+            height: self.height,
+            active_layer_id: self.active_layer_id,
+            next_id: self.next_id,
+            layers: self
+                .layers
+                .iter()
+                .map(|l| LayerDocument {
+                    id: l.id,
+                    name: l.name.clone(),
+                    visible: l.visible,
+                    opacity: l.opacity,
+                    pixels: l.surface.surface().pixels().to_vec(),
+                })
+                .collect(),
+        }
+    }
     /// Create a new layer stack with one default "Background" layer
     pub fn new(width: u32, height: u32) -> Self {
         let background = Layer::new(0, "Background".to_string(), width, height);
@@ -209,18 +336,7 @@ impl LayerStack {
             let layer_opacity = layer.opacity;
 
             for (dst, src) in dst_pixels.iter_mut().zip(src_pixels.iter()) {
-                let src_a = src[3] * layer_opacity;
-                if src_a <= 0.0 {
-                    continue;
-                }
-
-                let inv_src_a = 1.0 - src_a;
-                *dst = [
-                    src[0] * src_a + dst[0] * inv_src_a,
-                    src[1] * src_a + dst[1] * inv_src_a,
-                    src[2] * src_a + dst[2] * inv_src_a,
-                    src_a + dst[3] * inv_src_a,
-                ];
+                composite_pixel(dst, *src, layer_opacity);
             }
         }
 
@@ -230,6 +346,42 @@ impl LayerStack {
                 self.composite.mark_dirty(tx * tile_size, ty * tile_size);
             }
         }
+    }
+
+    /// Read straight RGB from one canvas pixel without changing layers, dirty
+    /// tiles or history. Visible layers use exactly the presentation compositor;
+    /// active-layer sampling reads raw layer RGB, ignoring visibility/opacity.
+    pub fn sample_color(&self, x: u32, y: u32, visible_layers: bool) -> Option<[f32; 3]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let color = if visible_layers {
+            let mut pixel = [0.; 4];
+            for layer in &self.layers {
+                if layer.visible && layer.opacity > 0.0 {
+                    composite_pixel(
+                        &mut pixel,
+                        layer.surface.surface().get_pixel(x, y)?,
+                        layer.opacity,
+                    );
+                }
+            }
+            if !pixel.iter().all(|v| v.is_finite()) || pixel[3] <= 0.0 {
+                return None;
+            }
+            [
+                pixel[0] / pixel[3],
+                pixel[1] / pixel[3],
+                pixel[2] / pixel[3],
+            ]
+        } else {
+            let pixel = self.active_layer()?.surface.surface().get_pixel(x, y)?;
+            if !pixel.iter().all(|v| v.is_finite()) || pixel[3] <= 0.0 {
+                return None;
+            }
+            [pixel[0], pixel[1], pixel[2]]
+        };
+        Some(color.map(|channel| channel.clamp(0., 1.)))
     }
 
     /// Get the composited output surface (after calling composite())
@@ -287,6 +439,72 @@ pub struct LayerInfo {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sampling_uses_layer_composition_and_raw_active_rgb_without_mutation() {
+        let mut stack = super::LayerStack::new(4, 4);
+        stack
+            .active_layer_mut()
+            .unwrap()
+            .surface
+            .surface_mut()
+            .clear([1., 0., 0., 0.5]);
+        let top = stack.add_layer("top".into());
+        stack
+            .active_layer_mut()
+            .unwrap()
+            .surface
+            .surface_mut()
+            .clear([0., 0., 1., 0.5]);
+        stack.set_opacity(top, 0.5);
+        stack.composite();
+        stack.clear_layer_dirty_flags();
+        stack.composited_surface_mut().take_dirty_tiles();
+        let pixel = stack
+            .composited_surface()
+            .surface()
+            .get_pixel(0, 0)
+            .unwrap();
+        assert_eq!(
+            stack.sample_color(0, 0, true),
+            Some([
+                pixel[0] / pixel[3],
+                pixel[1] / pixel[3],
+                pixel[2] / pixel[3]
+            ])
+        );
+        assert_eq!(stack.sample_color(0, 0, false), Some([0., 0., 1.]));
+        assert!(stack.layers.iter().all(|l| !l.surface.has_dirty_tiles()));
+        assert_eq!(
+            stack
+                .composited_surface()
+                .surface()
+                .get_pixel(0, 0)
+                .unwrap(),
+            pixel
+        );
+        stack.set_visibility(top, false);
+        assert_eq!(stack.sample_color(0, 0, true), Some([1., 0., 0.]));
+        assert_eq!(stack.sample_color(0, 0, false), Some([0., 0., 1.]));
+        assert_eq!(stack.sample_color(4, 0, true), None);
+        assert_eq!(stack.sample_color(0, 4, false), None);
+        stack
+            .active_layer_mut()
+            .unwrap()
+            .surface
+            .surface_mut()
+            .clear([0.; 4]);
+        assert_eq!(stack.sample_color(0, 0, false), None);
+        stack.set_visibility(0, false);
+        assert_eq!(stack.sample_color(0, 0, true), None);
+        stack
+            .active_layer_mut()
+            .unwrap()
+            .surface
+            .surface_mut()
+            .clear([f32::NAN, 0., 0., 1.]);
+        assert_eq!(stack.sample_color(0, 0, false), None);
+    }
+
     use super::*;
 
     #[test]

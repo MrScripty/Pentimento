@@ -29,6 +29,8 @@ export type MeshEditTool = 'Select' | 'Extrude' | 'LoopCut' | 'Knife' | 'Merge' 
 
 // Messages from Bevy to UI
 export type BevyToUi =
+    | { type:'ProjectStateChanged';data:ProjectState }
+    | { type:'ProjectOperationFinished';data:{operation:'Save'|'Open';success:boolean;message:string} }
     | { type: 'Initialize'; data: { scene_info: SceneInfo; settings: AppSettings } }
     | { type: 'SceneUpdated'; data: SceneInfo }
     | { type: 'SelectionChanged'; data: { selected_ids: string[] } }
@@ -49,12 +51,21 @@ export type BevyToUi =
     | { type: 'MeshEditSelectionChanged'; data: { vertex_count: number; edge_count: number; face_count: number } }
     | { type: 'CloseMenus' }
     | { type: 'LayerStateChanged'; data: { layers: LayerInfo[] } }
-    | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean; can_redo: boolean; source_visible: boolean } }
+    | { type: 'PaintColorSamplingChanged'; data: PaintColorSamplingState }
+    | { type: 'PaintBrushStateChanged'; data: { settings: PaintBrushSettings; presets: PaintBrushPresetInfo[]; can_undo: boolean; can_redo: boolean; source_visible: boolean; target?: PaintTargetState } }
     | { type: 'SculptBrushStateChanged'; data: { settings: SculptBrushSettings | null } }
-    | { type: 'SculptHistoryChanged'; data: SculptHistoryState };
+    | { type: 'SculptHistoryChanged'; data: SculptHistoryState }
+    | { type: 'SavedBrushPresetsChanged'; data: SavedBrushPresetsState };
+// Backend-owned device-local custom presets share metadata, never parameters.
+export interface SavedBrushPresetsState {
+    paint: PaintBrushPresetInfo[]; sculpt: PaintBrushPresetInfo[];
+    selected_paint: number | null; selected_sculpt: number | null;
+    active: boolean; available: boolean; notice: string | null;
+}
 
 // Messages from UI to Bevy
 export type UiToBevy =
+    | { type:'ProjectCommand';data:ProjectCommand }
     | { type: 'UiDirty' }
     | { type: 'LayoutUpdate'; data: LayoutInfo }
     | { type: 'SetUiInputCapture'; data: { keyboard: boolean } }
@@ -75,6 +86,9 @@ export type UiToBevy =
     | { type: 'RequestBrushState' }
     | { type: 'MeshEditCommand'; data: MeshEditCommand }
     | { type: 'SetDepthView'; data: { enabled: boolean } };
+
+export type ProjectCommand='GetState'|{Save:{path:string}}|{Open:{path:string}};
+export interface ProjectState {path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}
 
 // Scene types
 export interface SceneInfo {
@@ -259,7 +273,27 @@ export type GizmoCommand =
     | { Cancel: null }
     | { Confirm: null };
 
+export type PaintTarget = 'Canvas' | 'DirectUv';
+export interface PaintTargetState {
+    mode: PaintTarget; direct_available: boolean; target_name: string | null;
+    active: boolean; notice: string | null; retained_bytes: number;
+    pending_bytes: number; limit_bytes: number; evicted_strokes: number; uv_layers?: UvLayerState;
+}
+
+export interface UvLayerInfo { id:number; name:string; visible:boolean; opacity:number; locked:boolean; is_active:boolean }
+export interface UvLayerState { receivers:{mesh_id:number;name:string;layered:boolean}[]; receiver:number|null; enabled:boolean; layers:UvLayerInfo[]; can_undo:boolean; can_redo:boolean; active:boolean; projection_preview?:boolean; conflicted:boolean; notice:string|null }
+export type UvLayerCommand = 'Enable' | 'Undo' | 'Redo'
+    | {SelectReceiver:{mesh_id:number}} | {Create:{name:string}} | {Duplicate:{layer_id:number}}
+    | {Delete:{layer_id:number}} | {Select:{layer_id:number}} | {Rename:{layer_id:number;name:string}}
+    | {Reorder:{layer_id:number;new_index:number}} | {Visible:{layer_id:number;visible:boolean}}
+    | {Opacity:{layer_id:number;opacity:number}} | {Lock:{layer_id:number;locked:boolean}};
 export type PaintCommand =
+    | {UvLayers:{command:UvLayerCommand}}
+    | { SetTarget: { target: PaintTarget } }
+    | 'CancelStroke'
+    | 'CancelUvProjection'
+    | { SetColorSampling: { enabled: boolean } }
+    | { SetColorSampleSource: { source: ColorSampleSource } }
     | { SetBrushColor: { color: [number, number, number, number] } }
     | { SetBrushSize: { size: number } }
     | { SetBrushOpacity: { opacity: number } }
@@ -267,6 +301,8 @@ export type PaintCommand =
     | { SetBrushSpacing: { spacing: number } }
     | { SetBlendMode: { mode: 'Normal' | 'Erase' } }
     | { SelectBrushPreset: { preset_id: number } }
+    | { SaveBrushPreset: { name: string } }
+    | { SelectSavedBrushPreset: { preset_id: number } }
     | 'Undo'
     | 'Redo'
     | { SetSourceVisible: { visible: boolean } }
@@ -306,14 +342,21 @@ export interface SculptBrushSettings {
     radius: number;
     strength: number;
     hardness: number;
+    autosmooth: number;
     falloff: SculptFalloff;
 }
 export interface SculptHistoryState { undo_strokes: number; redo_strokes: number; active: boolean; notice: string | null }
 export type SculptCommand =
+    | { SaveBrushPreset: { name: string } }
+    | { SelectSavedBrushPreset: { preset_id: number } }
     | 'Undo'
     | 'Redo'
     | { SetTool: { tool: SculptTool } }
     | { SetRadius: { radius: number } }
     | { SetStrength: { strength: number } }
     | { SetHardness: { hardness: number } }
+    | { SetAutoSmooth: { amount: number } }
     | { SetFalloff: { falloff: SculptFalloff } };
+
+export type ColorSampleSource = 'VisibleLayers' | 'ActiveLayer';
+export interface PaintColorSamplingState { enabled: boolean; source: ColorSampleSource; active: boolean }

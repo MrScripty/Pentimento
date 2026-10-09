@@ -1,0 +1,62 @@
+// Svelte/IPC qualification. Actual layer reads, strokes and history run in Rust.
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? 'playwright-core');
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
+try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.addInitScript(() => { window.commands = []; window.__PENTIMENTO_IPC__ = { postMessage: message => window.commands.push(JSON.parse(message)) }; });
+    await page.goto(process.env.PENTIMENTO_UI_URL ?? 'http://127.0.0.1:5187');
+    await page.waitForFunction(() => window.commands.some(m => m.type === 'RequestBrushState'));
+    const receive = message => page.evaluate(m => window.__PENTIMENTO_RECEIVE__(JSON.stringify(m)), message);
+    const last = () => page.evaluate(() => window.commands.filter(m => m.type === 'PaintCommand').at(-1)?.data);
+    let sampling = { enabled: false, source: 'VisibleLayers', active: false };
+    let paint = { preset_id: 0, customized: true, color: [1, 0, 0, 0.7], size: 48, opacity: 0.37, hardness: 0.25, spacing: 0.4, blend_mode: 'Erase' };
+    const samplingReceipt = () => receive({ type: 'PaintColorSamplingChanged', data: sampling });
+    const paintReceipt = () => receive({ type: 'PaintBrushStateChanged', data: { settings: paint, presets: [{ id: 0, name: 'Hard Round' }], can_undo: true, can_redo: true, source_visible: true } });
+    await samplingReceipt(); await paintReceipt(); await receive({ type: 'EditModeChanged', data: { mode: 'Paint' } });
+    const source = page.getByLabel('Sample source', { exact: true });
+    await source.selectOption('ActiveLayer');
+    assert.deepEqual(await last(), { SetColorSampleSource: { source: 'ActiveLayer' } });
+    // A refused native update reconciles the DOM even if source stayed identical.
+    sampling.active = true; await samplingReceipt();
+    assert.equal(await source.inputValue(), 'VisibleLayers');
+    sampling.active = false; await samplingReceipt();
+    await source.selectOption('ActiveLayer'); sampling.source = 'ActiveLayer'; await samplingReceipt();
+    await page.getByRole('button', { name: 'Sample canvas color', exact: true }).click();
+    assert.deepEqual(await last(), { SetColorSampling: { enabled: true } });
+    sampling.enabled = true; await samplingReceipt();
+    const cancel = page.getByRole('button', { name: 'Cancel color sampling', exact: true });
+    assert.equal(await cancel.getAttribute('aria-pressed'), 'true');
+    await page.getByText('Click a painted source canvas pixel. Escape cancels sampling.', { exact: true }).waitFor();
+    await receive({ type: 'Error', data: { code: 'color_sample_rejected', message: 'No painted color at this source pixel. Choose another pixel or cancel sampling.' } });
+    await page.getByRole('alert').filter({ hasText: 'No painted color' }).waitFor();
+    assert.equal(await cancel.getAttribute('aria-pressed'), 'true');
+    // Accepted backend color propagates without changing opacity or eraser.
+    paint.color = [0.5, 0, 0.5, 0.7]; sampling.enabled = false;
+    await paintReceipt(); await samplingReceipt();
+    assert.equal(await page.getByLabel('Hex color', { exact: true }).inputValue(), '#bc00bc');
+    assert.equal(await page.getByRole('button', { name: 'Eraser', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByRole('spinbutton', { name: 'Opacity value', exact: true }).inputValue(), '37');
+    sampling.active = true; await samplingReceipt();
+    assert.equal(await source.isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Sample canvas color', exact: true }).isDisabled(), true);
+    sampling.active = false; sampling.enabled = true; await samplingReceipt();
+    await page.getByRole('button', { name: 'Cancel color sampling', exact: true }).click();
+    assert.deepEqual(await last(), { SetColorSampling: { enabled: false } });
+    sampling.enabled = false; await samplingReceipt();
+    await receive({ type: 'EditModeChanged', data: { mode: 'None' } });
+    await receive({ type: 'EditModeChanged', data: { mode: 'Paint' } });
+    assert.equal(await source.inputValue(), 'ActiveLayer');
+    await page.reload(); await page.waitForFunction(() => window.commands.some(m => m.type === 'RequestBrushState'));
+    await paintReceipt(); await samplingReceipt(); await receive({ type: 'EditModeChanged', data: { mode: 'Paint' } });
+    assert.equal(await source.inputValue(), 'ActiveLayer');
+    const output = process.env.PENTIMENTO_EVIDENCE_DIR ?? '/tmp/pentimento-color-sampling-evidence';
+    await mkdir(output, { recursive: true });
+    await source.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${output}/canvas-color-sampling.jpg`, type: 'jpeg', quality: 85 });
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ type: 'pentimento.ui.canvas_color_sampling', status: 'passed', checks: ['source-command', 'same-value-refusal-reconciliation', 'arm-and-cancel', 'transparent-error-visible', 'accepted-color-opacity-tool', 'active-disabled', 'native-source-after-remount-reload'], renderer_qualification: false }));
+} finally { await browser.close(); }

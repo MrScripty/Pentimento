@@ -16,6 +16,12 @@ pub struct AddObjectEvent(pub AddObjectRequest);
 /// Counter for generating unique object IDs
 #[derive(Resource, Default)]
 struct ObjectCounter(u32);
+pub(crate) fn project_counter(world: &World) -> u32 {
+    world.get_resource::<ObjectCounter>().map_or(0, |c| c.0)
+}
+pub(crate) fn restore_project_counter(world: &mut World, counter: u32) {
+    world.insert_resource(ObjectCounter(counter));
+}
 
 /// Plugin for adding objects to the scene
 pub struct AddObjectPlugin;
