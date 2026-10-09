@@ -13,6 +13,7 @@ use pentimento_ipc::{
 
 pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool {
     match command {
+        UiToBevy::ProjectCommand(command) => crate::project::dispatch(world, command),
         UiToBevy::LayoutUpdate(layout) => {
             if let Some(mut state) = world.get_resource_mut::<crate::FrontendUiLayout>() {
                 state.regions = layout.regions.clone();
@@ -25,6 +26,7 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
             }
         }
         UiToBevy::RequestBrushState => {
+            crate::project::send_state(world);
             send_brush_state(world);
             let mut mode = world
                 .get_resource::<crate::EditModeState>()
@@ -47,6 +49,10 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
             }
         }
         UiToBevy::PaintCommand(command) => {
+            if crate::direct_uv_tool::command(world, command) {
+                send_brush_state(world);
+                return true;
+            }
             if color_sampling_command(world, command) {
                 send_brush_state(world);
                 return true;
@@ -67,6 +73,10 @@ pub fn dispatch_brush_ui_command(world: &mut World, command: &UiToBevy) -> bool 
                     world,
                     "Finish or cancel the active stroke before selecting a brush preset.",
                 );
+                send_brush_state(world);
+                return true;
+            }
+            if handle_brush_settings(world, command) {
                 send_brush_state(world);
                 return true;
             }
@@ -176,8 +186,11 @@ fn sampling_message(world: &World) -> BevyToUi {
     }
 }
 
-pub(crate) fn paint_snapshot(painting: &PaintingResource) -> PaintBrushSettings {
-    let preset = &painting.brush_preset;
+pub(crate) fn paint_settings(
+    preset: &painting::BrushPreset,
+    color: [f32; 4],
+    blend_mode: painting::BlendMode,
+) -> PaintBrushSettings {
     PaintBrushSettings {
         preset_id: preset.id,
         customized: !painting::builtin_presets().iter().any(|p| {
@@ -188,25 +201,44 @@ pub(crate) fn paint_snapshot(painting: &PaintingResource) -> PaintBrushSettings 
                 && p.hardness == preset.hardness
                 && p.spacing == preset.spacing
         }),
-        color: painting.brush_color,
+        color,
         size: preset.max_size,
         opacity: preset.opacity,
         hardness: preset.hardness,
         spacing: preset.spacing,
-        blend_mode: match painting.blend_mode {
+        blend_mode: match blend_mode {
             painting::BlendMode::Normal => BlendMode::Normal,
             painting::BlendMode::Erase => BlendMode::Erase,
         },
     }
 }
 
-fn paint_message(world: &World) -> Option<BevyToUi> {
+fn paint_message(world: &mut World) -> Option<BevyToUi> {
+    let brush = crate::direct_uv_tool::brush(world)?;
+    let target = crate::direct_uv_tool::status(world);
     let painting = world.get_resource::<PaintingResource>()?;
-    let can_undo = active_plane_id(world)
+    let mut can_undo = active_plane_id(world)
         .and_then(|id| painting.get_pipeline(id))
         .is_some_and(|p| p.can_undo());
+    let mut can_redo = active_plane_id(world)
+        .and_then(|id| painting.get_pipeline(id))
+        .is_some_and(|p| p.can_redo());
+    #[cfg(feature = "mesh_painting")]
+    if target.mode == pentimento_ipc::PaintTarget::DirectUv {
+        let owner = world
+            .get_resource::<crate::PaintMode>()
+            .and_then(|p| p.direct_target)
+            .and_then(|e| world.get::<crate::PaintableMesh>(e));
+        let r = world.get_resource::<crate::MeshPaintingResource>();
+        can_undo = owner.zip(r).is_some_and(|(p, r)| {
+            !target.active && !r.history_conflicted(p.mesh_id) && r.undo_count(p.mesh_id) > 0
+        });
+        can_redo = owner.zip(r).is_some_and(|(p, r)| {
+            !target.active && !r.history_conflicted(p.mesh_id) && r.redo_count(p.mesh_id) > 0
+        });
+    }
     Some(BevyToUi::PaintBrushStateChanged {
-        settings: paint_snapshot(painting),
+        settings: paint_settings(&brush.brush_preset, brush.brush_color, brush.blend_mode),
         presets: painting::builtin_presets()
             .into_iter()
             .map(|preset| PaintBrushPresetInfo {
@@ -214,15 +246,14 @@ fn paint_message(world: &World) -> Option<BevyToUi> {
                 name: preset.name,
             })
             .collect(),
-        can_undo,
+        can_undo: can_undo && !target.active,
         source_visible: world
             .get_resource::<ActiveCanvasPlane>()
             .and_then(|a| a.entity)
             .and_then(|e| world.get::<Visibility>(e))
             .is_none_or(|v| *v != Visibility::Hidden),
-        can_redo: active_plane_id(world)
-            .and_then(|id| painting.get_pipeline(id))
-            .is_some_and(|p| p.can_redo()),
+        can_redo: can_redo && !target.active,
+        target,
     })
 }
 
@@ -254,7 +285,7 @@ fn sculpt_history_message(world: &World) -> BevyToUi {
     }
 }
 
-fn send_brush_state(world: &mut World) {
+pub(crate) fn send_brush_state(world: &mut World) {
     crate::brush_presets::ensure(world);
     let saved = crate::brush_presets::message(world);
     let paint = paint_message(world);
@@ -320,24 +351,15 @@ fn finite_clamp(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
     }
 }
 
-fn handle_paint_command(
-    world: &mut World,
-    active_plane_id: Option<u32>,
-    command: PaintCommand,
-    outbound_layer_messages: &mut Vec<BevyToUi>,
-) {
-    let Some(mut painting) = world.get_resource_mut::<PaintingResource>() else {
-        return;
+fn handle_brush_settings(world: &mut World, command: &PaintCommand) -> bool {
+    let Some(mut painting) = crate::direct_uv_tool::brush(world) else {
+        return false;
     };
-
-    match command {
-        PaintCommand::SetColorSampling { .. } | PaintCommand::SetColorSampleSource { .. } => {}
-        PaintCommand::SaveBrushPreset { .. } | PaintCommand::SelectSavedBrushPreset { .. } => {}
+    match command.clone() {
         PaintCommand::SelectBrushPreset { preset_id } => {
             let presets = painting::brush::builtin_presets();
             if let Some(preset) = presets.into_iter().find(|preset| preset.id == preset_id) {
                 painting.set_brush_preset(preset);
-                drop(painting);
                 if let Some(mut mode) = world.get_resource_mut::<crate::PaintMode>() {
                     mode.sample_color = false;
                 }
@@ -378,6 +400,35 @@ fn handle_paint_command(
         PaintCommand::SetBlendMode { mode } => {
             painting.set_blend_mode_ipc(mode);
         }
+        _ => return false,
+    }
+    let _ = crate::direct_uv_tool::set_brush(world, painting);
+    true
+}
+
+fn handle_paint_command(
+    world: &mut World,
+    active_plane_id: Option<u32>,
+    command: PaintCommand,
+    outbound_layer_messages: &mut Vec<BevyToUi>,
+) {
+    let Some(mut painting) = world.get_resource_mut::<PaintingResource>() else {
+        return;
+    };
+
+    match command {
+        PaintCommand::SetColorSampling { .. } | PaintCommand::SetColorSampleSource { .. } => {}
+        PaintCommand::SaveBrushPreset { .. } | PaintCommand::SelectSavedBrushPreset { .. } => {}
+        PaintCommand::SetTarget { .. }
+        | PaintCommand::CancelStroke
+        | PaintCommand::CancelUvProjection
+        | PaintCommand::SelectBrushPreset { .. }
+        | PaintCommand::SetBrushColor { .. }
+        | PaintCommand::SetBrushSize { .. }
+        | PaintCommand::SetBrushOpacity { .. }
+        | PaintCommand::SetBrushHardness { .. }
+        | PaintCommand::SetBrushSpacing { .. }
+        | PaintCommand::SetBlendMode { .. } => {}
         PaintCommand::Undo => {
             if let Some(id) = active_plane_id {
                 let _ = painting.undo(id);
@@ -442,6 +493,7 @@ fn handle_paint_command(
                 outbound_layer_messages.push(make_layer_state_message(pipeline));
             });
         }
+        PaintCommand::UvLayers { .. } => {}
     }
 }
 
@@ -551,7 +603,7 @@ mod tests {
             1
         );
         assert!(matches!(
-            paint_message(&world),
+            paint_message(&mut world),
             Some(BevyToUi::PaintBrushStateChanged {
                 source_visible: false,
                 can_undo: true,
@@ -580,7 +632,7 @@ mod tests {
             .composite();
         assert_eq!(pixel(&world, 64, 64)[3], 0.);
         assert!(matches!(
-            paint_message(&world),
+            paint_message(&mut world),
             Some(BevyToUi::PaintBrushStateChanged { can_redo: true, .. })
         ));
         paint(&mut world, PaintCommand::Redo);
@@ -592,7 +644,7 @@ mod tests {
             .composite();
         assert_eq!(pixel(&world, 64, 64), painted);
         assert!(matches!(
-            paint_message(&world),
+            paint_message(&mut world),
             Some(BevyToUi::PaintBrushStateChanged {
                 can_redo: false,
                 can_undo: true,
@@ -647,7 +699,7 @@ mod tests {
             assert_eq!((pipeline.undo_count(), pipeline.redo_count()), (0, 1));
             assert_eq!(pipeline.log().total_packet_count(), 1);
             assert!(matches!(
-                paint_message(&world),
+                paint_message(&mut world),
                 Some(BevyToUi::PaintBrushStateChanged {
                     can_undo: false,
                     can_redo: false,

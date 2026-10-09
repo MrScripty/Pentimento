@@ -47,6 +47,22 @@ impl Default for PaintingResource {
 }
 
 impl PaintingResource {
+    pub(crate) fn restore_document_layers(
+        &mut self,
+        id: u32,
+        layers: painting::layer::LayerStackDocument,
+    ) -> Result<(), String> {
+        let width = layers.width;
+        let height = layers.height;
+        let restored = layers.restore()?;
+        let mut pipeline = PaintingPipeline::new(width, height);
+        pipeline.set_brush(self.brush_preset.clone());
+        pipeline.set_color(self.brush_color);
+        pipeline.set_blend_mode(self.blend_mode);
+        pipeline.layers = restored;
+        self.pipelines.insert(id, pipeline);
+        Ok(())
+    }
     /// Sample straight RGB synchronously at the ordered input press. This read
     /// never creates a pipeline, dirties tiles, logs a packet or changes history.
     pub fn sample_brush_color(

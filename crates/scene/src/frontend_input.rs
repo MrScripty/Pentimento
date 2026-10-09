@@ -18,6 +18,18 @@ impl FrontendScenePointerInput {
     pub fn publish(&mut self, window: Entity, events: Vec<bevy::window::WindowEvent>) {
         self.batch = Some((window, events));
     }
+    /// A backend switch cannot reinterpret a prefix already admitted by native input.
+    pub fn has_scene_press(&self) -> bool {
+        self.batch.as_ref().is_some_and(|(_, events)| {
+            events.iter().any(|e| match e {
+                bevy::window::WindowEvent::MouseButtonInput(e) => e.state.is_pressed(),
+                bevy::window::WindowEvent::TouchInput(e) => {
+                    e.phase == bevy::input::touch::TouchPhase::Started
+                }
+                _ => false,
+            })
+        })
+    }
     pub fn clear(&mut self) {
         self.batch = None;
     }
@@ -99,4 +111,25 @@ mod tests {
         assert!(layout.update_pointer(200.0, 200.0, false, false));
         assert!(!layout.update_pointer(200.0, 200.0, false, false));
     }
+}
+
+/// Pressure supplied by Bevy/winit. Missing force is the ordinary full-pressure
+/// pointer fallback; malformed supplied force is rejected, never promoted to 1.
+pub fn touch_pressure(force: Option<bevy::input::touch::ForceTouch>) -> Option<f32> {
+    use bevy::input::touch::ForceTouch;
+    let pressure = match force {
+        None => 1.,
+        Some(ForceTouch::Normalized(value)) => value,
+        Some(ForceTouch::Calibrated {
+            force,
+            max_possible_force,
+            ..
+        }) => {
+            if !force.is_finite() || !max_possible_force.is_finite() || max_possible_force <= 0. {
+                return None;
+            }
+            force / max_possible_force
+        }
+    };
+    (pressure.is_finite() && (0.0..=1.0).contains(&pressure)).then_some(pressure as f32)
 }

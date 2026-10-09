@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::commands::{
     AddPaintCanvasRequest, CameraCommand, ColorSampleSource, EditMode, GizmoCommand, GizmoMode,
     LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
-    PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, SculptBrushSettings, SculptCommand,
+    PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PaintTargetState, SculptBrushSettings,
+    SculptCommand,
 };
 use crate::types::{
     AddObjectRequest, AmbientOcclusionSettings, AppSettings, DiffusionRequest, LayoutInfo,
@@ -16,6 +17,18 @@ use crate::types::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum BevyToUi {
+    ProjectStateChanged {
+        path: Option<String>,
+        available: bool,
+        active: bool,
+        blocked: bool,
+        notice: Option<String>,
+    },
+    ProjectOperationFinished {
+        operation: String,
+        success: bool,
+        message: String,
+    },
     /// Initial state sync when UI loads
     Initialize {
         scene_info: SceneInfo,
@@ -90,6 +103,8 @@ pub enum BevyToUi {
         can_undo: bool,
         can_redo: bool,
         source_visible: bool,
+        #[serde(default)]
+        target: PaintTargetState,
     },
     PaintColorSamplingChanged {
         enabled: bool,
@@ -151,6 +166,7 @@ pub enum BevyToUi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum UiToBevy {
+    ProjectCommand(ProjectCommand),
     /// UI has rendered and needs capture
     UiDirty,
 
@@ -158,7 +174,9 @@ pub enum UiToBevy {
     LayoutUpdate(LayoutInfo),
 
     /// Browser text/widget focus owns keyboard shortcuts.
-    SetUiInputCapture { keyboard: bool },
+    SetUiInputCapture {
+        keyboard: bool,
+    },
 
     /// Camera control commands
     CameraCommand(CameraCommand),
@@ -173,7 +191,9 @@ pub enum UiToBevy {
     StartDiffusion(DiffusionRequest),
 
     /// Cancel diffusion generation
-    CancelDiffusion { task_id: String },
+    CancelDiffusion {
+        task_id: String,
+    },
 
     /// Settings changed
     UpdateSettings(AppSettings),
@@ -209,5 +229,14 @@ pub enum UiToBevy {
     MeshEditCommand(MeshEditCommand),
 
     /// Toggle depth view mode
-    SetDepthView { enabled: bool },
+    SetDepthView {
+        enabled: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProjectCommand {
+    GetState,
+    Save { path: String },
+    Open { path: String },
 }

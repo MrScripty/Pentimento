@@ -557,7 +557,8 @@ fn handle_sculpt_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut window_events: MessageReader<WindowEvent>,
-    mut last_cursor: Local<Option<Vec2>>,
+    mut last_cursor: Local<(Option<Vec2>, u64)>,
+    project: Option<Res<crate::project::ProjectState>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
@@ -566,6 +567,10 @@ fn handle_sculpt_input(
     mut sculpt_events: MessageWriter<SculptEvent>,
     input_blocks: Res<FrontendInputBlockState>,
 ) {
+    let generation = project.as_ref().map_or(0, |p| p.generation);
+    if last_cursor.1 != generation {
+        *last_cursor = (None, generation);
+    }
     let Ok((window_entity, window)) = windows.single() else {
         window_events.clear();
         return;
@@ -573,13 +578,13 @@ fn handle_sculpt_input(
     // Read our own ordered stream. Other frontend/scene readers retain theirs.
     // Track hover even during blocked or inactive frames, but never replay it.
     let batch: Vec<_> = window_events.read().cloned().collect();
-    let prior_cursor = *last_cursor;
+    let prior_cursor = last_cursor.0;
     let mut cursor = prior_cursor;
     let mut has_cursor_event = false;
     for event in &batch {
         if let WindowEvent::CursorMoved(event) = event {
             if event.window == window_entity {
-                *last_cursor = Some(event.position);
+                last_cursor.0 = Some(event.position);
                 has_cursor_event = true;
             }
         }
@@ -676,7 +681,7 @@ fn handle_sculpt_input(
                     }
                     stroke_open = false;
                     cursor = None;
-                    *last_cursor = None;
+                    last_cursor.0 = None;
                 }
             }
             _ => {}
@@ -849,7 +854,11 @@ fn handle_sculpt_events(
     mut paint_events: MessageWriter<crate::PaintEvent>,
     mut active_canvas: ResMut<crate::ActiveCanvasPlane>,
     mut outbound: ResMut<OutboundUiMessages>,
-    mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
+    mesh_query: Query<(
+        &Mesh3d,
+        &GlobalTransform,
+        Option<&crate::project::ProjectSculptGeometry>,
+    )>,
     mut meshes: ResMut<Assets<Mesh>>,
     material_query: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -868,7 +877,7 @@ fn handle_sculpt_events(
                             "Exit the current sculpt session before entering another.".into()
                         );
                     }
-                    let (mesh_handle, global_transform) =
+                    let (mesh_handle, global_transform, saved_geometry) =
                         mesh_query.get(*entity).map_err(|_| {
                             "The sculpt target has no available mesh transform.".to_string()
                         })?;
@@ -878,6 +887,9 @@ fn handle_sculpt_events(
                     let affine = global_transform.affine();
                     if !affine.is_finite() || affine.matrix3.determinant().abs() < 1e-10 {
                         return Err("The sculpt target has a non-invertible transform.".into());
+                    }
+                    if let Some(saved) = saved_geometry.filter(|s| s.rendered.matches(mesh)) {
+                        return Ok((mesh_handle.0.clone(), *global_transform, saved.mesh.clone()));
                     }
                     let he_mesh = HalfEdgeMesh::from_bevy_mesh_welded(mesh)
                         .or_else(|error| {
@@ -998,8 +1010,20 @@ fn handle_sculpt_events(
                     // Commit the final dirty stroke even when Exit and StrokeEnd arrive together.
                     if let Some(handle) = sculpting_data.original_mesh_handle.as_ref() {
                         if let Some((new_mesh, _)) = half_edge_to_bevy_mesh(&merged.mesh) {
+                            let saved_rendered =
+                                crate::project_assets::MeshDocument::capture(&new_mesh).ok();
                             if let Some(original) = meshes.get_mut(handle) {
                                 *original = new_mesh;
+                                if let (Some(entity), Some(rendered)) =
+                                    (sculpt_state.target_entity, saved_rendered)
+                                {
+                                    commands.entity(entity).insert(
+                                        crate::project::ProjectSculptGeometry {
+                                            mesh: chunked_mesh.clone(),
+                                            rendered,
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
@@ -1567,7 +1591,7 @@ fn render_sculpt_brush_gizmo(
 }
 
 #[cfg(test)]
-mod sculpt_geometry_sync_tests {
+pub(crate) mod sculpt_geometry_sync_tests {
     use super::*;
     use bevy::mesh::PrimitiveTopology;
     use painting::half_edge::VertexId;
@@ -1631,7 +1655,7 @@ mod sculpt_geometry_sync_tests {
         assert!(world.resource::<Messages<SculptEvent>>().is_empty());
     }
 
-    fn sculpt_event_app() -> App {
+    pub(crate) fn sculpt_event_app() -> App {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
@@ -1645,6 +1669,14 @@ mod sculpt_geometry_sync_tests {
             .add_message::<SculptEvent>()
             .add_message::<crate::PaintEvent>()
             .add_systems(Update, handle_sculpt_events);
+        app
+    }
+    pub(crate) fn project_sculpt_app() -> App {
+        let mut app = sculpt_event_app();
+        app.add_systems(
+            Update,
+            sync_sculpt_chunks_to_gpu.after(handle_sculpt_events),
+        );
         app
     }
 

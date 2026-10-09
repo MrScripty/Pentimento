@@ -37,6 +37,124 @@ pub struct ProjectionTargets {
 }
 
 impl ProjectionTargets {
+    pub(crate) fn document_material(
+        &self,
+        entity: Entity,
+        handle: &Handle<StandardMaterial>,
+        current: &StandardMaterial,
+        materials: &Assets<StandardMaterial>,
+    ) -> Result<StandardMaterial, String> {
+        let Some(a) = self
+            .appearances
+            .get(&entity)
+            .filter(|a| a.painted_handle.as_ref() == Some(handle))
+        else {
+            return Ok(current.clone());
+        };
+        if current.base_color != Color::WHITE
+            || current.base_color_texture.as_ref() != self.textures.get(&entity)
+        {
+            return Err("Projected receiver base appearance was edited outside projection; clear/reapply projection before saving.".into());
+        }
+        let original = materials
+            .get(&a.original_handle)
+            .ok_or("Missing original projection material asset")?;
+        let mut document = current.clone();
+        document.base_color = original.base_color;
+        document.base_color_texture = original.base_color_texture.clone();
+        Ok(document)
+    }
+    #[cfg(feature = "mesh_painting")]
+    pub(crate) fn validate_layer_migration(
+        &self,
+        world: &World,
+        entity: Entity,
+    ) -> Result<(), String> {
+        let appearance = self
+            .appearances
+            .get(&entity)
+            .ok_or("Missing acknowledged projection owner")?;
+        if appearance.migration_conflicted {
+            return Err("Projection display had an external edit before a partial upload; reopen its owned project".into());
+        }
+        let handle = world
+            .get::<MeshMaterial3d<StandardMaterial>>(entity)
+            .ok_or("Missing projection material")?;
+        if appearance.painted_handle.as_ref() != Some(&handle.0) {
+            return Err("The receiver is not owned by its published projection".into());
+        }
+        let material = world
+            .resource::<Assets<StandardMaterial>>()
+            .get(&handle.0)
+            .ok_or("Missing projection material asset")?;
+        if material.base_color != Color::WHITE
+            || material.base_color_texture.as_ref() != self.textures.get(&entity)
+        {
+            return Err("Projection material was edited externally".into());
+        }
+        let images = world.resource::<Assets<Image>>();
+        let target = self.get(entity).ok_or("Missing projection atlas")?;
+        let resolution = target.resolution();
+        let image = self
+            .get_texture(entity)
+            .and_then(|h| images.get(h))
+            .ok_or("Missing projection display")?;
+        crate::project_assets::ImageDocument::capture(image)?
+            .validate_direct_uv(resolution.0, resolution.1)?;
+        if image.data.as_ref() != appearance.published_bytes.as_ref()
+            || appearance.published_bytes.is_none()
+        {
+            return Err("Projection display is pending or externally changed".into());
+        }
+        if appearance
+            .original
+            .base_color_texture
+            .as_ref()
+            .and_then(|h| images.get(h))
+            .and_then(|i| i.data.as_ref())
+            != appearance.original_bytes.as_ref()
+        {
+            return Err("Projection original image was edited externally".into());
+        }
+        let mut expected = vec![[0.; 4]; resolution.0 as usize * resolution.1 as usize];
+        for layer in self
+            .layers
+            .values()
+            .filter_map(|layers| layers.get(&entity))
+        {
+            for (dst, src) in expected.iter_mut().zip(layer) {
+                *dst = over(*src, *dst);
+            }
+        }
+        if !painting::uv_layers::same_uv_pixels(&expected, target.surface().surface().pixels()) {
+            return Err("Projection atlas changed outside its raw source layers".into());
+        }
+        Ok(())
+    }
+    /// Borrow the exact mapped source pixels retained by a legacy Canvas layer.
+    pub fn projection_layer_pixels(&self, plane_id: u32, entity: Entity) -> Option<&[[f32; 4]]> {
+        self.layers.get(&plane_id)?.get(&entity).map(Vec::as_slice)
+    }
+    pub(crate) fn document_layers(&self, entity: Entity) -> Vec<(u32, Vec<[f32; 4]>)> {
+        self.layers
+            .iter()
+            .filter_map(|(&plane, layers)| {
+                layers.get(&entity).map(|pixels| (plane, pixels.clone()))
+            })
+            .collect()
+    }
+    pub(crate) fn restore_document_layers(
+        &mut self,
+        entity: Entity,
+        resolution: (u32, u32),
+        layers: Vec<(u32, Vec<[f32; 4]>)>,
+    ) {
+        self.get_or_create(entity, resolution);
+        for (plane, pixels) in layers {
+            self.layers.entry(plane).or_default().insert(entity, pixels);
+        }
+        self.composite_layers();
+    }
     pub fn get_or_create(&mut self, entity: Entity, resolution: (u32, u32)) -> &mut UvAtlasTarget {
         self.targets.entry(entity).or_insert_with(|| {
             let mut target = UvAtlasTarget::new(resolution.0, resolution.1);
@@ -77,6 +195,16 @@ impl ProjectionTargets {
         }
     }
 
+    #[cfg(feature = "mesh_painting")]
+    pub(crate) fn detach_shared(&mut self, entity: Entity, resolution: (u32, u32)) {
+        for layers in self.layers.values_mut() {
+            layers.remove(&entity);
+        }
+        self.appearances.remove(&entity);
+        self.targets.remove(&entity);
+        self.get_or_create(entity, resolution);
+        self.sessions.clear();
+    }
     fn clear(&mut self, entity: Option<Entity>) {
         for layer in self.layers.values_mut() {
             if let Some(entity) = entity {
@@ -96,6 +224,9 @@ struct ProjectionAppearance {
     original: StandardMaterial,
     painted_handle: Option<Handle<StandardMaterial>>,
     warned_unreadable: bool,
+    migration_conflicted: bool,
+    published_bytes: Option<Vec<u8>>,
+    original_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Resource, Default)]
@@ -346,12 +477,445 @@ struct MeshStamp {
     cull_mode: Option<Face>,
     resolution: Option<(u32, u32)>,
 }
+#[cfg(feature = "mesh_painting")]
+#[derive(Resource, Default)]
+pub(crate) struct PendingUvApplies(Vec<std::sync::Arc<UvApplyAdmission>>);
+#[cfg(feature = "mesh_painting")]
+struct UvApplyAdmission {
+    source: Entity,
+    receiver: Entity,
+    layer: u32,
+    mesh_tick: bevy::ecs::change_detection::Tick,
+    context: ProjectionContext,
+    geometry: Vec<MeshStamp>,
+    pixels: Vec<[f32; 4]>,
+}
+#[cfg(feature = "mesh_painting")]
+impl PendingUvApplies {
+    pub(crate) fn bytes(&self) -> usize {
+        self.0
+            .iter()
+            .enumerate()
+            .filter(|(i, v)| !self.0[..*i].iter().any(|p| std::sync::Arc::ptr_eq(p, v)))
+            .map(|(_, v)| v.pixels.len() * 16 + v.geometry.len() * std::mem::size_of::<MeshStamp>())
+            .sum()
+    }
+}
+#[cfg(feature = "mesh_painting")]
+#[derive(Resource, Default)]
+pub(crate) struct LiveUvPreview {
+    admission: Option<std::sync::Arc<UvApplyAdmission>>,
+    rendered: bool,
+}
+#[cfg(feature = "mesh_painting")]
+impl LiveUvPreview {
+    pub(crate) fn bytes(&self) -> usize {
+        self.admission.as_ref().map_or(0, |a| {
+            a.pixels.len() * 16 + a.geometry.len() * std::mem::size_of::<MeshStamp>()
+        })
+    }
+    pub(crate) fn unshared_bytes(&self, pending: Option<&PendingUvApplies>) -> usize {
+        if self.admission.as_ref().is_some_and(|a| {
+            pending.is_some_and(|p| p.0.iter().any(|v| std::sync::Arc::ptr_eq(v, a)))
+        }) {
+            0
+        } else {
+            self.bytes()
+        }
+    }
+    pub(crate) fn active(&self) -> bool {
+        self.admission.is_some()
+    }
+}
+#[cfg(feature = "mesh_painting")]
+pub(crate) fn begin_uv_preview(world: &mut World) -> Result<(), String> {
+    if crate::brush_presets::active(world)
+        || world
+            .get_resource::<crate::FrontendScenePointerInput>()
+            .is_some_and(|p| p.has_scene_press())
+    {
+        return Err("Finish or cancel the source stroke before live UV preview".into());
+    }
+    if world.resource::<crate::PaintMode>().target != pentimento_ipc::PaintTarget::Canvas {
+        return Err("Choose Canvas projection before live UV preview".into());
+    }
+    if world
+        .get_resource::<LiveUvPreview>()
+        .is_some_and(|p| p.active())
+    {
+        return Ok(());
+    }
+    if world
+        .get_resource::<PendingUvApplies>()
+        .is_some_and(|p| !p.0.is_empty())
+    {
+        return Err("Wait for pending UV Apply".into());
+    }
+    crate::mesh_painting_system::sync_mesh_paint_owners(world);
+    admit_uv_apply(world)?;
+    let admission = world.resource_mut::<PendingUvApplies>().0.pop().unwrap();
+    let id = world
+        .get::<crate::PaintableMesh>(admission.receiver)
+        .ok_or("Missing receiver")?
+        .mesh_id;
+    world
+        .resource_mut::<crate::MeshPaintingResource>()
+        .begin_projection_preview(id)?;
+    world.insert_resource(LiveUvPreview {
+        admission: Some(admission),
+        rendered: false,
+    });
+    let mut mode = world.resource_mut::<ProjectionMode>();
+    mode.live_projection = true;
+    mode.enabled = true;
+    world.resource_mut::<crate::PaintMode>().target_notice=Some("Live UV preview is staged on the selected layer. Apply commits once and pauses live; Cancel preview discards it while retaining Canvas edits.".into());
+    Ok(())
+}
+#[cfg(feature = "mesh_painting")]
+pub(crate) fn cancel_uv_preview(world: &mut World) {
+    if !world
+        .get_resource::<LiveUvPreview>()
+        .is_some_and(|p| p.active())
+    {
+        return;
+    }
+    // UI can run after the ordinary Update owner guard. Recheck exact current
+    // image bytes synchronously before scheduling any baseline rollback.
+    crate::mesh_painting_system::sync_mesh_paint_owners(world);
+    world
+        .resource_mut::<crate::MeshPaintingResource>()
+        .cancel_projection_preview();
+    world.insert_resource(LiveUvPreview::default());
+    if let Some(mut p) = world.get_resource_mut::<PendingUvApplies>() {
+        p.0.clear();
+    }
+    if let Some(mut events) = world.get_resource_mut::<Messages<ProjectionEvent>>() {
+        events.clear();
+    }
+    if let Some(mut mode) = world.get_resource_mut::<ProjectionMode>() {
+        mode.live_projection = false;
+        mode.enabled = false;
+    }
+    world.resource_mut::<crate::PaintMode>().target_notice =
+        Some("UV preview cancelled. Canvas edits retained.".into());
+}
+#[cfg(feature = "mesh_painting")]
+fn stop_uv_preview(
+    shared: &mut crate::MeshPaintingResource,
+    live: &mut LiveUvPreview,
+    mode: &mut ProjectionMode,
+) {
+    shared.cancel_projection_preview();
+    *live = LiveUvPreview::default();
+    mode.live_projection = false;
+    mode.enabled = false;
+}
+#[cfg(feature = "mesh_painting")]
+pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
+    if !world.contains_resource::<bevy::ecs::message::Messages<ProjectionEvent>>() {
+        return Err("Canvas projection is unavailable in this editor build".into());
+    }
+    let mesh_tick = world
+        .get_resource_ref::<Assets<Mesh>>()
+        .ok_or("Mesh assets unavailable")?
+        .last_changed();
+    let receiver = world
+        .resource::<crate::PaintMode>()
+        .direct_target
+        .ok_or("Select a UV receiver")?;
+    let id = world
+        .get::<crate::PaintableMesh>(receiver)
+        .ok_or("Missing UV receiver")?
+        .mesh_id;
+    let layer = world
+        .resource::<crate::MeshPaintingResource>()
+        .uv_layers(id)
+        .ok_or("Enable UV layers")?
+        .document()
+        .active_layer;
+    let source = world
+        .resource::<ActiveCanvasPlane>()
+        .entity
+        .ok_or("Choose a source canvas")?;
+    let plane = world
+        .get::<CanvasPlane>(source)
+        .ok_or("Missing source canvas")?;
+    let plane_id = plane.plane_id;
+    let canvas = world
+        .get::<GlobalTransform>(source)
+        .ok_or("Wait for canvas transform settlement")?;
+    let context_base = (
+        canvas.to_matrix().inverse(),
+        Vec2::new(plane.world_width, plane.world_height),
+        UVec2::new(plane.width, plane.height),
+        plane.paint_camera_pos,
+    );
+    let (camera, invert_culling) = world
+        .query_filtered::<(&GlobalTransform, Option<&Camera>), With<MainCamera>>()
+        .single(world)
+        .map(|(t, c)| (t.translation(), c.is_some_and(|c| c.invert_culling)))
+        .map_err(|_| "Wait for the main camera")?;
+    let context = ProjectionContext {
+        camera: context_base.3.unwrap_or(camera),
+        invert_culling,
+        world_to_canvas: context_base.0,
+        size: context_base.1,
+        resolution: context_base.2,
+    };
+    let mut geometry: Vec<_> = world
+        .query_filtered::<(
+            Entity,
+            &Mesh3d,
+            &GlobalTransform,
+            Option<&ProjectionTarget>,
+            Option<&InheritedVisibility>,
+            &MeshMaterial3d<StandardMaterial>,
+        ), Without<CanvasPlane>>()
+        .iter(world)
+        .filter_map(|(entity, mesh, t, target, visible, m)| {
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&m.0)
+                .map(|m| MeshStamp {
+                    entity,
+                    mesh: mesh.0.id(),
+                    transform: t.to_matrix(),
+                    visible: visible.is_none_or(|v| v.get()),
+                    cull_mode: m.cull_mode,
+                    resolution: target.and_then(|t| match t.storage_mode {
+                        MeshStorageMode::UvAtlas { resolution } => Some(resolution),
+                        _ => None,
+                    }),
+                })
+        })
+        .collect();
+    geometry.sort_unstable_by_key(|g| g.entity.to_bits());
+    if let Some(pin) = world
+        .get_resource::<LiveUvPreview>()
+        .and_then(|p| p.admission.as_ref())
+    {
+        if pin.source != source
+            || pin.receiver != receiver
+            || pin.layer != layer
+            || pin.mesh_tick != mesh_tick
+            || pin.context != context
+            || pin.geometry != geometry
+        {
+            return Err("UV preview mapping changed; cancel preview before retrying".into());
+        }
+    }
+    if let Some(previous) = world
+        .get_resource::<PendingUvApplies>()
+        .and_then(|p| p.0.last())
+        .cloned()
+    {
+        if previous.source != source
+            || previous.receiver != receiver
+            || previous.layer != layer
+            || previous.mesh_tick != mesh_tick
+            || previous.context != context
+            || previous.geometry != geometry
+        {
+            return Err("Wait for pending Apply before changing its source or mapping".into());
+        }
+        let mut pending = world.resource_mut::<PendingUvApplies>();
+        if pending.0.len() >= 128 {
+            return Err("Pending UV Apply request limit reached".into());
+        }
+        pending.0.push(previous);
+        return Ok(());
+    }
+    let mut painting = world.resource_mut::<PaintingResource>();
+    let pipeline = painting
+        .get_pipeline_mut(plane_id)
+        .ok_or("Wait for source canvas setup")?;
+    pipeline.layers.composite();
+    let source_pixels = pipeline.layers.composited_surface().surface().pixels();
+    if source_pixels.len() * 16 + geometry.len() * std::mem::size_of::<MeshStamp>()
+        > painting::uv_layers::UV_PENDING_BYTES
+    {
+        return Err("UV Apply snapshot exceeds the 32 MiB pending payload limit".into());
+    }
+    let pixels = source_pixels.to_vec();
+    let admission = UvApplyAdmission {
+        source,
+        receiver,
+        layer,
+        mesh_tick,
+        context,
+        geometry,
+        pixels,
+    };
+    if admission.pixels.len() * 16 + admission.geometry.len() * std::mem::size_of::<MeshStamp>()
+        > painting::uv_layers::UV_PENDING_BYTES
+    {
+        return Err("UV Apply snapshot exceeds the 32 MiB pending payload limit".into());
+    }
+    let admission = std::sync::Arc::new(admission);
+    // Apply and live provenance share this bounded source snapshot. Replace
+    // the older live snapshot only after its pinned mapping validates.
+    if let Some(mut live) = world.get_resource_mut::<LiveUvPreview>() {
+        if live.active() {
+            live.admission = Some(admission.clone());
+        }
+    }
+    world.init_resource::<PendingUvApplies>();
+    world.resource_mut::<PendingUvApplies>().0.push(admission);
+    Ok(())
+}
+
 struct ProjectionSession {
     context: ProjectionContext,
     geometry: Vec<MeshStamp>,
     revision: u64,
     mapping: HashMap<Entity, Vec<Option<usize>>>,
     source: Vec<[f32; 4]>,
+}
+
+// Apply runs after Update uploads. A plugin/external edit may happen later in
+// that frame, so validate exact current owners again at the commit boundary.
+#[cfg(feature = "mesh_painting")]
+fn validate_pending_uv_owners(world: &mut World) {
+    if world
+        .get_resource::<LiveUvPreview>()
+        .is_some_and(|p| p.active())
+        || world
+            .get_resource::<PendingUvApplies>()
+            .is_some_and(|p| p.bytes() > 0)
+    {
+        crate::mesh_painting_system::sync_mesh_paint_owners(world);
+    }
+}
+
+/// Save may arrive in Update before transform propagation and live projection.
+/// Compare authoring inputs to the existing mapping snapshot without replaying it.
+pub(crate) fn document_projection_settled(world: &mut World) -> bool {
+    if !world
+        .get_resource::<ProjectionMode>()
+        .is_some_and(|m| m.live_projection)
+    {
+        return true;
+    }
+    let Some(entity) = world
+        .get_resource::<ActiveCanvasPlane>()
+        .and_then(|a| a.entity)
+    else {
+        return true;
+    };
+    let Some(plane) = world.get::<CanvasPlane>(entity) else {
+        return false;
+    };
+    let plane_id = plane.plane_id;
+    let Some(transform) = world.get::<Transform>(entity) else {
+        return false;
+    };
+    if world.get::<ChildOf>(entity).is_some() {
+        return false;
+    }
+    let mut context = ProjectionContext {
+        camera: plane.paint_camera_pos.unwrap_or(Vec3::ZERO),
+        invert_culling: false,
+        world_to_canvas: GlobalTransform::from(*transform).to_matrix().inverse(),
+        size: Vec2::new(plane.world_width, plane.world_height),
+        resolution: UVec2::new(plane.width, plane.height),
+    };
+    let pinned_camera = plane.paint_camera_pos.is_some();
+    let mut camera_query = world.query_filtered::<(
+        &GlobalTransform,
+        Option<&crate::OrbitCamera>,
+        Option<&Camera>,
+    ), With<MainCamera>>();
+    let Ok((camera, orbit, view)) = camera_query.single(world) else {
+        return false;
+    };
+    if !pinned_camera {
+        context.camera = orbit.map_or_else(|| camera.translation(), |o| o.calculate_position());
+    }
+    context.invert_culling = view.is_some_and(|v| v.invert_culling);
+    let mut query = world.query_filtered::<(
+        Entity,
+        &Mesh3d,
+        &GlobalTransform,
+        Option<&Transform>,
+        Option<&ChildOf>,
+        Option<&ProjectionTarget>,
+        Option<&InheritedVisibility>,
+        Option<&Visibility>,
+        &MeshMaterial3d<StandardMaterial>,
+    ), Without<CanvasPlane>>();
+    let Some(materials) = world.get_resource::<Assets<StandardMaterial>>() else {
+        return false;
+    };
+    let mut geometry = Vec::new();
+    for (entity, mesh, global, local, parent, target, inherited, visibility, material) in
+        query.iter(world)
+    {
+        // Project v1 rejects parented authoring objects rather than using stale globals.
+        if parent.is_some() {
+            return false;
+        }
+        let Some(material) = materials.get(&material.0) else {
+            continue;
+        };
+        geometry.push(MeshStamp {
+            entity,
+            mesh: mesh.0.id(),
+            transform: local.map_or_else(
+                || global.to_matrix(),
+                |t| GlobalTransform::from(*t).to_matrix(),
+            ),
+            visible: visibility.map_or_else(
+                || inherited.is_none_or(|v| v.get()),
+                |v| *v != Visibility::Hidden,
+            ),
+            cull_mode: material.cull_mode,
+            resolution: target.and_then(|t| match t.storage_mode {
+                MeshStorageMode::UvAtlas { resolution } => Some(resolution),
+                _ => None,
+            }),
+        });
+    }
+    geometry.sort_unstable_by_key(|stamp| stamp.entity.to_bits());
+    // Asset edits can precede publication of their Modified messages. Compare
+    // the actual mapping inputs with the cache, including UV-less occluders.
+    // Deleted receivers are absent here; their retained removal messages do not
+    // indefinitely block an otherwise completed, empty mapping.
+    let Some(meshes) = world.get_resource::<Assets<Mesh>>() else {
+        return false;
+    };
+    let Some(cache) = world.get_resource::<MeshRaycastCache>() else {
+        return false;
+    };
+    for stamp in geometry.iter().filter(|stamp| stamp.visible) {
+        let current = meshes.get(stamp.mesh).and_then(extract_mesh_raycast_data);
+        match (current, cache.cache.get(&stamp.entity)) {
+            (Some(current), Some(saved))
+                if current.positions == saved.positions
+                    && current.indices == saved.indices
+                    && current.uvs == saved.uvs => {}
+            (None, None) => {}
+            _ => return false,
+        }
+    }
+    let Some(pipeline) = world
+        .get_resource::<PaintingResource>()
+        .and_then(|p| p.get_pipeline(plane_id))
+    else {
+        return false;
+    };
+    let source = pipeline.layers.document_composite_pixels();
+    let revision = world
+        .get_resource::<MeshRaycastCache>()
+        .map_or(0, |c| c.revision);
+    world
+        .get_resource::<ProjectionTargets>()
+        .and_then(|t| t.sessions.get(&plane_id))
+        .is_some_and(|s| {
+            s.source == source
+                && s.context == context
+                && s.geometry == geometry
+                && s.revision == revision
+        })
 }
 
 /// Project a world point back through the camera onto the canvas. UV y=0 is
@@ -494,6 +1058,8 @@ fn over(src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
 pub struct ProjectionPaintingPlugin;
 impl Plugin for ProjectionPaintingPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(feature = "mesh_painting")]
+        app.init_resource::<LiveUvPreview>();
         app.init_resource::<ProjectionTargets>()
             .init_resource::<MeshRaycastCache>()
             .add_systems(
@@ -502,6 +1068,8 @@ impl Plugin for ProjectionPaintingPlugin {
                     register_projection_targets,
                     setup_projection_textures,
                     invalidate_mesh_cache,
+                    #[cfg(feature = "mesh_painting")]
+                    validate_pending_uv_owners,
                     live_projection_system,
                     upload_projection_textures,
                     projection_native_inspection,
@@ -546,6 +1114,8 @@ fn setup_projection_textures(
     mut images: ResMut<Assets<Image>>,
     materials: Res<Assets<StandardMaterial>>,
     mut targets: ResMut<ProjectionTargets>,
+    #[cfg(feature = "mesh_painting")] mesh_paint: Option<Res<crate::MeshPaintingResource>>,
+    #[cfg(feature = "mesh_painting")] mesh_textures: Query<&crate::MeshPaintTexture>,
     mut query: Query<(
         Entity,
         &mut ProjectionTarget,
@@ -553,6 +1123,20 @@ fn setup_projection_textures(
     )>,
 ) {
     for (entity, mut component, material) in &mut query {
+        #[cfg(feature = "mesh_painting")]
+        if mesh_paint
+            .as_ref()
+            .is_some_and(|r| r.shared_id_for_entity(entity).is_some())
+        {
+            if let Ok(texture) = mesh_textures.get(entity) {
+                if let MeshStorageMode::UvAtlas { resolution } = component.storage_mode {
+                    targets.get_or_create(entity, resolution);
+                    targets.set_texture(entity, texture.image_handle.clone());
+                    component.texture_handle = Some(texture.image_handle.clone());
+                }
+            }
+            continue;
+        }
         if targets.get_texture(entity).is_some() {
             continue;
         }
@@ -604,6 +1188,13 @@ fn setup_projection_textures(
                 original: original.clone(),
                 painted_handle: None,
                 warned_unreadable: false,
+                migration_conflicted: false,
+                published_bytes: images.get(&handle).and_then(|i| i.data.clone()),
+                original_bytes: original
+                    .base_color_texture
+                    .as_ref()
+                    .and_then(|h| images.get(h))
+                    .and_then(|i| i.data.clone()),
             },
         );
         component.texture_handle = Some(handle);
@@ -658,6 +1249,14 @@ struct ProjectionScene<'w, 's> {
 }
 
 fn live_projection_system(
+    #[cfg(feature = "mesh_painting")] mut shared: Option<ResMut<crate::MeshPaintingResource>>,
+    #[cfg(feature = "mesh_painting")] mut paint_mode: Option<ResMut<crate::PaintMode>>,
+    #[cfg(feature = "mesh_painting")] mut outbound: Option<ResMut<crate::OutboundUiMessages>>,
+    #[cfg(feature = "mesh_painting")] mut live_preview: Option<ResMut<LiveUvPreview>>,
+    #[cfg(feature = "mesh_painting")] pending_applies: Option<ResMut<PendingUvApplies>>,
+    window_events: Option<Res<Messages<bevy::window::WindowEvent>>>,
+    primary_window: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
+    mut window_cursor: Local<bevy::ecs::message::MessageCursor<bevy::window::WindowEvent>>,
     mut events: MessageReader<ProjectionEvent>,
     mut projection_mode: ResMut<ProjectionMode>,
     mut painting: ResMut<PaintingResource>,
@@ -673,13 +1272,19 @@ fn live_projection_system(
         materials,
         camera,
     } = scene;
+    #[cfg(feature = "mesh_painting")]
+    let admissions = pending_applies
+        .map(|mut p| std::mem::take(&mut p.0))
+        .unwrap_or_default();
     let mut explicitly_requested = false;
+    let mut explicit_count = 0usize;
     let mut enabling_requested = false;
     let mut trailing_clears = Vec::new();
     for event in events.read() {
         match event {
             ProjectionEvent::ProjectToScene => {
                 explicitly_requested = true;
+                explicit_count += 1;
                 trailing_clears.clear();
             }
             ProjectionEvent::SetLiveProjection { enabled } => {
@@ -702,19 +1307,101 @@ fn live_projection_system(
             }
         }
     }
+    #[cfg(feature = "mesh_painting")]
+    let shared_target = paint_mode
+        .as_ref()
+        .and_then(|p| p.direct_target)
+        .and_then(|e| {
+            shared
+                .as_ref()
+                .and_then(|r| r.shared_id_for_entity(e))
+                .map(|id| (e, id))
+        });
+    #[cfg(feature = "mesh_painting")]
+    let preview_active = live_preview.as_ref().is_some_and(|p| p.active());
+    // Consume both message buffers every frame: native events arrive before
+    // PreUpdate rotates them, unlike UI projection commands written in Update.
+    let focus_lost = window_events.as_ref().is_some_and(|events| {
+        window_cursor.read(events).fold(false, |lost, event| {
+            let current = match event {
+                bevy::window::WindowEvent::KeyboardFocusLost(_) => true,
+                bevy::window::WindowEvent::WindowFocused(e) => {
+                    !e.focused && primary_window.iter().any(|(w, _)| w == e.window)
+                }
+                _ => false,
+            };
+            lost || current
+        })
+    }) || primary_window.iter().any(|(_, w)| !w.focused);
+    #[cfg(feature = "mesh_painting")]
+    if preview_active {
+        let pin = live_preview.as_ref().unwrap().admission.as_ref().unwrap();
+        if focus_lost
+            || Some(pin.source) != active.entity
+            || Some(pin.receiver) != shared_target.map(|p| p.0)
+            || !shared.as_ref().is_some_and(|r| r.preview_valid())
+            || paint_mode
+                .as_ref()
+                .is_none_or(|p| !p.active || p.target != pentimento_ipc::PaintTarget::Canvas)
+            || !projection_mode.live_projection
+            || !canvases.contains(pin.source)
+        {
+            stop_uv_preview(
+                shared.as_mut().unwrap(),
+                live_preview.as_mut().unwrap(),
+                &mut projection_mode,
+            );
+            if let Some(p) = paint_mode.as_mut() {
+                p.target_notice =
+                    Some("UV preview aborted without a commit. Canvas edits retained.".into());
+            }
+            if let Some(out) = outbound.as_mut() {
+                out.send(pentimento_ipc::BevyToUi::Error {
+                    code: "uv_preview_rejected".into(),
+                    message:
+                        "UV preview source or owner changed; preview aborted without committing"
+                            .into(),
+                });
+            }
+            return;
+        }
+    }
+    #[cfg(feature = "mesh_painting")]
+    if shared_target.is_some() && !preview_active {
+        projection_mode.live_projection = false;
+        enabling_requested = false;
+    }
+    #[cfg(feature = "mesh_painting")]
+    if !admissions.is_empty()
+        && (admissions.iter().any(|a| {
+            Some(a.source) != active.entity
+                || Some(a.receiver) != paint_mode.as_ref().and_then(|p| p.direct_target)
+        }))
+    {
+        if let Some(out) = outbound.as_mut() {
+            out.send(pentimento_ipc::BevyToUi::Error {code:"uv_projection_rejected".into(),message:"UV Apply source or receiver changed before commit; retry after scene settlement".into()});
+        }
+        return;
+    }
     let requested = explicitly_requested || enabling_requested;
+    #[cfg(feature = "mesh_painting")]
+    let requested = requested || (preview_active && !live_preview.as_ref().unwrap().rendered);
     if !requested && !projection_mode.live_projection {
         return;
     }
     let Some(entity) = active.entity else {
         return;
     };
+    #[cfg(feature = "mesh_painting")]
+    let entity_of_source = entity;
     let Ok((plane, transform, canvas_texture)) = canvases.get(entity) else {
         return;
     };
     let Ok((camera, view)) = camera.single() else {
         return;
     };
+    #[cfg(feature = "mesh_painting")]
+    let source_active = painting.has_active_stroke();
     let Some(pipeline) = painting.get_pipeline_mut(plane.plane_id) else {
         return;
     };
@@ -751,6 +1438,33 @@ fn live_projection_system(
         })
         .collect();
     geometry.sort_unstable_by_key(|stamp| stamp.entity.to_bits());
+    #[cfg(feature = "mesh_painting")]
+    if preview_active {
+        let pin = live_preview.as_ref().unwrap().admission.as_ref().unwrap();
+        if pin.context != context
+            || pin.geometry != geometry
+            || pin.mesh_tick != meshes.last_changed()
+        {
+            stop_uv_preview(
+                shared.as_mut().unwrap(),
+                live_preview.as_mut().unwrap(),
+                &mut projection_mode,
+            );
+            if let Some(p) = paint_mode.as_mut() {
+                p.target_notice =
+                    Some("UV preview aborted without a commit. Canvas edits retained.".into());
+            }
+            if let Some(out) = outbound.as_mut() {
+                out.send(pentimento_ipc::BevyToUi::Error {
+                    code: "uv_preview_rejected".into(),
+                    message:
+                        "UV preview mapping or geometry changed; preview aborted without committing"
+                            .into(),
+                });
+            }
+            return;
+        }
+    }
     let mapping_changed = targets.sessions.get(&plane.plane_id).is_none_or(|session| {
         session.context != context
             || session.geometry != geometry
@@ -802,8 +1516,8 @@ fn live_projection_system(
         targets.sessions.insert(
             plane.plane_id,
             ProjectionSession {
-                context,
-                geometry,
+                context: context.clone(),
+                geometry: geometry.clone(),
                 revision: cache.revision,
                 mapping,
                 source: Vec::new(),
@@ -812,7 +1526,7 @@ fn live_projection_system(
     }
     let session = targets.sessions.get_mut(&plane.plane_id).unwrap();
     session.source = pixels.to_vec();
-    let layer = session
+    let layer: HashMap<Entity, Vec<[f32; 4]>> = session
         .mapping
         .iter()
         .map(|(&entity, map)| {
@@ -826,6 +1540,137 @@ fn live_projection_system(
                     })
                     .collect(),
             )
+        })
+        .collect();
+    #[cfg(feature = "mesh_painting")]
+    if let Some((entity, id)) = shared_target {
+        if (source_active && explicitly_requested)
+            || shared.as_ref().is_some_and(|r| r.has_active_stroke())
+        {
+            if let Some(out) = outbound.as_mut() {
+                out.send(pentimento_ipc::BevyToUi::Error {
+                    code: "uv_projection_rejected".into(),
+                    message: "Finish or cancel painting before UV Apply".into(),
+                });
+            }
+            return;
+        }
+        if preview_active && !explicitly_requested {
+            let result = layer
+                .get(&entity)
+                .ok_or_else(|| {
+                    "The selected UV receiver has no visible projection coverage".to_string()
+                })
+                .and_then(|pixels| {
+                    shared
+                        .as_mut()
+                        .unwrap()
+                        .update_projection_preview(id, pixels)
+                });
+            match result {
+                Ok(()) => live_preview.as_mut().unwrap().rendered = true,
+                Err(message) => {
+                    stop_uv_preview(
+                        shared.as_mut().unwrap(),
+                        live_preview.as_mut().unwrap(),
+                        &mut projection_mode,
+                    );
+                    if let Some(out) = outbound.as_mut() {
+                        out.send(pentimento_ipc::BevyToUi::Error {
+                            code: "uv_preview_rejected".into(),
+                            message,
+                        });
+                    }
+                }
+            }
+            return;
+        }
+        if admissions.len() != explicit_count
+            || admissions.iter().any(|a| {
+                a.source != entity_of_source
+                    || a.receiver != entity
+                    || a.layer
+                        != shared
+                            .as_ref()
+                            .unwrap()
+                            .uv_layers(id)
+                            .unwrap()
+                            .document()
+                            .active_layer
+                    || a.mesh_tick != meshes.last_changed()
+                    || a.context != context
+                    || a.geometry != geometry
+                    || !painting::uv_layers::same_uv_pixels(&a.pixels, pixels)
+            })
+        {
+            if let Some(out) = outbound.as_mut() {
+                out.send(pentimento_ipc::BevyToUi::Error {code:"uv_projection_rejected".into(),message:"UV Apply source or mapping changed before commit; retry after scene settlement".into()});
+            }
+            return;
+        }
+        if preview_active {
+            let result = layer
+                .get(&entity)
+                .ok_or_else(|| {
+                    "The selected UV receiver has no visible projection coverage".to_string()
+                })
+                .and_then(|pixels| {
+                    shared
+                        .as_mut()
+                        .unwrap()
+                        .update_projection_preview(id, pixels)
+                })
+                .and_then(|_| shared.as_mut().unwrap().commit_projection_preview());
+            stop_uv_preview(
+                shared.as_mut().unwrap(),
+                live_preview.as_mut().unwrap(),
+                &mut projection_mode,
+            );
+            if let Some(p) = paint_mode.as_mut() {
+                p.target_notice=Some(match &result {
+                    Ok(true)=>"UV preview applied once. Live is paused; enable it for the next staged edit.".into(),
+                    Ok(false)=>"UV preview matched the layer; no edit recorded. Live is paused.".into(),
+                    Err(message)=>message.clone(),
+                });
+            }
+            if let Err(message) = result {
+                if let Some(out) = outbound.as_mut() {
+                    out.send(pentimento_ipc::BevyToUi::Error {
+                        code: "uv_projection_rejected".into(),
+                        message,
+                    });
+                }
+            }
+            return;
+        }
+        for _ in 0..explicit_count {
+            let result = layer
+                .get(&entity)
+                .ok_or_else(|| {
+                    "The selected UV receiver has no visible projection coverage".to_string()
+                })
+                .and_then(|pixels| shared.as_mut().unwrap().project_uv_layer(id, pixels));
+            if let Err(message) = result {
+                if let Some(p) = paint_mode.as_mut() {
+                    p.target_notice = Some(message.clone());
+                }
+                if let Some(out) = outbound.as_mut() {
+                    out.send(pentimento_ipc::BevyToUi::Error {
+                        code: "uv_projection_rejected".into(),
+                        message,
+                    });
+                }
+            }
+        }
+        return;
+    }
+    #[cfg(feature = "mesh_painting")]
+    let layer = layer
+        .into_iter()
+        .filter(|(e, _)| {
+            shared
+                .as_ref()
+                .is_none_or(|r| r.shared_id_for_entity(*e).is_none())
         })
         .collect();
     targets.layers.insert(plane.plane_id, layer);
@@ -904,6 +1749,7 @@ fn original_pixel(
 }
 
 fn upload_projection_textures(
+    #[cfg(feature = "mesh_painting")] shared: Option<Res<crate::MeshPaintingResource>>,
     mut targets: ResMut<ProjectionTargets>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -914,6 +1760,13 @@ fn upload_projection_textures(
     )>,
 ) {
     for (entity, mut handle, mut component) in &mut query {
+        #[cfg(feature = "mesh_painting")]
+        if shared
+            .as_ref()
+            .is_some_and(|r| r.shared_id_for_entity(entity).is_some())
+        {
+            continue;
+        }
         let Some(target) = targets.get(entity) else {
             continue;
         };
@@ -931,8 +1784,20 @@ fn upload_projection_textures(
             .pixels()
             .iter()
             .any(|p| p[3] > 0.0);
+        let foreign = images
+            .get(self::ProjectionTargets::get_texture(&targets, entity).unwrap())
+            .and_then(|i| i.data.as_ref())
+            != appearance.published_bytes.as_ref();
+        let original_handle = appearance.original_handle.clone();
+        if foreign {
+            targets
+                .appearances
+                .get_mut(&entity)
+                .unwrap()
+                .migration_conflicted = true;
+        }
         if !has_paint {
-            handle.0 = appearance.original_handle.clone();
+            handle.0 = original_handle;
         }
         // Keep unsupported/GPU-only base textures unchanged, with dirty paint
         // retained for retry when the original image becomes CPU-readable.
@@ -1011,6 +1876,7 @@ fn upload_projection_textures(
         } else {
             handle.0 = appearance.original_handle.clone();
         }
+        appearance.published_bytes = images.get(&texture).and_then(|i| i.data.clone());
         component.dirty = false;
     }
 }
@@ -1159,7 +2025,7 @@ fn diagnostic_bounds(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn context() -> ProjectionContext {
@@ -1382,7 +2248,7 @@ mod tests {
         );
     }
 
-    fn test_app() -> (App, Entity, Handle<StandardMaterial>) {
+    pub(crate) fn test_app() -> (App, Entity, Handle<StandardMaterial>) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin));
         app.init_asset::<Mesh>()
@@ -1433,7 +2299,7 @@ mod tests {
         (app, target, material)
     }
 
-    fn set_canvas(app: &mut App, colors: &[[f32; 4]]) {
+    pub(crate) fn set_canvas(app: &mut App, colors: &[[f32; 4]]) {
         let mut painting = app.world_mut().resource_mut::<PaintingResource>();
         let pipeline = painting.get_pipeline_mut(0).unwrap();
         pipeline
@@ -1446,7 +2312,7 @@ mod tests {
             .copy_from_slice(colors);
     }
 
-    fn output(app: &App, target: Entity) -> Vec<u8> {
+    pub(crate) fn output(app: &App, target: Entity) -> Vec<u8> {
         let targets = app.world().resource::<ProjectionTargets>();
         app.world()
             .resource::<Assets<Image>>()

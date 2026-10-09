@@ -35,6 +35,8 @@ use pentimento_scene::OutboundUiMessages;
 #[cfg(feature = "dioxus")]
 mod ui_blend_material;
 mod ui_commands;
+#[cfg(test)]
+pub(crate) use ui_commands::dispatch_ui_commands;
 #[cfg(feature = "dioxus")]
 mod ui_dioxus;
 #[cfg(feature = "egui")]

@@ -83,21 +83,12 @@ impl<'w, 's> FrontendBackend<'w, 's> {
     /// Returns true if the event was sent successfully, false if no backend is available.
     pub fn send_mouse_event(&mut self, event: MouseEvent) -> bool {
         match self.config.composite_mode {
-            CompositeMode::Capture | CompositeMode::Overlay => {
+            CompositeMode::Capture | CompositeMode::Overlay | CompositeMode::Cef => {
                 if let Some(ref mut frontend) = self.frontend {
                     frontend.backend.send_mouse_event(event);
                     return true;
                 }
             }
-            #[cfg(feature = "cef")]
-            CompositeMode::Cef => {
-                if let Some(ref mut frontend) = self.frontend {
-                    frontend.backend.send_mouse_event(event);
-                    return true;
-                }
-            }
-            #[cfg(not(feature = "cef"))]
-            CompositeMode::Cef => {}
             #[cfg(feature = "dioxus")]
             CompositeMode::Dioxus => {
                 if let Some(ref mut renderer) = self.dioxus_renderer {
@@ -120,21 +111,12 @@ impl<'w, 's> FrontendBackend<'w, 's> {
     /// Returns true if the event was sent successfully, false if no backend is available.
     pub fn send_keyboard_event(&mut self, event: KeyboardEvent) -> bool {
         match self.config.composite_mode {
-            CompositeMode::Capture | CompositeMode::Overlay => {
+            CompositeMode::Capture | CompositeMode::Overlay | CompositeMode::Cef => {
                 if let Some(ref mut frontend) = self.frontend {
                     frontend.backend.send_keyboard_event(event);
                     return true;
                 }
             }
-            #[cfg(feature = "cef")]
-            CompositeMode::Cef => {
-                if let Some(ref mut frontend) = self.frontend {
-                    frontend.backend.send_keyboard_event(event);
-                    return true;
-                }
-            }
-            #[cfg(not(feature = "cef"))]
-            CompositeMode::Cef => {}
             #[cfg(feature = "dioxus")]
             CompositeMode::Dioxus => {
                 if let Some(ref mut renderer) = self.dioxus_renderer {

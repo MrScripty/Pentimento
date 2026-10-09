@@ -19,6 +19,12 @@ use crate::frontend_input::{FrontendInputBlockState, FrontendScenePointerInput};
 /// Resource tracking paint tool state
 #[derive(Resource, Default)]
 pub struct PaintMode {
+    pub target: pentimento_ipc::PaintTarget,
+    pub direct_target: Option<Entity>,
+    pub target_notice: Option<String>,
+    pub direct_source_entity: Option<Entity>,
+    pub direct_source_visibility: Option<Visibility>,
+    pub direct_camera_locked: Option<bool>,
     /// Whether paint mode is currently active
     pub active: bool,
     /// Current stroke state, if a stroke is in progress
@@ -50,6 +56,12 @@ pub struct StrokeIdGenerator {
 }
 
 impl StrokeIdGenerator {
+    pub(crate) fn document_next_id(&self) -> u64 {
+        self.next_id
+    }
+    pub(crate) fn from_document(next_id: u64) -> Self {
+        Self { next_id }
+    }
     /// Generate the next unique stroke ID
     pub fn next(&mut self) -> u64 {
         let id = self.next_id;
@@ -110,7 +122,7 @@ impl Plugin for PaintModePlugin {
 }
 
 /// Handle paint mode toggle (Shift+Tab)
-fn handle_paint_mode_toggle(
+pub(crate) fn handle_paint_mode_toggle(
     key_input: Res<ButtonInput<KeyCode>>,
     mut paint_mode: ResMut<PaintMode>,
     edit_mode: Res<crate::EditModeState>,
@@ -167,7 +179,8 @@ pub(super) fn handle_paint_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut window_events: MessageReader<WindowEvent>,
-    mut last_cursor: Local<Option<Vec2>>,
+    mut last_cursor: Local<(Option<Vec2>, u64)>,
+    project: Option<Res<crate::project::ProjectState>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     plane_query: Query<(&GlobalTransform, &CanvasPlane)>,
     active_plane: Res<ActiveCanvasPlane>,
@@ -180,6 +193,10 @@ pub(super) fn handle_paint_input(
     mut painting: ResMut<crate::PaintingResource>,
     mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
+    let generation = project.as_ref().map_or(0, |p| p.generation);
+    if last_cursor.1 != generation {
+        *last_cursor = (None, generation);
+    }
     let Ok((window_entity, window)) = windows.single() else {
         window_events.clear();
         return;
@@ -190,12 +207,12 @@ pub(super) fn handle_paint_input(
         .as_ref()
         .and_then(|input| input.events(window_entity));
     let batch = arbitrated.map_or(raw_batch, |events| events.to_vec());
-    let mut cursor = *last_cursor;
+    let mut cursor = last_cursor.0;
     let mut has_movement = false;
     for event in &batch {
         if let WindowEvent::CursorMoved(event) = event {
             if event.window == window_entity {
-                *last_cursor = Some(event.position);
+                last_cursor.0 = Some(event.position);
                 has_movement = true;
             }
         }
@@ -219,13 +236,13 @@ pub(super) fn handle_paint_input(
             paint_events.write(PaintEvent::StrokeEnd);
         }
         if !window.focused {
-            *last_cursor = None;
+            last_cursor.0 = None;
             paint_mode.sample_color = false;
             paint_mode.sample_press_owned = false;
         }
         return;
     }
-    if !paint_mode.active {
+    if !paint_mode.active || paint_mode.target != pentimento_ipc::PaintTarget::Canvas {
         paint_mode.sample_color = false;
         if !mouse_button.pressed(MouseButton::Left) {
             paint_mode.sample_press_owned = false;
@@ -262,7 +279,7 @@ pub(super) fn handle_paint_input(
         match event {
             WindowEvent::CursorMoved(event) if event.window == window_entity => {
                 cursor = (!focus_lost).then_some(event.position);
-                *last_cursor = cursor;
+                last_cursor.0 = cursor;
                 if let Some(state) = paint_mode.current_stroke.as_mut() {
                     if let Some((world_pos, uv_pos)) = hit(event.position) {
                         emit_move(state, world_pos, uv_pos, current_time, &mut paint_events);
@@ -337,7 +354,7 @@ pub(super) fn handle_paint_input(
                         paint_events.write(PaintEvent::StrokeEnd);
                     }
                     cursor = None;
-                    *last_cursor = None;
+                    last_cursor.0 = None;
                 }
             }
             WindowEvent::KeyboardInput(event)
