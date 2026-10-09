@@ -149,6 +149,25 @@ await receive({ type: 'EditModeChanged', data: { mode: 'None' } });
 await receive({ type: 'EditModeChanged', data: { mode: 'Sculpt' } });
 assert.equal(Number(await page.locator('#sculpt-radius').inputValue()), Number(sculpt.radius.toFixed(2)));
 assert.equal(Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue()), Number(sculpt.radius.toFixed(2)));
+// A clamped commit must update the real DOM even when normalized state is unchanged.
+const radiusNumber = page.getByRole('spinbutton', { name: 'Radius value', exact: true });
+for (const [current, draft] of [[10, '100'], [0.01, '-100']]) {
+    sculpt.radius = current; await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+    const commandCount = await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length);
+    await radiusNumber.fill(draft);
+    assert.equal(await radiusNumber.inputValue(), draft, 'allow an uncommitted numeric draft');
+    assert.equal(await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length), commandCount);
+    await radiusNumber.press('Enter');
+    assert.equal(Number(await radiusNumber.inputValue()), current, 'committed number must show its clamp');
+    assert.equal(Number(await sculptRadius.inputValue()), current);
+    assert.deepEqual((await lastCommand('SculptCommand')).data, { SetRadius: { radius: current } });
+}
+sculpt.radius = Math.fround(requestedRadius); await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+const finiteCommandCount = await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length);
+await radiusNumber.fill('');
+assert.equal(await radiusNumber.inputValue(), '', 'allow an empty draft while editing');
+await radiusNumber.press('Enter');
+assert.equal(await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length), finiteCommandCount, 'invalid commit must not send a command');
 assert.equal(await smoothingValue.inputValue(), '20');
 await page.screenshot({ path: `${output}/sculpt-brush-controls.jpg`, type: 'jpeg', quality: 85 });
 // History availability comes from the native owner; buttons emit real protocol commands.
