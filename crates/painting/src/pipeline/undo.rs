@@ -1,7 +1,6 @@
 //! Undo functionality for the painting pipeline
 
 use std::collections::HashMap;
-use tracing::debug;
 
 use crate::tiles::{TileCoord, TiledSurface};
 
@@ -65,7 +64,11 @@ impl PaintingPipeline {
 
     /// Check if undo is available
     pub fn can_undo(&self) -> bool {
-        !self.is_stroking() && !self.undo_stack.is_empty()
+        !self.is_stroking()
+            && self
+                .undo_stack
+                .last()
+                .is_some_and(|e| self.layers.layer(e.layer_id).is_some())
     }
 
     /// Get the number of undo levels available
@@ -73,37 +76,64 @@ impl PaintingPipeline {
         self.undo_stack.len()
     }
 
-    /// Undo the last stroke
-    ///
-    /// Finish or cancel an active stroke before undoing committed history.
-    /// Returns true if an undo was performed, false if unavailable.
+    /// Redo is unavailable while a live transaction owns its pixel baseline.
+    pub fn can_redo(&self) -> bool {
+        !self.is_stroking()
+            && self
+                .redo_stack
+                .last()
+                .is_some_and(|e| self.layers.layer(e.layer_id).is_some())
+    }
+
+    pub fn redo_count(&self) -> usize {
+        self.redo_stack.len()
+    }
+
+    /// Restore a committed stroke's captured preimage and retain its result for Redo.
     pub fn undo(&mut self) -> bool {
+        self.exchange_history(false)
+    }
+
+    /// Restore the exact committed pixels, without replaying input or emitting packets.
+    pub fn redo(&mut self) -> bool {
+        self.exchange_history(true)
+    }
+
+    fn exchange_history(&mut self, redo: bool) -> bool {
         if self.is_stroking() {
             return false;
         }
-        let Some(entry) = self.undo_stack.pop() else {
-            debug!("Undo: no entries available");
+        let stack = if redo {
+            &mut self.redo_stack
+        } else {
+            &mut self.undo_stack
+        };
+        let Some(entry) = stack.last() else {
             return false;
         };
-
-        debug!(
-            "Undoing stroke {} on layer {} ({} tiles)",
-            entry.stroke_id,
-            entry.layer_id,
-            entry.tiles.len()
-        );
-
-        // Find the layer this stroke was on and restore tiles
-        let layer_id = entry.layer_id;
-        if let Some(layer) = self.layers.layer_mut(layer_id) {
-            for (coord, tile_data) in &entry.tiles {
-                restore_tile(&mut layer.surface, *coord, tile_data);
-            }
-            true
-        } else {
-            debug!("Undo: layer {} not found", layer_id);
-            false
+        // Refusal leaves the cursor intact if an external layer edit removed the owner.
+        let Some(layer) = self.layers.layer_mut(entry.layer_id) else {
+            return false;
+        };
+        let inverse = UndoEntry {
+            stroke_id: entry.stroke_id,
+            layer_id: entry.layer_id,
+            tiles: entry
+                .tiles
+                .keys()
+                .map(|coord| (*coord, layer.surface.get_tile_data(*coord)))
+                .collect(),
+        };
+        for (coord, pixels) in &entry.tiles {
+            restore_tile(&mut layer.surface, *coord, pixels);
         }
+        stack.pop();
+        if redo {
+            self.undo_stack.push(inverse);
+        } else {
+            self.redo_stack.push(inverse);
+        }
+        true
     }
 }
 

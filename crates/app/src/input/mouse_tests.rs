@@ -113,6 +113,9 @@ fn native_batch(app: &mut App, events: &[WindowEvent]) {
             WindowEvent::MouseWheel(event) => {
                 app.world_mut().write_message(event);
             }
+            WindowEvent::TouchInput(event) => {
+                app.world_mut().write_message(event);
+            }
             WindowEvent::KeyboardInput(event) => {
                 app.world_mut().write_message(event);
             }
@@ -837,6 +840,166 @@ fn native_paint_separate_frame_positive_control() {
     native_paint_control();
 }
 
+fn history_key(window: Entity, key_code: KeyCode, pressed: bool) -> WindowEvent {
+    WindowEvent::KeyboardInput(KeyboardInput {
+        window,
+        key_code,
+        logical_key: match key_code {
+            KeyCode::ControlLeft => Key::Control,
+            KeyCode::ShiftLeft => Key::Shift,
+            _ => Key::Character("z".into()),
+        },
+        state: if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        },
+        text: None,
+        repeat: false,
+    })
+}
+
+#[test]
+fn native_paint_complete_history_chords_restore_real_pixels_without_replay() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    for event in native_paint_gesture(window) {
+        native_batch(&mut app, &[event]);
+    }
+    let after = native_paint_pixels(&app);
+    assert_ne!(after, before);
+    native_batch(
+        &mut app,
+        &[
+            history_key(window, KeyCode::ControlLeft, true),
+            history_key(window, KeyCode::KeyZ, true),
+            history_key(window, KeyCode::KeyZ, false),
+            history_key(window, KeyCode::ControlLeft, false),
+        ],
+    );
+    assert!(
+        native_paint_pixels(&app) == before,
+        "batched Ctrl+Z must restore actual tiles"
+    );
+    native_batch(
+        &mut app,
+        &[
+            history_key(window, KeyCode::ControlLeft, true),
+            history_key(window, KeyCode::ShiftLeft, true),
+            history_key(window, KeyCode::KeyZ, true),
+            history_key(window, KeyCode::KeyZ, false),
+            history_key(window, KeyCode::ShiftLeft, false),
+            history_key(window, KeyCode::ControlLeft, false),
+        ],
+    );
+    assert!(
+        native_paint_pixels(&app) == after,
+        "batched Ctrl+Shift+Z must restore actual tiles"
+    );
+    assert_native_paint_complete(&app, 1);
+    assert_eq!(
+        app.world()
+            .resource::<pentimento_scene::PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .redo_count(),
+        0
+    );
+}
+
+#[test]
+fn native_paint_history_rejects_ui_owned_repeats_and_focus_loss_without_replay() {
+    for case in ["ui", "repeat", "focus"] {
+        let (mut app, window) = native_paint_fixture();
+        for event in native_paint_gesture(window) {
+            native_batch(&mut app, &[event]);
+        }
+        let after = native_paint_pixels(&app);
+        let mut trigger = history_key(window, KeyCode::KeyZ, true);
+        if case == "repeat" {
+            // A held key's repeat must never consume another history entry.
+            native_batch(&mut app, &[history_key(window, KeyCode::KeyZ, true)]);
+            if let WindowEvent::KeyboardInput(event) = &mut trigger {
+                event.repeat = true;
+            }
+        }
+        let mut events = vec![history_key(window, KeyCode::ControlLeft, true), trigger];
+        if case == "ui" {
+            app.world_mut()
+                .resource_mut::<FrontendInputBlockState>()
+                .block_keyboard = true;
+        } else if case == "focus" {
+            events.push(WindowEvent::KeyboardFocusLost(
+                bevy::input::keyboard::KeyboardFocusLost,
+            ));
+        }
+        native_batch(&mut app, &events);
+        assert!(
+            native_paint_pixels(&app) == after,
+            "{case}: history must not run"
+        );
+        app.world_mut()
+            .resource_mut::<FrontendInputBlockState>()
+            .block_keyboard = false;
+        native_batch(&mut app, &[]);
+        assert!(
+            native_paint_pixels(&app) == after,
+            "{case}: blocked input must not replay"
+        );
+        assert_native_paint_complete(&app, 1);
+    }
+}
+
+#[test]
+fn native_paint_history_focus_regain_admits_the_next_fresh_shortcut() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    for event in native_paint_gesture(window) {
+        native_batch(&mut app, &[event]);
+    }
+    native_batch(
+        &mut app,
+        &[
+            WindowEvent::KeyboardFocusLost(bevy::input::keyboard::KeyboardFocusLost),
+            WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window,
+                focused: false,
+            }),
+            WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window,
+                focused: true,
+            }),
+        ],
+    );
+    assert_native_paint_complete(&app, 1);
+    native_batch(
+        &mut app,
+        &[
+            history_key(window, KeyCode::ControlLeft, true),
+            history_key(window, KeyCode::KeyZ, true),
+            history_key(window, KeyCode::KeyZ, false),
+            history_key(window, KeyCode::ControlLeft, false),
+        ],
+    );
+    assert!(
+        native_paint_pixels(&app) == before,
+        "old focus losses must be fully consumed"
+    );
+    let pipeline = app
+        .world()
+        .resource::<pentimento_scene::PaintingResource>()
+        .get_pipeline(7)
+        .unwrap();
+    assert_eq!(pipeline.undo_count(), 0);
+    assert_eq!(pipeline.redo_count(), 1);
+    assert_eq!(
+        pipeline.log().total_packet_count(),
+        1,
+        "Undo must not append replay packets"
+    );
+    assert!(!pipeline.is_stroking());
+}
+
 #[test]
 fn native_paint_stationary_press_after_ui_closes_uses_current_origin() {
     let (mut control, control_window) = native_paint_fixture();
@@ -1124,4 +1287,132 @@ fn native_paint_stationary_stroke_closes_when_new_ui_layout_covers_cursor() {
         &[button(window, bevy::input::mouse::MouseButton::Left, false)],
     );
     assert_native_paint_complete(&app, 1);
+}
+
+#[test]
+fn project_dialog_layout_routes_native_clicks_to_ui_without_canvas_stroke() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions: vec![LayoutRegion {
+                id: "project-dialog".into(),
+                x: 0.,
+                y: 0.,
+                width: 800.,
+                height: 600.,
+                z_index: 150,
+                accepts_keyboard: true
+            }]
+        })
+    ));
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 350., 310.),
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+            moved(window, 410., 330.),
+            button(window, bevy::input::mouse::MouseButton::Left, false),
+        ],
+    );
+    assert_native_paint_complete(&app, 0);
+    assert_eq!(
+        native_paint_pixels(&app),
+        before,
+        "file dialog pointer events cannot paint through into the canvas"
+    );
+}
+
+#[test]
+fn open_resets_old_document_hover_before_native_stationary_press() {
+    use bevy::pbr::MeshMaterial3d;
+    use pentimento_ipc::ProjectCommand;
+    let (mut control, window) = native_paint_fixture();
+    native_batch(
+        &mut control,
+        &[
+            moved(window, 450., 330.),
+            button(window, MouseButton::Left, true),
+            button(window, MouseButton::Left, false),
+        ],
+    );
+    let expected = native_paint_pixels(&control);
+    assert_native_paint_complete(&control, 1);
+
+    let (mut app, window) = native_paint_fixture();
+    app.init_resource::<Assets<Mesh>>();
+    let plane = app
+        .world()
+        .resource::<pentimento_scene::ActiveCanvasPlane>()
+        .entity
+        .unwrap();
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(4., 4.));
+    app.world_mut()
+        .entity_mut(plane)
+        .insert((Mesh3d(mesh), Transform::default()));
+    // The production canvas setup already supplied its actual display material.
+    assert!(
+        app.world()
+            .get::<MeshMaterial3d<StandardMaterial>>(plane)
+            .is_some()
+    );
+    native_batch(&mut app, &[moved(window, 300., 300.)]);
+    let directory =
+        std::env::temp_dir().join(format!("pentimento-open-hover-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory
+        .join("owned.pentimento.json")
+        .to_string_lossy()
+        .into_owned();
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::ProjectCommand(ProjectCommand::Save { path: path.clone() })
+    ));
+    assert!(std::path::Path::new(&path).is_file());
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions: vec![LayoutRegion {
+                id: "project-dialog".into(),
+                x: 0.,
+                y: 0.,
+                width: 800.,
+                height: 600.,
+                z_index: 150,
+                accepts_keyboard: true,
+            }]
+        })
+    ));
+    native_batch(&mut app, &[moved(window, 450., 330.)]);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::ProjectCommand(ProjectCommand::Open { path })
+    ));
+    assert_eq!(pentimento_scene::project_generation(app.world()), 1);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo { regions: vec![] })
+    ));
+    // Re-enter the paint mode used by this production native-input fixture.
+    app.world_mut()
+        .resource_mut::<pentimento_scene::PaintMode>()
+        .active = true;
+    native_batch(
+        &mut app,
+        &[
+            button(window, MouseButton::Left, true),
+            button(window, MouseButton::Left, false),
+        ],
+    );
+    assert_native_paint_complete(&app, 1);
+    assert_eq!(
+        native_paint_pixels(&app),
+        expected,
+        "the new document must use current Window cursor B rather than old document hover A"
+    );
+    std::fs::remove_dir_all(directory).unwrap();
 }

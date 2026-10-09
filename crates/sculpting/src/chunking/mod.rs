@@ -15,6 +15,10 @@
 //! - [`BoundaryVertex`] - Tracks vertices shared between adjacent chunks
 
 mod boundary;
+#[cfg(feature = "bevy")]
+mod project;
+#[cfg(feature = "bevy")]
+pub use project::ChunkedDocument;
 pub mod merge;
 pub mod partition;
 

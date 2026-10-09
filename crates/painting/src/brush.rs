@@ -4,10 +4,11 @@
 //! points and generates dabs for painting. This is a placeholder for
 //! future libmypaint FFI integration.
 
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 /// Brush preset configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrushPreset {
     /// Unique preset ID
     pub id: u32,
