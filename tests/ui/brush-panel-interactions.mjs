@@ -185,7 +185,7 @@ await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 1, redo_stro
 assert.equal(await sculptUndo.isDisabled(), true);
 assert.equal(await sculptRedo.isDisabled(), true);
 await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: false, notice: 'This stroke exceeds the local history limit and cannot be undone.' } });
-assert.match(await page.getByRole('status').textContent(), /cannot be undone/);
+assert.match(await page.getByRole('region', { name: 'Sculpt brushes', exact: true }).getByRole('status').textContent(), /cannot be undone/);
 // Mode unmount/remount keeps each backend-owned brush independently.
 for (const mode of ['None', 'Paint', 'Sculpt', 'Paint']) await receive({ type: 'EditModeChanged', data: { mode } });
 assert.equal(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue(), '25');
