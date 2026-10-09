@@ -27,7 +27,7 @@ pentimento-ipc = { path = "../ipc" }
 painting = { path = "../painting", features = ["bevy"] }
 sculpting = { path = "../sculpting", features = ["bevy"], optional = true }
 bytemuck = { workspace = true }
-wgpu = "27"
+wgpu = "=30.0.1"
 
 bevy = { workspace = true, default-features = false, features = [
     "bevy_core_pipeline",

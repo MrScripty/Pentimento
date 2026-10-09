@@ -24,8 +24,8 @@ repository = "https://github.com/puma/pentimento"
 
 [workspace.dependencies]
 # Core
-bevy = { version = "0.18", default-features = false }
-glam = "0.30"
+bevy = { version = "=0.20.0", default-features = false }
+glam = "=0.33.12"
 tokio = { version = "1.44", features = ["sync", "rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
@@ -54,11 +54,11 @@ dioxus = "0.7"
 dioxus-native = "0.7"
 
 # Vello (GPU-accelerated 2D renderer used by Blitz)
-# Version 0.7.0 uses wgpu 27 which is compatible with Bevy 0.18
-vello = "0.7"
-bevy_egui = "0.39.1"
+# Vello must share Bevy 0.20's wgpu 30 device with the Dioxus adapter.
+vello = "=0.11.0"
+bevy_egui = "=0.43.0-rc.1"
 # Presentation widgets share the plugin's egui version without pulling its renderer.
-egui = "0.33.3"
+egui = "=0.36.2"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

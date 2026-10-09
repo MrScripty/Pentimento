@@ -22,29 +22,29 @@ bevy = { workspace = true }
 vello = { workspace = true }
 
 # Re-export wgpu types for the renderer interface
-wgpu = "27"
+wgpu = "=30.0.1"
 
-# Blitz rendering pipeline: keep the AnyRender 0.7 / Vello 0.7 / wgpu 27 cohort together.
-blitz-dom = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
-blitz-paint = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
-blitz-traits = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
-dioxus-native-dom = { git = "https://github.com/DioxusLabs/blitz.git", rev = "f83b2bc049aae41275b248e8709586a0b267591e" }
+# Blitz rendering pipeline shares the AnyRender 0.14 / Vello 0.11 / wgpu 30 cohort.
+blitz-dom = { git = "https://github.com/DioxusLabs/blitz.git", rev = "74fe1abf090732524c86d96e6cdb6f95d8f8d6dc" }
+blitz-paint = { git = "https://github.com/DioxusLabs/blitz.git", rev = "74fe1abf090732524c86d96e6cdb6f95d8f8d6dc" }
+blitz-traits = { git = "https://github.com/DioxusLabs/blitz.git", rev = "74fe1abf090732524c86d96e6cdb6f95d8f8d6dc" }
+dioxus-native-dom = { git = "https://github.com/DioxusLabs/blitz.git", rev = "74fe1abf090732524c86d96e6cdb6f95d8f8d6dc" }
 
 # AnyRender - the 2D drawing abstraction
-anyrender = "0.7"
-anyrender_vello = "0.7"
+anyrender = "=0.14.0"
+anyrender_vello = "=0.15.0"
 
 # Layout (used by blitz-dom)
-taffy = "0.9"
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "2d936b7701f64b0fe95e50f1bfdcfc65a9f88f6f" }
 
 # Curve/path types
-peniko = "0.6"
-kurbo = "0.13"
+peniko = "=0.6.1"
+kurbo = "=0.13.1"
 keyboard-types = "0.7"
 
 # Asset loading and document support (matching official Bevy example)
-dioxus-asset-resolver = { git = "https://github.com/DioxusLabs/dioxus.git", branch = "main", features = ["native"] }
-dioxus-devtools = { git = "https://github.com/DioxusLabs/dioxus.git", branch = "main", optional = true }
+dioxus-asset-resolver = { version = "=0.7.10", features = ["native"] }
+dioxus-devtools = { version = "=0.7.10", optional = true }
 crossbeam-channel = "0.5"
 data-url = "0.3"
 bytes = "1.0"
