@@ -1355,3 +1355,112 @@ fn open_resets_old_document_hover_before_native_stationary_press() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+fn confirm_new_in_native_fixture(app: &mut App) {
+    app.init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<Image>>()
+        .init_resource::<Assets<StandardMaterial>>()
+        .init_resource::<pentimento_scene::PaintingResource>();
+    let generation = pentimento_scene::project_generation(app.world());
+    crate::render::dispatch_ui_commands(
+        app.world_mut(),
+        [UiToBevy::ProjectCommand(
+            pentimento_ipc::ProjectCommand::New {
+                expected_generation: generation.to_string(),
+                confirm_discard: true,
+            },
+        )],
+    );
+    assert_eq!(
+        pentimento_scene::project_generation(app.world()),
+        generation + 1
+    );
+}
+#[test]
+fn new_suppresses_old_held_mouse_until_release_and_allows_fresh_scene_press() {
+    let (mut app, window, _) = fixture();
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 350., 310.),
+            button(window, MouseButton::Left, true),
+        ],
+    );
+    native_batch(&mut app, &[]); // old press was consumed; no active editing mode owns it
+    confirm_new_in_native_fixture(&mut app);
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 400., 330.),
+            button(window, MouseButton::Left, true),
+        ],
+    );
+    assert!(
+        !app.world()
+            .resource::<pentimento_scene::FrontendScenePointerInput>()
+            .has_scene_press()
+    );
+    assert!(
+        app.world()
+            .resource::<FrontendInputBlockState>()
+            .blocks_pointer()
+    );
+    native_batch(&mut app, &[button(window, MouseButton::Left, false)]);
+    native_batch(&mut app, &[button(window, MouseButton::Left, true)]);
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::FrontendScenePointerInput>()
+            .has_scene_press()
+    );
+}
+#[test]
+fn new_suppresses_old_touch_until_end_and_releases_old_ui_capture() {
+    use bevy::input::touch::{TouchInput, TouchPhase};
+    let (mut app, window, recorded) = fixture();
+    let contact = |id, phase| {
+        WindowEvent::TouchInput(TouchInput {
+            window,
+            id,
+            phase,
+            position: Vec2::new(650., 100.),
+            force: None,
+        })
+    };
+    native_batch(&mut app, &[contact(17, TouchPhase::Started)]);
+    assert!(app.world().resource::<FrontendUiLayout>().pointer_captured);
+    confirm_new_in_native_fixture(&mut app);
+    recorded.borrow_mut().clear();
+    native_batch(
+        &mut app,
+        &[
+            contact(17, TouchPhase::Moved),
+            contact(18, TouchPhase::Started),
+        ],
+    );
+    assert!(!app.world().resource::<FrontendUiLayout>().pointer_captured);
+    assert!(
+        app.world()
+            .resource::<FrontendInputBlockState>()
+            .blocks_pointer()
+    );
+    assert!(
+        recorded
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, Recorded::Mouse(MouseEvent::ButtonUp { .. })))
+    );
+    assert!(
+        !recorded
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, Recorded::Mouse(MouseEvent::ButtonDown { .. })))
+    );
+    native_batch(
+        &mut app,
+        &[
+            contact(17, TouchPhase::Ended),
+            contact(18, TouchPhase::Started),
+        ],
+    );
+    assert!(app.world().resource::<FrontendUiLayout>().pointer_captured);
+}

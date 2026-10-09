@@ -1218,3 +1218,300 @@ fn malformed_chunk_references_and_geometric_degeneracy_never_replace_document() 
         assert_eq!(serialize(&document(&mut app)).unwrap(), pristine);
     }
 }
+
+fn new(app: &mut App, generation: u64, confirmed: bool) -> bool {
+    command(
+        app,
+        ProjectCommand::New {
+            expected_generation: generation.to_string(),
+            confirm_discard: confirmed,
+        },
+    )
+}
+
+#[test]
+fn new_cancel_stale_pending_and_active_refusal_preserve_owned_document_and_history() {
+    let dir = OwnedDirectory::new();
+    let path = dir.file("old");
+    let (mut app, _) = editor();
+    {
+        let mut p = app.world_mut().resource_mut::<PaintingResource>();
+        let p = p.get_pipeline_mut(0).unwrap();
+        p.begin_stroke(0, 91, 0);
+        p.stroke_to(1., 1., 1.);
+        p.end_stroke();
+        p.set_color([0., 1., 0., 1.]);
+        p.begin_stroke(0, 92, 0);
+        p.stroke_to(1., 1., 1.);
+        p.end_stroke();
+        assert!(p.undo());
+        assert!(p.can_undo() && p.can_redo());
+    }
+    assert!(save(&mut app, &path));
+    let before = serialize(&document(&mut app)).unwrap();
+    let assets = counts(&app);
+    let bytes = read_bounded(&path).unwrap();
+    for (generation, confirmed) in [(0, false), (1, true)] {
+        assert!(!new(&mut app, generation, confirmed));
+        assert_eq!(serialize(&document(&mut app)).unwrap(), before);
+        assert_eq!(counts(&app), assets);
+        assert_eq!(
+            app.world().resource::<ProjectState>().original.as_ref(),
+            Some(&bytes)
+        );
+    }
+    app.add_message::<crate::CanvasPlaneEvent>();
+    app.world_mut()
+        .write_message(crate::CanvasPlaneEvent::CreateInFrontOfCamera {
+            width: 2,
+            height: 2,
+        });
+    assert!(!new(&mut app, 0, true));
+    clear_messages::<crate::CanvasPlaneEvent>(app.world_mut());
+    let window = app.world_mut().spawn_empty().id();
+    app.init_resource::<crate::FrontendScenePointerInput>();
+    app.world_mut()
+        .resource_mut::<crate::FrontendScenePointerInput>()
+        .publish(
+            window,
+            vec![bevy::window::WindowEvent::MouseButtonInput(
+                bevy::input::mouse::MouseButtonInput {
+                    window,
+                    button: MouseButton::Left,
+                    state: bevy::input::ButtonState::Pressed,
+                },
+            )],
+        );
+    assert!(!new(&mut app, 0, true));
+    app.world_mut()
+        .resource_mut::<crate::FrontendScenePointerInput>()
+        .clear();
+    app.world_mut()
+        .resource_mut::<PaintingResource>()
+        .get_pipeline_mut(0)
+        .unwrap()
+        .begin_stroke(0, 92, 0);
+    assert!(!new(&mut app, 0, true));
+    assert!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(0)
+            .unwrap()
+            .is_stroking()
+    );
+    app.world_mut()
+        .resource_mut::<PaintingResource>()
+        .get_pipeline_mut(0)
+        .unwrap()
+        .cancel_stroke();
+    assert_eq!(serialize(&document(&mut app)).unwrap(), before);
+    assert!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(0)
+            .unwrap()
+            .can_undo()
+    );
+    assert_eq!(
+        app.world().resource::<ProjectState>().path.as_ref(),
+        Some(&path)
+    );
+    assert!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(0)
+            .unwrap()
+            .can_redo()
+    );
+    assert_eq!(read_bounded(&path).unwrap(), bytes);
+    assert_eq!(project_generation(app.world()), 0);
+}
+
+#[test]
+fn confirmed_new_resets_owner_defaults_history_and_identities_and_save_as_works() {
+    let dir = OwnedDirectory::new();
+    let old = dir.file("old");
+    let fresh = dir.file("fresh");
+    let (mut app, _) = editor();
+    {
+        let mut p = app.world_mut().resource_mut::<PaintingResource>();
+        let p = p.get_pipeline_mut(0).unwrap();
+        p.begin_stroke(0, 9, 0);
+        p.stroke_to(1., 1., 1.);
+        p.end_stroke();
+        assert!(p.can_undo());
+    }
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<crate::MainCamera>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert(crate::OrbitCamera {
+            distance: 37.,
+            ..default()
+        });
+    app.init_resource::<crate::SceneLighting>()
+        .init_resource::<crate::SceneAmbientOcclusion>();
+    assert!(save(&mut app, &old));
+    let bytes = read_bounded(&old).unwrap();
+    // A blocked external file owner must not prevent starting a separate document.
+    app.world_mut().resource_mut::<ProjectState>().blocked = true;
+    assert!(new(&mut app, 0, true));
+    assert_eq!(project_generation(app.world()), 1);
+    let state = app.world().resource::<ProjectState>();
+    assert!(state.path.is_none() && state.original.is_none() && !state.blocked);
+    assert!(document_entities(app.world_mut()).is_empty());
+    assert_eq!(
+        app.world()
+            .get::<crate::OrbitCamera>(camera)
+            .unwrap()
+            .distance,
+        crate::OrbitCamera::default().distance
+    );
+    let doc = document(&mut app);
+    assert!(doc.objects.is_empty());
+    assert_eq!(
+        (
+            doc.next_object_id,
+            doc.next_plane_id,
+            doc.next_mesh_id,
+            doc.next_stroke_id,
+            doc.object_counter
+        ),
+        (1, 0, 0, 0, 0)
+    );
+    assert!(
+        app.world()
+            .resource::<PaintingResource>()
+            .get_pipeline(0)
+            .is_none()
+    );
+    let messages = &app.world().resource::<OutboundUiMessages>().messages;
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        BevyToUi::PaintBrushStateChanged {
+            can_undo: false,
+            can_redo: false,
+            ..
+        }
+    )));
+    #[cfg(feature = "sculpting")]
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        BevyToUi::SculptHistoryChanged {
+            undo_strokes: 0,
+            redo_strokes: 0,
+            active: false,
+            ..
+        }
+    )));
+    assert!(!new(&mut app, 0, true)); // an old still-open confirmation cannot replace again
+    assert!(save(&mut app, &fresh));
+    assert_eq!(read_bounded(&old).unwrap(), bytes);
+    assert!(
+        parse(&read_bounded(&fresh).unwrap())
+            .unwrap()
+            .objects
+            .is_empty()
+    );
+    assert!(open(&mut app, &fresh));
+    assert_eq!(project_generation(app.world()), 2);
+}
+
+#[test]
+fn new_preflight_failure_keeps_document_owner_generation_and_assets() {
+    let (mut app, _) = editor();
+    let before = serialize(&document(&mut app)).unwrap();
+    let assets = app.world_mut().remove_resource::<Assets<Image>>().unwrap();
+    assert!(!new(&mut app, 0, true));
+    assert_eq!(project_generation(app.world()), 0);
+    app.world_mut().insert_resource(assets);
+    assert_eq!(serialize(&document(&mut app)).unwrap(), before);
+}
+
+#[cfg(feature = "sculpting")]
+#[test]
+fn new_cancel_preserves_genuine_sculpt_redo_and_confirmed_new_releases_geometry_and_history() {
+    let (mut app, target) = editor();
+    let mut geometry = sculpt_fixture();
+    let original = geometry.clone();
+    let mut pipeline = sculpting::SculptingPipeline::with_config(
+        sculpting::BrushPreset {
+            radius: 0.75,
+            strength: 0.015,
+            spacing: 0.,
+            autosmooth: 0.,
+            ..sculpting::BrushPreset::push()
+        },
+        sculpting::PipelineConfig {
+            tessellation_enabled: false,
+            rebalance_after_stroke: false,
+            ..default()
+        },
+    );
+    pipeline.reset_history(7, &mut geometry, None).unwrap();
+    let input = |x| sculpting::BrushInput {
+        position: Vec3::new(x, 0., 1.),
+        normal: Vec3::Z,
+        pressure: 1.,
+        timestamp_ms: 1,
+    };
+    pipeline.begin_stroke(7, input(0.));
+    assert!(
+        pipeline
+            .process_input(input(0.01), &mut geometry)
+            .rejected
+            .is_none()
+    );
+    assert!(pipeline.end_stroke(&mut geometry).rejected.is_none());
+    assert_eq!(pipeline.history_status().undo_strokes, 1);
+    assert!(pipeline.restore_history(&mut geometry, false).unwrap());
+    assert_eq!(pipeline.history_status().redo_strokes, 1);
+    assert!(geometry.same_authoritative_state(&original));
+    let render = sculpting::merge_chunks(&geometry).mesh.to_bevy_mesh();
+    let rendered = MeshDocument::capture(&render).unwrap();
+    let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(render);
+    app.world_mut().entity_mut(target).insert((
+        Mesh3d(handle),
+        ProjectSculptGeometry {
+            mesh: geometry.clone(),
+            rendered,
+        },
+    ));
+    let chunk = app.world_mut().spawn_empty().id();
+    *app.world_mut()
+        .resource_mut::<crate::sculpt_mode::SculptingData>() = crate::sculpt_mode::SculptingData {
+        chunked_mesh: Some(geometry),
+        pipeline: Some(pipeline),
+        chunk_entities: vec![chunk],
+        ..default()
+    };
+    assert!(!new(&mut app, 0, false));
+    let sculpt = app.world().resource::<crate::sculpt_mode::SculptingData>();
+    assert_eq!(
+        sculpt
+            .pipeline
+            .as_ref()
+            .unwrap()
+            .history_status()
+            .redo_strokes,
+        1
+    );
+    assert!(
+        sculpt
+            .chunked_mesh
+            .as_ref()
+            .unwrap()
+            .same_authoritative_state(&original)
+    );
+    assert!(new(&mut app, 0, true));
+    let sculpt = app.world().resource::<crate::sculpt_mode::SculptingData>();
+    assert!(
+        sculpt.pipeline.is_none()
+            && sculpt.chunked_mesh.is_none()
+            && sculpt.chunk_entities.is_empty()
+    );
+    assert!(app.world().get_entity(chunk).is_err() && app.world().get_entity(target).is_err());
+}

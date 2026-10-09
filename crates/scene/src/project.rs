@@ -29,13 +29,19 @@ pub(crate) struct ProjectSculptGeometry {
     pub rendered: MeshDocument,
 }
 #[derive(Resource, Default)]
-pub(crate) struct ProjectState {
+pub struct ProjectState {
     path: Option<PathBuf>,
     original: Option<Vec<u8>>,
     next_object_id: u64,
     notice: Option<String>,
     blocked: bool,
     pub(crate) generation: u64,
+}
+impl ProjectState {
+    /// Read-only native input boundary for document replacement.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 pub fn project_generation(world: &World) -> u64 {
     world
@@ -268,8 +274,7 @@ fn idle(world: &World) -> Result<(), String> {
             .is_some_and(|s| s.is_active)
     {
         return Err(
-            "Finish or cancel the current stroke/transform before saving or opening a project."
-                .into(),
+            "Finish or cancel the current stroke/transform before project operations.".into(),
         );
     }
     #[cfg(feature = "mesh_editing")]
@@ -277,7 +282,7 @@ fn idle(world: &World) -> Result<(), String> {
         .get_resource::<crate::MeshEditState>()
         .is_some_and(|s| s.target_entity.is_some())
     {
-        return Err("Exit mesh edit mode before saving or opening a project.".into());
+        return Err("Exit mesh edit mode before project operations.".into());
     }
     #[cfg(feature = "mesh_painting")]
     if world
@@ -980,7 +985,7 @@ fn queued<T: Message>(world: &World) -> bool {
         .get_resource::<Messages<T>>()
         .is_some_and(|m| !m.is_empty())
 }
-fn save_ready(world: &mut World) -> Result<(), String> {
+fn pending_document_commands(world: &World) -> bool {
     let pending = queued::<crate::AddObjectEvent>(world)
         || queued::<crate::CanvasPlaneEvent>(world)
         || queued::<crate::PaintEvent>(world)
@@ -992,11 +997,49 @@ fn save_ready(world: &mut World) -> Result<(), String> {
     let pending = pending || queued::<crate::MeshEditEvent>(world);
     #[cfg(feature = "mesh_painting")]
     let pending = pending || queued::<crate::MeshPaintEvent>(world);
+    pending
+}
+fn save_ready(world: &mut World) -> Result<(), String> {
+    let pending = pending_document_commands(world);
     let projection_pending = !crate::projection_painting::document_projection_settled(world);
     if pending || projection_pending {
         Err("Wait for the scene and live projection to settle, then save again; no project file was changed.".into())
     } else {
         Ok(())
+    }
+}
+fn new_document(world: &mut World) -> ProjectDocument {
+    let painting = PaintingResource::default();
+    ProjectDocument {
+        format: "pentimento-project".into(),
+        version: 2,
+        next_object_id: 1,
+        next_plane_id: 0,
+        next_mesh_id: 0,
+        next_stroke_id: 0,
+        object_counter: 0,
+        objects: Vec::new(),
+        active_canvas: None,
+        uv_receiver: None,
+        live_projection: false,
+        brush: BrushDocument {
+            paint: painting.brush_preset,
+            color: painting.brush_color,
+            blend: BlendMode::Normal,
+            sculpt: None,
+        },
+        mesh_brush: None,
+        view: world
+            .query_filtered::<Entity, With<crate::MainCamera>>()
+            .iter(world)
+            .next()
+            .map(|_| ViewDocument::capture(&crate::OrbitCamera::default())),
+        lighting: world
+            .contains_resource::<crate::SceneLighting>()
+            .then(pentimento_ipc::LightingSettings::default),
+        ambient_occlusion: world
+            .contains_resource::<crate::SceneAmbientOcclusion>()
+            .then(pentimento_ipc::AmbientOcclusionSettings::default),
     }
 }
 fn install(world: &mut World, prepared: PreparedProject) -> Result<(), String> {
@@ -1414,6 +1457,7 @@ pub(crate) fn send_state(world: &mut World) {
     let active = idle(world).is_err();
     let s = world.resource::<ProjectState>();
     let message = BevyToUi::ProjectStateChanged {
+        generation: s.generation.to_string(),
         path: s.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
         available: !cfg!(target_arch = "wasm32"),
         active,
@@ -1436,6 +1480,34 @@ pub(crate) fn dispatch(world: &mut World, command: &ProjectCommand) {
         }
         idle(world)?;
         match command {
+            ProjectCommand::New {
+                expected_generation,
+                confirm_discard,
+            } => {
+                if !confirm_discard {
+                    return Err("Confirm discarding unsaved changes and all local Undo/Redo history before creating a new project.".into());
+                }
+                if expected_generation != &project_generation(world).to_string() {
+                    return Err("The document changed while confirmation was open. Cancel and open New Project again.".into());
+                }
+                if pending_document_commands(world)
+                    || world
+                        .get_resource::<crate::FrontendScenePointerInput>()
+                        .is_some_and(|i| i.has_scene_press())
+                {
+                    return Err("Wait for pending scene commands and pointer input to settle, then create a new project again; document unchanged.".into());
+                }
+                let prepared = new_document(world).prepare()?;
+                install(world, prepared)?;
+                let mut s = world.resource_mut::<ProjectState>();
+                s.path = None;
+                s.original = None;
+                s.blocked = false;
+                s.notice = Some(
+                    "New empty project. Save As to choose a file. Undo history starts fresh."
+                        .into(),
+                );
+            }
             ProjectCommand::Save { path } => {
                 save_ready(world)?;
                 let path = PathBuf::from(path);
@@ -1510,10 +1582,10 @@ pub(crate) fn dispatch(world: &mut World, command: &ProjectCommand) {
         .unwrap_or_default();
     if let Some(mut out) = world.get_resource_mut::<OutboundUiMessages>() {
         out.send(BevyToUi::ProjectOperationFinished {
-            operation: if matches!(command, ProjectCommand::Open { .. }) {
-                "Open"
-            } else {
-                "Save"
+            operation: match command {
+                ProjectCommand::New { .. } => "New",
+                ProjectCommand::Open { .. } => "Open",
+                _ => "Save",
             }
             .into(),
             success,

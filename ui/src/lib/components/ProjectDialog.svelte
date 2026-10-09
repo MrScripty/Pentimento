@@ -2,16 +2,19 @@
     import { onMount,tick } from 'svelte';
     import { bridge } from '$lib/bridge';
     import type { ProjectState } from '$lib/types';
-    let { operation, project, onclose }: { operation:'Save'|'Open';project:ProjectState;onclose:()=>void } = $props();
+    let { operation, project, onclose }: { operation:'Save'|'Open'|'New';project:ProjectState;onclose:()=>void } = $props();
+    // Freeze the owner at confirmation creation; later state receipts cannot retarget it.
+    let generation="";
     let path=$state('');
     let pending=$state(false);
     let error=$state<string|null>(null);
-    let input:HTMLInputElement;
+    let input=$state<HTMLInputElement>();
     let dialog:HTMLDivElement;
     onMount(()=>{
         const previous=document.activeElement;
+        generation=project.generation;
         path=project.path ?? '';
-        input.focus();
+        if(operation==='New')dialog.querySelector<HTMLButtonElement>('button')?.focus();else input?.focus();
         const unsubscribe=bridge.subscribe(message=>{
             if(message.type==='ProjectOperationFinished' && message.data.operation===operation){
                 pending=false;
@@ -33,23 +36,23 @@
     }
     function submit(event:SubmitEvent){
         event.preventDefault();
-        if(pending || project.active || !project.available || !path.trim())return;
+        if(pending || project.active || !project.available || (operation!=='New' && !path.trim()))return;
         pending=true;error=null;
         void tick().then(()=>{if(pending)dialog.focus();});
-        bridge.projectCommand(operation==='Save'?{Save:{path:path.trim()}}:{Open:{path:path.trim()}});
+        bridge.projectCommand(operation==='New'?{New:{expected_generation:generation,confirm_discard:true}}:operation==='Save'?{Save:{path:path.trim()}}:{Open:{path:path.trim()}});
     }
 </script>
 <div class="project-backdrop" data-ui-region="project-dialog">
     <div bind:this={dialog} class="project-dialog" role="dialog" aria-modal="true" aria-labelledby="project-title" tabindex="-1" onkeydown={keyboard}>
-        <h2 id="project-title">{operation === 'Save' ? 'Save project' : 'Open project'}</h2>
-        <p>{operation === 'Save' ? 'Save editable geometry and paint layers to a local .pentimento.json file.' : 'Open a local .pentimento.json file and replace this document. Undo history starts fresh; live projection opens paused.'}</p>
+        <h2 id="project-title">{operation === 'New' ? 'New project' : operation === 'Save' ? 'Save project' : 'Open project'}</h2>
+        <p>{operation === 'New' ? 'Create an empty project? Any unsaved changes and all local Undo/Redo history will be discarded. Existing project files will remain on disk.' : operation === 'Save' ? 'Save editable geometry and paint layers to a local .pentimento.json file.' : 'Open a local .pentimento.json file and replace this document. Undo history starts fresh; live projection opens paused.'}</p>
         <form onsubmit={submit}>
-            <label for="project-path">Absolute local file path</label>
-            <input id="project-path" bind:this={input} bind:value={path} placeholder="/home/me/artwork.pentimento.json" required disabled={pending} />
+            {#if operation!=='New'}<label for="project-path">Absolute local file path</label>
+            <input id="project-path" bind:this={input} bind:value={path} placeholder="/home/me/artwork.pentimento.json" required disabled={pending} />{/if}
             {#if error}<p role="alert" class="error">{error}</p>{/if}
             <div class="actions">
                 <button type="button" onclick={onclose} disabled={pending}>Cancel</button>
-                <button type="submit" disabled={pending || project.active || !project.available || !path.trim()}>{pending ? 'Working…' : operation}</button>
+                <button type="submit" disabled={pending || project.active || !project.available || (operation!=='New' && !path.trim())}>{pending ? 'Working…' : operation==='New'?'Discard and create new':operation}</button>
             </div>
         </form>
     </div>

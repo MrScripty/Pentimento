@@ -61,6 +61,9 @@ pub fn trace_pointer_origin(
 /// State owned by native forwarding, independent of Bevy's final frame state.
 #[derive(Default)]
 pub struct NativeInputState {
+    generation: Option<u64>,
+    suppressed_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
+    suppressed_touch: Option<u64>,
     pending_move: Option<Vec2>,
     buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     ui_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
@@ -114,12 +117,36 @@ pub fn forward_native_input(
     mut scene_input: ResMut<pentimento_scene::FrontendScenePointerInput>,
     mut state: Local<NativeInputState>,
     paint_mode: Res<pentimento_scene::PaintMode>,
+    owner: Option<Res<pentimento_scene::ProjectOwner>>,
 ) {
     let Ok((window_id, window)) = windows.single() else {
         events.clear();
         scene_input.clear();
         return;
     };
+    let generation = owner.as_ref().map_or(0, |o| o.generation());
+    if state.generation.is_some_and(|old| old != generation) {
+        let buttons = state.buttons.clone();
+        let touch = state
+            .touch
+            .as_ref()
+            .map(|t| t.last.id)
+            .or(state.suppressed_touch);
+        let suspended = state.focus_suspended;
+        state.pending_move = None;
+        release_on_focus_loss(&mut state, &mut mouse, &mut backend);
+        *state = NativeInputState {
+            generation: Some(generation),
+            suppressed_buttons: buttons.clone(),
+            buttons,
+            suppressed_touch: touch,
+            focus_suspended: suspended,
+            ..default()
+        };
+        scene_input.clear();
+        layout.pointer_captured = false;
+    }
+    state.generation = Some(generation);
     let batch: Vec<_> = events.read().collect();
     let svelte_browser = matches!(
         config.composite_mode,
@@ -206,7 +233,14 @@ pub fn forward_native_input(
                 }
             }
             WindowEvent::MouseButtonInput(event) if event.window == window_id => {
-                if state.touch.is_some() {
+                if state.suppressed_buttons.pressed(event.button) {
+                    if !event.state.is_pressed() {
+                        state.suppressed_buttons.release(event.button);
+                        state.buttons.release(event.button);
+                    }
+                    continue;
+                }
+                if state.touch.is_some() || state.suppressed_touch.is_some() {
                     continue;
                 }
                 flush_move(&mut state, &mut mouse, &mut backend);
@@ -265,6 +299,18 @@ pub fn forward_native_input(
                 }
             }
             WindowEvent::TouchInput(event) if event.window == window_id => {
+                if let Some(id) = state.suppressed_touch {
+                    if event.id == id
+                        && matches!(
+                            event.phase,
+                            bevy::input::touch::TouchPhase::Ended
+                                | bevy::input::touch::TouchPhase::Canceled
+                        )
+                    {
+                        state.suppressed_touch = None;
+                    }
+                    continue;
+                }
                 // Preserve chronology before a touch takes exclusive ownership.
                 flush_move(&mut state, &mut mouse, &mut backend);
                 forward_touch(
@@ -340,6 +386,8 @@ pub fn forward_native_input(
             || state.focus_suspended
             || ui_owned_in_frame
             || state.touch.is_some()
+            || state.suppressed_touch.is_some()
+            || state.suppressed_buttons.get_pressed().next().is_some()
             || layout.pointer_captured
             || over_ui(&layout, Vec2::new(mouse.webview_x, mouse.webview_y));
         debug!(
@@ -510,6 +558,8 @@ fn release_on_focus_loss(
     state.buttons.reset_all();
     state.ui_buttons.reset_all();
     state.alt_graph.reset_all();
+    state.suppressed_buttons.reset_all();
+    state.suppressed_touch = None;
 }
 
 /// Convert Bevy mouse button to IPC mouse button

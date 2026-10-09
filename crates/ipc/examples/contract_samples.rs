@@ -39,6 +39,7 @@ fn main() {
         ],
         bevy_to_ui: vec![
             BevyToUi::ProjectStateChanged {
+                generation: "9007199254740993".into(),
                 path: Some("/tmp/example.pentimento.json".into()),
                 available: true,
                 active: false,
@@ -247,6 +248,10 @@ fn main() {
                 command: UvLayerCommand::Redo,
             }),
             UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::GetState),
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::New {
+                expected_generation: "9007199254740993".into(),
+                confirm_discard: true,
+            }),
             UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Save {
                 path: "/tmp/example.pentimento.json".into(),
             }),

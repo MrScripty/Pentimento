@@ -107,7 +107,7 @@ pub use outline::{OutlineCamera, OutlinePlugin};
 pub use paint_mode::{PaintEvent, PaintMode, PaintModePlugin, StrokeIdGenerator, StrokeState};
 pub use painting_system::{CanvasTexture, PaintingResource, PaintingSystemPlugin};
 pub use pixel_coverage::{PixelCoveragePlugin, PixelCoverageState, estimate_pixel_coverage_cpu};
-pub use project::project_generation;
+pub use project::{ProjectState as ProjectOwner, project_generation};
 pub use projection_mode::{
     ProjectionEvent, ProjectionMode, ProjectionModePlugin, ProjectionTarget,
 };

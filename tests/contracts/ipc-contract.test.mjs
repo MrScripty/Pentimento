@@ -37,11 +37,12 @@ function assertBevyToUiMessage(message) {
 
   switch (message.type) {
     case 'ProjectStateChanged':
+      assert.match(message.data.generation,/^(0|[1-9][0-9]*)$/);
       for(const field of ['available','active','blocked'])assert.equal(typeof message.data[field],'boolean');
       assert.ok(message.data.path===null||typeof message.data.path==='string');
       assert.ok(message.data.notice===null||typeof message.data.notice==='string');return;
     case 'ProjectOperationFinished':
-      assert.match(message.data.operation,/^(Save|Open)$/);assert.equal(typeof message.data.success,'boolean');assert.equal(typeof message.data.message,'string');return;
+      assert.match(message.data.operation,/^(Save|Open|New)$/);assert.equal(typeof message.data.success,'boolean');assert.equal(typeof message.data.message,'string');return;
     case 'Initialize':
       assert.ok(message.data);
       assert.ok(Array.isArray(message.data.scene_info.objects));
@@ -128,6 +129,7 @@ function assertUiToBevyMessage(message) {
   switch (message.type) {
     case 'ProjectCommand':
       if(message.data==='GetState')return;
+      if(message.data.New){assert.equal(typeof message.data.New.confirm_discard,'boolean');assert.match(message.data.New.expected_generation,/^(0|[1-9][0-9]*)$/);return;}
       assert.equal(typeof (message.data.Save??message.data.Open)?.path,'string');return;
     case 'AddObject':
       assert.equal(typeof message.data.primitive_type, 'string');

@@ -30,7 +30,7 @@ export type MeshEditTool = 'Select' | 'Extrude' | 'LoopCut' | 'Knife' | 'Merge' 
 // Messages from Bevy to UI
 export type BevyToUi =
     | { type:'ProjectStateChanged';data:ProjectState }
-    | { type:'ProjectOperationFinished';data:{operation:'Save'|'Open';success:boolean;message:string} }
+    | { type:'ProjectOperationFinished';data:{operation:'Save'|'Open'|'New';success:boolean;message:string} }
     | { type: 'Initialize'; data: { scene_info: SceneInfo; settings: AppSettings } }
     | { type: 'SceneUpdated'; data: SceneInfo }
     | { type: 'SelectionChanged'; data: { selected_ids: string[] } }
@@ -87,8 +87,8 @@ export type UiToBevy =
     | { type: 'MeshEditCommand'; data: MeshEditCommand }
     | { type: 'SetDepthView'; data: { enabled: boolean } };
 
-export type ProjectCommand='GetState'|{Save:{path:string}}|{Open:{path:string}};
-export interface ProjectState {path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}
+export type ProjectCommand='GetState'|{New:{expected_generation:string;confirm_discard:boolean}}|{Save:{path:string}}|{Open:{path:string}};
+export interface ProjectState {generation:string;path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}
 
 // Scene types
 export interface SceneInfo {

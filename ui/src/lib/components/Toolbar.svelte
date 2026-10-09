@@ -14,8 +14,8 @@
     }
 
     let { renderStats, mode }: Props = $props();
-    let project=$state<ProjectState>({path:null,available:false,active:false,blocked:false,notice:null});
-    let projectOperation=$state<'Save'|'Open'|null>(null);
+    let project=$state<ProjectState>({generation:"0",path:null,available:false,active:false,blocked:false,notice:null});
+    let projectOperation=$state<'Save'|'Open'|'New'|null>(null);
     let paintUndo = $state(false);
     let paintRedo = $state(false);
     let sculptHistory = $state<SculptHistoryState>({ undo_strokes: 0, redo_strokes: 0, active: false, notice: null });
@@ -74,9 +74,9 @@
     }
 
     function handleMenuAction(action: string) {
-        if((action==='save'||action==='open'||action==='save-as') && project.available && !project.active){
+        if((action==='new'||action==='save'||action==='open'||action==='save-as') && project.available && !project.active){
             if(action==='save' && project.path && !project.blocked)bridge.projectCommand({Save:{path:project.path}});
-            else projectOperation=action==='open'?'Open':'Save';
+            else projectOperation=action==='new'?'New':action==='open'?'Open':'Save';
         }
         if ((action === 'undo' && canUndo) || (action === 'redo' && canRedo)) {
             const command = action === 'undo' ? 'Undo' : 'Redo';
@@ -111,7 +111,7 @@
                 </button>
                 {#if openMenu === 'file'}
                     <div class="dropdown" role="menu" aria-label="File">
-                        <button type="button" class="dropdown-item" role="menuitem" disabled title="Start a fresh document by restarting the editor">New Project</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('new')}>New Project</button>
                         <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('open')}>Open...</button>
                         <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('save')}>Save</button>
                         <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('save-as')}>Save As...</button>

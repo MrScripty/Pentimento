@@ -983,3 +983,52 @@ fn unrelated_image_change_during_pending_undo_is_an_explicit_conservative_confli
     stroke(&mut app, a, 12, Some(Vec2::splat(0.7)), false);
     assert!(crate::undo_mesh_paint(app.world_mut(), a));
 }
+
+#[test]
+fn new_releases_real_direct_uv_surfaces_and_history_without_touching_owned_file() {
+    let owned = Owned::new();
+    let path = owned.file("old");
+    let fresh = owned.file("fresh");
+    let mut app = editor();
+    let a = add(&mut app, 12, true);
+    app.update();
+    stroke(&mut app, a, 12, Some(Vec2::new(0.3125, 0.6875)), false);
+    settle(&mut app);
+    assert_eq!(
+        app.world()
+            .resource::<MeshPaintingResource>()
+            .undo_count(12),
+        1
+    );
+    assert!(save(&mut app, &path));
+    let bytes = read_bounded(&path).unwrap();
+    dispatch(
+        app.world_mut(),
+        &ProjectCommand::New {
+            expected_generation: "0".into(),
+            confirm_discard: false,
+        },
+    );
+    assert_eq!(
+        app.world()
+            .resource::<MeshPaintingResource>()
+            .undo_count(12),
+        1
+    );
+    assert!(app.world().get_entity(a).is_ok());
+    dispatch(
+        app.world_mut(),
+        &ProjectCommand::New {
+            expected_generation: "0".into(),
+            confirm_discard: true,
+        },
+    );
+    assert_eq!(project_generation(app.world()), 1);
+    assert!(app.world().get_entity(a).is_err());
+    let history = app.world().resource::<MeshPaintingResource>();
+    assert_eq!(history.undo_count(12), 0);
+    assert_eq!(history.history_bytes(), 0);
+    assert!(!history.has_active_stroke());
+    assert!(save(&mut app, &fresh));
+    assert_eq!(read_bounded(&path).unwrap(), bytes);
+}

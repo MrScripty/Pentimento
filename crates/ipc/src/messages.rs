@@ -18,6 +18,8 @@ use crate::types::{
 #[serde(tag = "type", content = "data")]
 pub enum BevyToUi {
     ProjectStateChanged {
+        /// Decimal document generation; exact even beyond JavaScript integer precision.
+        generation: String,
         path: Option<String>,
         available: bool,
         active: bool,
@@ -237,6 +239,14 @@ pub enum UiToBevy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProjectCommand {
     GetState,
-    Save { path: String },
-    Open { path: String },
+    New {
+        expected_generation: String,
+        confirm_discard: bool,
+    },
+    Save {
+        path: String,
+    },
+    Open {
+        path: String,
+    },
 }
