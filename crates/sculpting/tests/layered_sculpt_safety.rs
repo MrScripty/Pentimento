@@ -218,6 +218,485 @@ fn assert_surface(mesh: &ChunkedMesh, label: &str) {
     );
 }
 
+fn global_positions(mesh: &ChunkedMesh) -> std::collections::BTreeMap<u32, Vec3> {
+    let mut positions = std::collections::BTreeMap::new();
+    for chunk in mesh.chunks.values() {
+        for vertex in chunk.mesh.vertices() {
+            let global = chunk.local_to_original[&vertex.id].0;
+            if let Some(previous) = positions.insert(global, vertex.position) {
+                assert_eq!(previous, vertex.position, "split global vertex {global}");
+            }
+        }
+    }
+    positions
+}
+
+fn smoothing_fixture(max_faces: usize) -> ChunkedMesh {
+    let source = Sphere::new(1.).mesh().uv(16, 8);
+    let mesh = HalfEdgeMesh::from_bevy_mesh_welded(&source).unwrap();
+    partition_mesh(
+        &mesh,
+        &PartitionConfig {
+            target_faces: max_faces / 2,
+            min_faces: 1,
+            max_faces,
+        },
+    )
+}
+
+fn smoothing_pipeline(deformation_type: DeformationType, autosmooth: f32) -> SculptingPipeline {
+    SculptingPipeline::with_config(
+        BrushPreset {
+            radius: 0.9,
+            strength: 0.15,
+            spacing: 0.,
+            autosmooth,
+            deformation_type,
+            ..BrushPreset::default()
+        },
+        PipelineConfig {
+            tessellation_enabled: false,
+            rebalance_after_stroke: false,
+            ..Default::default()
+        },
+    )
+}
+
+fn without_positions_or_normals(mesh: &ChunkedMesh) -> ChunkedMesh {
+    let mut copy = mesh.clone();
+    for chunk in copy.chunks.values_mut() {
+        for index in 0..chunk.mesh.vertex_count() {
+            let vertex = chunk
+                .mesh
+                .vertex_mut(painting::half_edge::VertexId(index as u32))
+                .unwrap();
+            vertex.position = Vec3::ZERO;
+            vertex.normal = Vec3::ZERO;
+        }
+        for index in 0..chunk.mesh.face_count() {
+            chunk
+                .mesh
+                .face_mut(painting::half_edge::FaceId(index as u32))
+                .unwrap()
+                .normal = Vec3::ZERO;
+        }
+    }
+    copy
+}
+
+#[test]
+fn smoothing_uses_the_complete_one_ring_across_chunk_seams() {
+    let mut errors = Vec::new();
+    for (deformation, autosmooth) in [(DeformationType::Smooth, 0.), (DeformationType::Push, 0.35)]
+    {
+        let mut whole = smoothing_fixture(1000);
+        let mut split = smoothing_fixture(32);
+        assert_eq!(whole.chunk_count(), 1);
+        assert!(split.chunk_count() > 1);
+        let original = global_positions(&whole);
+        assert_eq!(original, global_positions(&split));
+        for mesh in [&mut whole, &mut split] {
+            let mut pipeline = smoothing_pipeline(deformation, autosmooth);
+            let input = BrushInput {
+                position: Vec3::Z,
+                normal: Vec3::Z,
+                pressure: 1.,
+                timestamp_ms: 0,
+            };
+            pipeline.begin_stroke(0, input);
+            let result = pipeline.process_input(
+                BrushInput {
+                    timestamp_ms: 1,
+                    ..input
+                },
+                mesh,
+            );
+            assert!(result.rejected.is_none(), "{deformation:?}: {result:?}");
+            let end = pipeline.end_stroke(mesh);
+            assert!(end.rejected.is_none());
+            assert!(!end.packets.is_empty());
+            assert_surface(mesh, "complete smoothing ring");
+        }
+        let whole_positions = global_positions(&whole);
+        assert_ne!(whole_positions, original, "{deformation:?} must deform");
+        let split_positions = global_positions(&split);
+        let difference = whole_positions
+            .iter()
+            .map(|(global, position)| position.distance(split_positions[global]))
+            .fold(0., f32::max);
+        eprintln!("{deformation:?} autosmooth={autosmooth}: partition error {difference}");
+        errors.push((deformation, difference));
+    }
+    assert!(
+        errors.iter().all(|(_, error)| *error < 1e-6),
+        "partition errors {errors:?}"
+    );
+}
+
+#[test]
+fn intersecting_smoothing_paths_preserve_topology_uvs_and_exact_history() {
+    let mut meshes = [smoothing_fixture(1000), smoothing_fixture(32)];
+    let structure = meshes.each_ref().map(without_positions_or_normals);
+    assert!(
+        meshes[0].chunks.values().any(|chunk| {
+            chunk
+                .mesh
+                .half_edges()
+                .iter()
+                .any(|edge| chunk.mesh.is_uv_seam_edge(edge.id))
+        }),
+        "fixture must contain real face-corner UV seams"
+    );
+    let mut pipelines = [
+        smoothing_pipeline(DeformationType::Smooth, 0.),
+        smoothing_pipeline(DeformationType::Smooth, 0.),
+    ];
+    let mut endpoints = vec![meshes.clone()];
+    for stroke in 0..12 {
+        let direction = [
+            Vec3::Z,
+            Vec3::new(0.25, 0.12, 1.).normalize(),
+            Vec3::new(-0.15, 0.25, 1.).normalize(),
+            Vec3::new(0.2, -0.2, 1.).normalize(),
+        ][stroke % 4];
+        let (deformation_type, autosmooth) = [
+            (DeformationType::Smooth, 0.),
+            (DeformationType::Push, 0.25),
+            (DeformationType::Grab, 0.2),
+            (DeformationType::Smooth, 0.15),
+        ][stroke % 4];
+        for index in 0..2 {
+            pipelines[index].set_brush_preset(BrushPreset {
+                radius: 0.9,
+                strength: 0.08,
+                spacing: 0.,
+                deformation_type,
+                autosmooth,
+                ..BrushPreset::default()
+            });
+            let input = BrushInput {
+                position: direction,
+                normal: direction,
+                pressure: 1.,
+                timestamp_ms: stroke as u64 * 10,
+            };
+            pipelines[index].begin_stroke(0, input);
+            for dab in 1..4 {
+                let result = pipelines[index].process_input(
+                    BrushInput {
+                        position: direction + Vec3::X * dab as f32 * 0.015,
+                        timestamp_ms: input.timestamp_ms + dab,
+                        ..input
+                    },
+                    &mut meshes[index],
+                );
+                assert!(
+                    result.rejected.is_none(),
+                    "stroke {stroke} dab {dab}: {result:?}"
+                );
+                assert_surface(&meshes[index], "intersecting smoothing dab");
+                assert!(
+                    structure[index]
+                        .same_authoritative_state(&without_positions_or_normals(&meshes[index]))
+                );
+            }
+            let end = pipelines[index].end_stroke(&mut meshes[index]);
+            assert!(end.rejected.is_none());
+            assert!(!end.packets.is_empty());
+            assert!(!endpoints.last().unwrap()[index].same_authoritative_state(&meshes[index]));
+            assert_surface(&meshes[index], "intersecting smoothing endpoint");
+        }
+        assert_eq!(
+            global_positions(&meshes[0]),
+            global_positions(&meshes[1]),
+            "stroke {stroke}"
+        );
+        endpoints.push(meshes.clone());
+    }
+    for target in (0..12).rev() {
+        for index in 0..2 {
+            assert!(
+                pipelines[index]
+                    .restore_history(&mut meshes[index], false)
+                    .unwrap()
+            );
+            assert!(endpoints[target][index].same_authoritative_state(&meshes[index]));
+            assert_surface(&meshes[index], "smoothing undo");
+        }
+    }
+    for index in 0..2 {
+        assert!(
+            !pipelines[index]
+                .restore_history(&mut meshes[index], false)
+                .unwrap()
+        );
+        // An empty stroke must preserve the pending redo branch and emit no replay.
+        let input = BrushInput {
+            position: Vec3::splat(10.),
+            normal: Vec3::Z,
+            pressure: 1.,
+            timestamp_ms: 200,
+        };
+        pipelines[index].begin_stroke(0, input);
+        pipelines[index].process_input(
+            BrushInput {
+                timestamp_ms: 201,
+                ..input
+            },
+            &mut meshes[index],
+        );
+        assert!(
+            pipelines[index]
+                .end_stroke(&mut meshes[index])
+                .packets
+                .is_empty()
+        );
+        assert!(endpoints[0][index].same_authoritative_state(&meshes[index]));
+    }
+    for target in 1..=12 {
+        for index in 0..2 {
+            assert!(
+                pipelines[index]
+                    .restore_history(&mut meshes[index], true)
+                    .unwrap()
+            );
+            assert!(endpoints[target][index].same_authoritative_state(&meshes[index]));
+            assert_surface(&meshes[index], "smoothing redo");
+        }
+    }
+    for index in 0..2 {
+        assert!(
+            !pipelines[index]
+                .restore_history(&mut meshes[index], true)
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn an_empty_or_zero_strength_dab_does_not_refresh_normals_into_a_history_entry() {
+    for (position, strength) in [(Vec3::splat(10.), 0.15), (Vec3::Z, 0.)] {
+        let mut mesh = smoothing_fixture(32);
+        let original = mesh.clone();
+        let mut pipeline = smoothing_pipeline(DeformationType::Push, 0.);
+        let input = BrushInput {
+            position: Vec3::Z,
+            normal: Vec3::Z,
+            pressure: 1.,
+            timestamp_ms: 0,
+        };
+        pipeline.begin_stroke(0, input);
+        pipeline.process_input(
+            BrushInput {
+                timestamp_ms: 1,
+                ..input
+            },
+            &mut mesh,
+        );
+        assert!(!pipeline.end_stroke(&mut mesh).packets.is_empty());
+        let accepted = mesh.clone();
+        assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+        assert!(original.same_authoritative_state(&mesh));
+        let status = pipeline.history_status();
+        pipeline.set_brush_preset(BrushPreset {
+            radius: 0.9,
+            strength,
+            spacing: 0.,
+            autosmooth: 0.,
+            ..BrushPreset::push()
+        });
+        let input = BrushInput {
+            position,
+            timestamp_ms: 10,
+            ..input
+        };
+        pipeline.begin_stroke(0, input);
+        let result = pipeline.process_input(
+            BrushInput {
+                timestamp_ms: 11,
+                ..input
+            },
+            &mut mesh,
+        );
+        assert!(result.rejected.is_none());
+        assert_eq!(result.vertices_modified, 0);
+        assert!(pipeline.end_stroke(&mut mesh).packets.is_empty());
+        assert!(original.same_authoritative_state(&mesh));
+        assert_eq!(status, pipeline.history_status());
+        assert!(pipeline.restore_history(&mut mesh, true).unwrap());
+        assert!(accepted.same_authoritative_state(&mesh));
+        assert_surface(&mesh, "redo after no-op");
+    }
+}
+
+#[test]
+fn deformation_refreshes_normals_beyond_the_moved_vertex_query() {
+    let mut mesh = partition_mesh(&crossing_fixture(), &PartitionConfig::default());
+    let mut pipeline = SculptingPipeline::with_config(
+        BrushPreset {
+            radius: 0.15,
+            strength: 0.3,
+            spacing: 0.,
+            autosmooth: 0.,
+            ..BrushPreset::push()
+        },
+        PipelineConfig {
+            tessellation_enabled: false,
+            rebalance_after_stroke: false,
+            ..Default::default()
+        },
+    );
+    let before = global_positions(&mesh);
+    let input = BrushInput {
+        position: Vec3::new(0., 0., 0.06),
+        normal: Vec3::Z,
+        pressure: 1.,
+        timestamp_ms: 0,
+    };
+    pipeline.begin_stroke(0, input);
+    let result = pipeline.process_input(
+        BrushInput {
+            timestamp_ms: 1,
+            ..input
+        },
+        &mut mesh,
+    );
+    assert!(result.rejected.is_none());
+    assert_eq!(result.vertices_modified, 1);
+    let after = global_positions(&mesh);
+    assert_ne!(before[&0], after[&0]);
+    assert_eq!(before[&1], after[&1]);
+    assert_eq!(before[&2], after[&2]);
+    let chunk = mesh.chunks.values().next().unwrap();
+    let normal = (after[&1] - after[&0])
+        .cross(after[&2] - after[&0])
+        .normalize();
+    for global in 0..3 {
+        let local = chunk.original_to_local[&painting::half_edge::VertexId(global)];
+        assert!(
+            chunk.mesh.vertex(local).unwrap().normal.distance(normal) < 1e-6,
+            "normal at {global}"
+        );
+    }
+    assert_surface(&mesh, "normals outside query");
+}
+
+#[test]
+fn every_chunk_with_changed_shared_normals_is_dirty_for_render_sync() {
+    let mut mesh = smoothing_fixture(32);
+    for chunk in mesh.chunks.values_mut() {
+        chunk.clear_dirty();
+    }
+    let before = mesh.clone();
+    let mut pipeline = smoothing_pipeline(DeformationType::Push, 0.);
+    let input = BrushInput {
+        position: Vec3::Z,
+        normal: Vec3::Z,
+        pressure: 1.,
+        timestamp_ms: 0,
+    };
+    pipeline.begin_stroke(0, input);
+    let result = pipeline.process_input(
+        BrushInput {
+            timestamp_ms: 1,
+            ..input
+        },
+        &mut mesh,
+    );
+    assert!(result.rejected.is_none());
+    let mut changes_outside_position_edits = 0;
+    for (id, chunk) in &mesh.chunks {
+        let old = &before.chunks[id];
+        let positions_changed = chunk
+            .mesh
+            .vertices()
+            .iter()
+            .any(|vertex| vertex.position != old.mesh.vertex(vertex.id).unwrap().position);
+        let normals_changed = chunk
+            .mesh
+            .vertices()
+            .iter()
+            .any(|vertex| vertex.normal != old.mesh.vertex(vertex.id).unwrap().normal);
+        if positions_changed || normals_changed {
+            assert!(chunk.dirty, "changed chunk {id:?} missed render sync");
+        }
+        changes_outside_position_edits += usize::from(normals_changed && !positions_changed);
+    }
+    assert!(
+        changes_outside_position_edits > 0,
+        "fixture must exercise normal-only chunk changes"
+    );
+    assert_surface(&mesh, "shared normal sync");
+}
+
+#[test]
+fn a_collapsing_smooth_stroke_rolls_back_and_preserves_redo() {
+    let mut mesh = partition_mesh(
+        &crossing_fixture(),
+        &PartitionConfig {
+            target_faces: 1,
+            min_faces: 1,
+            max_faces: 1,
+        },
+    );
+    let original = mesh.clone();
+    let mut pipeline = smoothing_pipeline(DeformationType::Push, 0.);
+    let input = BrushInput {
+        position: Vec3::new(0., 0., 0.06),
+        normal: Vec3::Z,
+        pressure: 1.,
+        timestamp_ms: 0,
+    };
+    pipeline.begin_stroke(0, input);
+    pipeline.process_input(
+        BrushInput {
+            timestamp_ms: 1,
+            ..input
+        },
+        &mut mesh,
+    );
+    assert!(!pipeline.end_stroke(&mut mesh).packets.is_empty());
+    let accepted = mesh.clone();
+    assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+    let status = pipeline.history_status();
+    pipeline.set_brush_preset(BrushPreset {
+        radius: 0.8,
+        strength: 2. / 3.,
+        spacing: 0.,
+        autosmooth: 0.3,
+        falloff: FalloffCurve::Constant,
+        deformation_type: DeformationType::Smooth,
+        ..BrushPreset::default()
+    });
+    let input = BrushInput {
+        timestamp_ms: 10,
+        ..input
+    };
+    pipeline.begin_stroke(0, input);
+    let result = pipeline.process_input(
+        BrushInput {
+            timestamp_ms: 11,
+            ..input
+        },
+        &mut mesh,
+    );
+    // The ideal target is one point; f32 roundoff can instead leave an
+    // inverted sliver. Both must be rejected by the unchanged geometric guard.
+    assert!(matches!(
+        result.rejected,
+        Some(SafetyError::DegenerateFace | SafetyError::InvertedFace)
+    ));
+    assert!(original.same_authoritative_state(&mesh));
+    let end = pipeline.end_stroke(&mut mesh);
+    assert_eq!(end.rejected, result.rejected);
+    assert!(end.packets.is_empty());
+    assert_eq!(status, pipeline.history_status());
+    assert_surface(&mesh, "rejected smooth rollback");
+    assert!(pipeline.restore_history(&mut mesh, true).unwrap());
+    assert!(accepted.same_authoritative_state(&mesh));
+    assert_surface(&mesh, "redo after rejected smooth");
+}
+
 #[test]
 fn layered_brushes_at_uv_seams_poles_and_chunk_boundaries_stay_embedded() {
     let source = Sphere::new(1.).mesh().uv(16, 8);

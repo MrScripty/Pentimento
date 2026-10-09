@@ -33,6 +33,39 @@
 - Render vertices are face corners, not topological vertices. Export supplies a
   render-to-topology mapping. Scene synchronization composes it with chunk IDs
   and patches every render copy during position-only updates, preserving UVs.
+- Pipeline Smooth and autosmooth gather the complete global vertex one-ring
+  across chunks, compute targets from one position snapshot with stable ID
+  ordering, and write the same target to every local copy. They change positions
+  without changing topology, identity maps or UV charts. Autosmooth derives its
+  tangent normal from all incident geometric face normals, retaining the existing
+  sharp-feature gate; imported/custom vertex normals do not steer this pass.
+- Deformation accounting uses actual position changes. Normal refresh covers
+  every vertex of changed faces, including unmoved neighbors outside the brush
+  query, and shared-normal changes mark their chunks for render synchronization.
+  Empty dabs, and zero-strength dabs with autosmooth/adaptive edits disabled,
+  retain authoritative state, emit no replay and preserve redo.
+
+## Complete-neighborhood smoothing qualification
+
+The production pipeline regression on a welded UV sphere reproduced maximum
+position differences of 0.048929587 for Smooth and 0.11416903 for Push with
+autosmooth when the same source was repartitioned. Complete-neighborhood
+smoothing produces identical global positions for those fixtures. A sequence of
+twelve overlapping Smooth/Push/Grab strokes, with three dabs per stroke, checks
+global position equality, unchanged complete topology/UV/identity state, and
+exact validated Undo/Redo endpoints in both partitions. Separate tests cover
+no-op redo retention, rejected collapsing Smooth rollback/replay suppression,
+normal refresh outside the moved query and normal-only dirty chunks.
+
+These are CPU pipeline results. Each smoothing pass scans all mesh faces and
+local vertex copies; temporary storage holds selected one-rings and targets and
+can grow with the brush footprint. The existing bounded history snapshot
+accounting is unchanged and does not bound these working buffers or process RSS.
+Other primary tools retain their existing chunk-local behavior, including
+Flatten's local plane estimate. This work does not claim identical rendered
+normals across partitions, general continuous collision detection, native UI
+qualification or interactive performance. The safety predicates and tolerances
+remain unchanged.
 
 ## Reproducible CPU verification
 

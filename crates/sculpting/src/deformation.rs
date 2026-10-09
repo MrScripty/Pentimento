@@ -7,9 +7,10 @@
 
 use glam::Vec3;
 use painting::half_edge::{HalfEdgeMesh, VertexId};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::brush::{DabResult, FalloffCurve};
+use crate::chunking::{ChunkId, ChunkedMesh};
 use crate::spatial::VertexOctree;
 use crate::types::DeformationType;
 
@@ -317,6 +318,114 @@ pub fn apply_autosmooth(
     for (vid, pos) in targets {
         mesh.set_vertex_position(vid, pos);
     }
+}
+
+pub(crate) enum SmoothingPass {
+    Smooth,
+    Autosmooth(f32),
+}
+
+/// Pipeline smoothing must use the full global one-ring, rather than a chunk's
+/// truncated fan. Read one position snapshot, order contributions by stable IDs,
+/// then scatter each computed target to every local copy. UV charts are untouched.
+/// Called only after the pipeline has admitted the complete triangular topology.
+pub(crate) fn apply_chunked_smoothing(
+    mesh: &mut ChunkedMesh,
+    affected: &HashMap<ChunkId, Vec<VertexId>>,
+    dab: &DabInfo,
+    falloff: FalloffCurve,
+    pass: SmoothingPass,
+) -> HashMap<ChunkId, Vec<VertexId>> {
+    struct Ring {
+        position: Vec3,
+        neighbors: BTreeMap<u32, Vec3>,
+        normals: BTreeMap<[u32; 3], Vec3>,
+    }
+    let mut rings = BTreeMap::<u32, Ring>::new();
+    for (chunk_id, vertices) in affected {
+        let chunk = &mesh.chunks[chunk_id];
+        for &local in vertices {
+            let position = chunk.mesh.vertex(local).unwrap().position;
+            if position.distance(dab.position) <= dab.radius {
+                rings
+                    .entry(chunk.local_to_original[&local].0)
+                    .or_insert(Ring {
+                        position,
+                        neighbors: BTreeMap::new(),
+                        normals: BTreeMap::new(),
+                    });
+            }
+        }
+    }
+    // Scan all incident faces, including chunks with no selected vertex query.
+    // Scratch storage covers selected one-rings, not a merged full-mesh clone.
+    for chunk in mesh.chunks.values() {
+        for face in chunk.mesh.faces() {
+            let vertices = chunk.mesh.get_face_vertices(face.id);
+            let [a, b, c] = vertices.as_slice() else {
+                continue;
+            };
+            let mut ids = [*a, *b, *c].map(|local| chunk.local_to_original[&local].0);
+            let mut positions =
+                [*a, *b, *c].map(|local| chunk.mesh.vertex(local).unwrap().position);
+            let first = (0..3).min_by_key(|&index| ids[index]).unwrap();
+            ids.rotate_left(first);
+            positions.rotate_left(first);
+            let normal = (positions[1] - positions[0])
+                .cross(positions[2] - positions[0])
+                .normalize_or_zero();
+            for index in 0..3 {
+                if let Some(ring) = rings.get_mut(&ids[index]) {
+                    for other in [(index + 1) % 3, (index + 2) % 3] {
+                        ring.neighbors.insert(ids[other], positions[other]);
+                    }
+                    ring.normals.insert(ids, normal);
+                }
+            }
+        }
+    }
+    let mut targets = BTreeMap::new();
+    for (global, ring) in rings {
+        if ring.neighbors.is_empty() {
+            continue;
+        }
+        let average = ring.neighbors.values().copied().sum::<Vec3>() / ring.neighbors.len() as f32;
+        let weight = falloff.evaluate_with_hardness(
+            ring.position.distance(dab.position) / dab.radius,
+            dab.hardness,
+        );
+        let target = match pass {
+            SmoothingPass::Smooth => ring.position.lerp(average, weight * dab.strength),
+            SmoothingPass::Autosmooth(strength) => {
+                // Match the existing sharp-feature gate and tangent projection,
+                // using all incident faces from this position snapshot.
+                let normal = ring
+                    .normals
+                    .values()
+                    .copied()
+                    .sum::<Vec3>()
+                    .normalize_or_zero();
+                if normal.dot(dab.normal.normalize_or_zero()) < 0.3 {
+                    continue;
+                }
+                let offset = average - ring.position;
+                ring.position + (offset - normal * offset.dot(normal)) * (weight * strength)
+            }
+        };
+        targets.insert(global, target);
+    }
+    let mut changed = HashMap::new();
+    for (&id, chunk) in &mut mesh.chunks {
+        for (&local, global) in &chunk.local_to_original {
+            if let Some(&target) = targets.get(&global.0)
+                && chunk.mesh.vertex(local).unwrap().position != target
+            {
+                chunk.mesh.set_vertex_position(local, target);
+                changed.entry(id).or_insert_with(Vec::new).push(local);
+            }
+        }
+    }
+    changed
 }
 
 /// Apply flatten deformation - moves vertices toward average plane.

@@ -12,8 +12,11 @@
 use crate::brush::{BrushInput, BrushPreset, DabResult, SculptBrushEngine};
 use crate::budget::VertexBudget;
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
-use crate::deformation::{DabInfo, apply_autosmooth, apply_deformation};
-use crate::gpu::{DirtyVertices, update_normals_after_deformation};
+use crate::deformation::{DabInfo, SmoothingPass, apply_chunked_smoothing, apply_deformation};
+use crate::gpu::{
+    DirtyVertices, recalculate_face_normals_for_dirty, recalculate_normals_for_dirty,
+    update_normals_after_deformation,
+};
 use crate::history::{HistoryError, HistorySnapshot, HistoryStatus, RecordOutcome, SculptHistory};
 use crate::safety::{GeometryWitness, SafetyError, Surface};
 use crate::spatial::{Aabb as SpatialAabb, VertexOctree};
@@ -21,7 +24,9 @@ use crate::tessellation::{
     ScreenSpaceConfig, TessellationStats, tessellate_at_brush_budget_checked,
     tessellate_at_brush_checked,
 };
-use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig, TessellationMode};
+use crate::types::{
+    ChunkConfig, DeformationType, SculptStrokePacket, TessellationConfig, TessellationMode,
+};
 use glam::Vec3;
 use painting::half_edge::VertexId;
 use std::collections::{HashMap, HashSet};
@@ -876,6 +881,18 @@ impl SculptingPipeline {
         // ===== PASS 2: DEFORM all affected chunks =====
         // Now deformation operates on the refined mesh, including any new vertices
         // created by splitting pass-through edges.
+        let dab_info = DabInfo {
+            position: brush_center,
+            radius: brush_radius,
+            strength: dab.strength,
+            normal: dab.normal,
+            hardness: self.brush_engine.preset.hardness,
+        };
+        let falloff = self.brush_engine.preset.falloff;
+        let deformation_type = self.brush_engine.preset.deformation_type;
+        let autosmooth = self.brush_engine.preset.autosmooth;
+        let mut smoothing_vertices = HashMap::new();
+        let mut modified_vertices = HashMap::<ChunkId, HashSet<VertexId>>::new();
         for &chunk_id in &affected_chunk_ids {
             trace!("apply_dab_internal: deforming chunk {:?}", chunk_id);
             let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
@@ -898,42 +915,37 @@ impl SculptingPipeline {
                 continue;
             }
 
-            // Create dab info for deformation
-            let dab_info = DabInfo {
-                position: brush_center,
-                radius: brush_radius,
-                strength: dab.strength,
-                normal: dab.normal,
-                hardness: self.brush_engine.preset.hardness,
-            };
-
-            // Apply deformation
-            let falloff = self.brush_engine.preset.falloff;
-            let deformation_type = self.brush_engine.preset.deformation_type;
-
-            let _displacements = apply_deformation(
-                &mut chunk.mesh,
-                &affected_vertices,
-                &dab_info,
-                deformation_type,
-                falloff,
-                Some(stroke_direction),
-                Some(stroke_delta),
-            );
-
-            // Auto-smooth to dampen high-frequency dab ripples
-            let autosmooth = self.brush_engine.preset.autosmooth;
-            if autosmooth > 0.0 && !affected_vertices.is_empty() {
-                apply_autosmooth(
+            // Smooth requires a complete one-ring spanning all chunk copies.
+            // Other primary tools retain their existing local deformation.
+            let mut modified = HashSet::new();
+            if deformation_type != DeformationType::Smooth {
+                let displacements = apply_deformation(
                     &mut chunk.mesh,
                     &affected_vertices,
                     &dab_info,
+                    deformation_type,
                     falloff,
-                    autosmooth,
+                    Some(stroke_direction),
+                    Some(stroke_delta),
                 );
+                modified.extend(displacements.into_iter().filter_map(|(vertex, before)| {
+                    (chunk.mesh.vertex(vertex).unwrap().position != before).then_some(vertex)
+                }));
             }
 
-            result.vertices_modified += affected_vertices.len();
+            if deformation_type == DeformationType::Smooth || autosmooth > 0.0 {
+                smoothing_vertices.insert(chunk_id, affected_vertices.clone());
+            }
+
+            // Query membership alone is not a deformation. Refreshing normals
+            // on an untouched sphere would create a false commit and clear redo.
+            if modified.is_empty() {
+                continue;
+            }
+            modified_vertices
+                .entry(chunk_id)
+                .or_default()
+                .extend(&modified);
             if !result.chunks_affected.contains(&chunk_id) {
                 result.chunks_affected.push(chunk_id);
             }
@@ -942,14 +954,47 @@ impl SculptingPipeline {
             chunk.mark_dirty();
 
             // Update normals for affected region
-            let dirty = DirtyVertices {
-                modified: affected_vertices.into_iter().collect(),
-            };
-            update_normals_after_deformation(chunk, &dirty);
+            Self::update_changed_normals(chunk, modified);
 
             // Invalidate octree (positions changed)
             self.chunk_octrees.remove(&chunk_id);
         }
+
+        // Autosmooth reads a coherent snapshot of the primary deformation,
+        // including shared vertices changed by neighboring chunks.
+        if autosmooth > 0.0 && deformation_type != DeformationType::Smooth {
+            self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
+        }
+        let mut smoothing_passes = Vec::with_capacity(2);
+        if deformation_type == DeformationType::Smooth {
+            smoothing_passes.push(SmoothingPass::Smooth);
+        }
+        if autosmooth > 0.0 {
+            smoothing_passes.push(SmoothingPass::Autosmooth(autosmooth));
+        }
+        for pass in smoothing_passes {
+            let changed = apply_chunked_smoothing(
+                chunked_mesh,
+                &smoothing_vertices,
+                &dab_info,
+                falloff,
+                pass,
+            );
+            for (chunk_id, vertices) in changed {
+                modified_vertices
+                    .entry(chunk_id)
+                    .or_default()
+                    .extend(&vertices);
+                let chunk = chunked_mesh.get_chunk_mut(chunk_id).unwrap();
+                chunk.mark_dirty();
+                Self::update_changed_normals(chunk, vertices.into_iter().collect());
+                if !result.chunks_affected.contains(&chunk_id) {
+                    result.chunks_affected.push(chunk_id);
+                }
+                self.chunk_octrees.remove(&chunk_id);
+            }
+        }
+        result.vertices_modified = modified_vertices.values().map(HashSet::len).sum();
 
         // Write back the updated vertex ID counter to the chunked mesh
         chunked_mesh.next_original_vertex_id = next_original_vertex_id;
@@ -1003,6 +1048,25 @@ impl SculptingPipeline {
         self.chunk_octrees.insert(chunk_id, octree);
     }
 
+    /// A changed face changes the normal of every incident vertex, including
+    /// vertices outside the brush query and vertices with zero displacement.
+    fn update_changed_normals(chunk: &mut MeshChunk, modified: HashSet<VertexId>) {
+        let changed = DirtyVertices { modified };
+        recalculate_face_normals_for_dirty(chunk, &changed);
+        let mut normal_vertices = changed.modified.clone();
+        for &vertex in &changed.modified {
+            for face in chunk.mesh.get_vertex_faces(vertex) {
+                normal_vertices.extend(chunk.mesh.get_face_vertices(face));
+            }
+        }
+        recalculate_normals_for_dirty(
+            chunk,
+            &DirtyVertices {
+                modified: normal_vertices,
+            },
+        );
+    }
+
     /// Sync boundary vertices between affected chunks.
     fn sync_boundary_vertices(
         &mut self,
@@ -1010,6 +1074,9 @@ impl SculptingPipeline {
         affected_chunks: &[ChunkId],
     ) {
         // For each affected chunk, sync all boundary vertices
+        if affected_chunks.is_empty() {
+            return;
+        }
         for &chunk_id in affected_chunks {
             let boundary_updates: Vec<(VertexId, Vec3)> = {
                 let chunk = match chunked_mesh.get_chunk(chunk_id) {
