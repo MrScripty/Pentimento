@@ -280,13 +280,15 @@ export interface PaintTargetState {
     pending_bytes: number; limit_bytes: number; evicted_strokes: number; uv_layers?: UvLayerState;
 }
 
-export interface UvLayerInfo { id:number; name:string; visible:boolean; opacity:number; locked:boolean; is_active:boolean }
+export type UvLayerBlendMode = 'Normal' | 'Multiply' | 'Screen' | 'Overlay';
+export interface UvLayerInfo { id:number; name:string; visible:boolean; opacity:number; locked:boolean; is_active:boolean; blend_mode:UvLayerBlendMode }
 export interface UvLayerState { receivers:{mesh_id:number;name:string;layered:boolean}[]; receiver:number|null; enabled:boolean; layers:UvLayerInfo[]; can_undo:boolean; can_redo:boolean; active:boolean; projection_preview?:boolean; conflicted:boolean; notice:string|null }
 export type UvLayerCommand = 'Enable' | 'Undo' | 'Redo'
     | {SelectReceiver:{mesh_id:number}} | {Create:{name:string}} | {Duplicate:{layer_id:number}}
     | {Delete:{layer_id:number}} | {Select:{layer_id:number}} | {Rename:{layer_id:number;name:string}}
     | {Reorder:{layer_id:number;new_index:number}} | {Visible:{layer_id:number;visible:boolean}}
-    | {Opacity:{layer_id:number;opacity:number}} | {Lock:{layer_id:number;locked:boolean}};
+    | {Opacity:{layer_id:number;opacity:number}} | {Lock:{layer_id:number;locked:boolean}}
+    | {BlendMode:{layer_id:number;mode:UvLayerBlendMode}};
 export type PaintCommand =
     | {UvLayers:{command:UvLayerCommand}}
     | { SetTarget: { target: PaintTarget } }

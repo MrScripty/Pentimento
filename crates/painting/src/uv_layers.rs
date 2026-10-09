@@ -1,6 +1,7 @@
 //! Shared UV authoring layers. Pixels are linear premultiplied RGBA; snapshots
 //! preserve every float bit. History contains changed pixel payloads and metadata,
-//! never geometry or derived RGBA8 images. Normal is the first supported layer mode.
+//! never geometry or derived RGBA8 images. Blend functions use straight linear RGB
+//! only in the overlap term, then return associated source-over output.
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 
@@ -10,6 +11,20 @@ pub const UV_HISTORY_ENTRIES: usize = 128;
 pub const UV_MAX_LAYERS: usize = 64;
 pub const UV_MAX_PIXELS: usize = 4_194_304;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UvBlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+}
+impl UvBlendMode {
+    fn is_normal(&self) -> bool {
+        *self == Self::Normal
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UvLayerMeta {
@@ -18,6 +33,8 @@ pub struct UvLayerMeta {
     pub visible: bool,
     pub opacity: f32,
     pub locked: bool,
+    #[serde(default, skip_serializing_if = "UvBlendMode::is_normal")]
+    pub blend_mode: UvBlendMode,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +55,8 @@ pub struct UvLayersDocument {
     pub layers: Vec<UvLayerDocument>,
 }
 pub const UV_COMPOSITOR: &str = "linear-premultiplied-normal-v1";
+/// Older Normal-only readers reject this policy rather than reinterpret a stack.
+pub const UV_BLEND_COMPOSITOR: &str = "linear-premultiplied-separable-v1";
 pub fn same_uv_pixels(a: &[[f32; 4]], b: &[[f32; 4]]) -> bool {
     a.len() == b.len()
         && a.iter()
@@ -70,6 +89,37 @@ pub fn uv_over(src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
         src[3] + dst[3] * inv,
     ]
 }
+/// Separable blend followed by source-over, in the existing linear working space.
+/// Inputs are associated RGBA, with opacity already applied to the source once.
+/// C = (1-as)*Pb + (1-ab)*Ps + as*ab*B(Cb,Cs); a = as + ab*(1-as).
+/// Transparent hidden RGB is never divided or introduced into visible output.
+/// Normal retains the original arithmetic, including its exact rounding behavior.
+pub fn uv_blend_over(src: [f32; 4], dst: [f32; 4], mode: UvBlendMode) -> [f32; 4] {
+    if mode == UvBlendMode::Normal || src[3] == 0. || dst[3] == 0. {
+        return uv_over(src, dst);
+    }
+    let a = src[3];
+    let b = dst[3];
+    let mut out = [0.; 4];
+    for c in 0..3 {
+        let cs = (src[c] / a).clamp(0., 1.);
+        let cb = (dst[c] / b).clamp(0., 1.);
+        let blend = match mode {
+            UvBlendMode::Normal => unreachable!(),
+            UvBlendMode::Multiply => cb * cs,
+            UvBlendMode::Screen => cb + cs - cb * cs,
+            UvBlendMode::Overlay if cb <= 0.5 => 2. * cb * cs,
+            UvBlendMode::Overlay => 1. - 2. * (1. - cb) * (1. - cs),
+        };
+        out[c] = (1. - a) * dst[c] + (1. - b) * src[c] + a * b * blend;
+    }
+    out[3] = a + b * (1. - a);
+    // Only roundoff can leave the associated unit gamut for valid inputs.
+    for c in 0..3 {
+        out[c] = out[c].clamp(0., out[3]);
+    }
+    out
+}
 impl UvLayersDocument {
     pub fn validate(&self) -> Result<(), String> {
         let count = (self.width as usize)
@@ -83,7 +133,12 @@ impl UvLayersDocument {
             || self.layers.is_empty()
             || self.layers.len() > UV_MAX_LAYERS
             || count.saturating_mul(self.layers.len()) > UV_MAX_PIXELS
-            || self.compositor != UV_COMPOSITOR
+            || (self.compositor != UV_COMPOSITOR && self.compositor != UV_BLEND_COMPOSITOR)
+            || (self.compositor == UV_COMPOSITOR
+                && self
+                    .layers
+                    .iter()
+                    .any(|l| l.meta.blend_mode != UvBlendMode::Normal))
             || self.next_id == u32::MAX
         {
             return Err("Invalid or over-limit UV layer dimensions/count/compositor".into());
@@ -121,7 +176,7 @@ impl UvLayersDocument {
                 &l.pixels
             };
             for (dst, src) in output.iter_mut().zip(pixels) {
-                *dst = uv_over(src.map(|v| v * l.meta.opacity), *dst);
+                *dst = uv_blend_over(src.map(|v| v * l.meta.opacity), *dst, l.meta.blend_mode);
             }
         }
         output
@@ -139,15 +194,17 @@ pub enum UvLayerOp {
     Visible(u32, bool),
     Opacity(u32, f32),
     Lock(u32, bool),
+    BlendMode(u32, UvBlendMode),
 }
 #[derive(Clone)]
 struct Layout {
     metas: Vec<UvLayerMeta>,
     active: u32,
+    compositor: String,
 }
 impl Layout {
     fn bytes(&self) -> usize {
-        self.metas.iter().map(|m| m.name.len() + 32).sum::<usize>() + 8
+        self.metas.iter().map(|m| m.name.len() + 40).sum::<usize>() + 8 + self.compositor.len()
     }
 }
 struct PixelChange {
@@ -199,6 +256,7 @@ impl UvLayers {
                     visible: true,
                     opacity: 1.,
                     locked: false,
+                    blend_mode: UvBlendMode::Normal,
                 },
                 pixels: vec![[0.; 4]; width as usize * height as usize],
             }],
@@ -241,6 +299,7 @@ impl UvLayers {
                 .map(|l| l.meta.clone())
                 .collect(),
             active: self.document.active_layer,
+            compositor: self.document.compositor.clone(),
         }
     }
     pub fn history_bytes(&self) -> usize {
@@ -311,6 +370,7 @@ impl UvLayers {
             })
             .collect();
         self.document.active_layer = layout.active;
+        self.document.compositor = layout.compositor.clone();
         // next_id is an allocation high-water mark; Undo never reuses identities.
     }
     pub fn edit(&mut self, op: UvLayerOp) -> Result<bool, String> {
@@ -361,6 +421,7 @@ impl UvLayers {
                         visible: true,
                         opacity: 1.,
                         locked: false,
+                        blend_mode: UvBlendMode::Normal,
                     },
                 );
                 after.active = id;
@@ -451,10 +512,24 @@ impl UvLayers {
                 let i = find(id, &after.metas)?;
                 after.metas[i].locked = value;
             }
+            UvLayerOp::BlendMode(id, mode) => {
+                let i = find(id, &after.metas)?;
+                after.metas[i].blend_mode = mode;
+            }
         }
         if before.metas == after.metas && before.active == after.active {
             return Ok(false);
         }
+        after.compositor = if after
+            .metas
+            .iter()
+            .any(|m| m.blend_mode != UvBlendMode::Normal)
+        {
+            UV_BLEND_COMPOSITOR
+        } else {
+            UV_COMPOSITOR
+        }
+        .into();
         let change = Change {
             before,
             after,
@@ -541,6 +616,191 @@ impl UvLayers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const MODES: [UvBlendMode; 4] = [
+        UvBlendMode::Normal,
+        UvBlendMode::Multiply,
+        UvBlendMode::Screen,
+        UvBlendMode::Overlay,
+    ];
+    fn near(a: [f32; 4], b: [f32; 4]) {
+        for c in 0..4 {
+            assert!((a[c] - b[c]).abs() < 1e-6, "{a:?} != {b:?}");
+        }
+    }
+    #[test]
+    fn blends_known_translucent_linear_reference_vectors() {
+        let s = [0.08, 0.28, 0.16, 0.4];
+        let b = [0.48, 0.18, 0.3, 0.6];
+        for (mode, expected) in [
+            (UvBlendMode::Multiply, [0.3584, 0.2704, 0.292, 0.76]),
+            (UvBlendMode::Screen, [0.5216, 0.4096, 0.412, 0.76]),
+            (UvBlendMode::Overlay, [0.4832, 0.3208, 0.34, 0.76]),
+        ] {
+            near(uv_blend_over(s, b, mode), expected);
+        }
+        near(
+            uv_blend_over(
+                [0.2, 0.7, 0.4, 1.],
+                [0.8, 0.3, 0.5, 1.],
+                UvBlendMode::Overlay,
+            ),
+            [0.68, 0.42, 0.4, 1.],
+        );
+        near(
+            uv_blend_over(
+                [0.8, 0.3, 0.5, 1.],
+                [0.2, 0.7, 0.4, 1.],
+                UvBlendMode::Overlay,
+            ),
+            [0.32, 0.58, 0.4, 1.],
+        );
+    }
+    #[test]
+    fn blends_match_two_stage_straight_reference_at_transparent_and_subnormal_edges() {
+        // Independent f64 two-stage specification: blend source color into backdrop,
+        // then associate and source-over. Production uses the expanded PM equation.
+        for mode in MODES {
+            for a in [0., f32::from_bits(1), 1e-7, 0.4, 1.] {
+                for b in [0., f32::from_bits(1), 0.6, 1.] {
+                    for cs in [0., 0.2, 0.5, 1.] {
+                        for cb in [0., 0.3, 0.8, 1.] {
+                            let src = [cs * a, cs * a, cs * a, a];
+                            let dst = [cb * b, cb * b, cb * b, b];
+                            let out = uv_blend_over(src, dst, mode);
+                            let a = a as f64;
+                            let b = b as f64;
+                            let cs = if a > 0. { src[0] as f64 / a } else { 0. };
+                            let cb = if b > 0. { dst[0] as f64 / b } else { 0. };
+                            let blended = match mode {
+                                UvBlendMode::Normal => cs,
+                                UvBlendMode::Multiply => cb * cs,
+                                UvBlendMode::Screen => 1. - (1. - cb) * (1. - cs),
+                                UvBlendMode::Overlay => {
+                                    if cb <= 0.5 {
+                                        2. * cb * cs
+                                    } else {
+                                        1. - 2. * (1. - cb) * (1. - cs)
+                                    }
+                                }
+                            };
+                            let mixed_source = (1. - b) * cs + b * blended;
+                            let reference = (a * mixed_source + (1. - a) * b * cb) as f32;
+                            near(
+                                out,
+                                [reference, reference, reference, (a + (1. - a) * b) as f32],
+                            );
+                            assert!(valid_uv_pixels(&[out], 1));
+                            if mode == UvBlendMode::Normal {
+                                assert!(same_uv_pixels(&[out], &[uv_over(src, dst)]));
+                            }
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                uv_blend_over([1., 0.8, 0.6, 0.], [0.2, 0.3, 0.1, 0.5], mode),
+                [0.2, 0.3, 0.1, 0.5]
+            );
+            assert_eq!(
+                uv_blend_over([0.2, 0.3, 0.1, 0.5], [1., 0.8, 0.6, 0.], mode),
+                [0.2, 0.3, 0.1, 0.5]
+            );
+        }
+    }
+    #[test]
+    fn blends_opacity_visibility_lock_order_and_raw_bits_are_separate() {
+        let mut l = layer();
+        l.paint(0, vec![[0.48, 0.18, 0.3, 0.6]; 4]).unwrap();
+        l.edit(UvLayerOp::Create("top".into())).unwrap();
+        let id = l.document.active_layer;
+        l.paint(id, vec![[0.16, 0.56, 0.32, 0.8]; 4]).unwrap();
+        l.edit(UvLayerOp::Opacity(id, 0.5)).unwrap();
+        l.edit(UvLayerOp::BlendMode(id, UvBlendMode::Overlay))
+            .unwrap();
+        let raw = l.active().pixels.clone();
+        near(l.document.composite()[0], [0.4832, 0.3208, 0.34, 0.76]);
+        l.edit(UvLayerOp::Lock(id, true)).unwrap();
+        near(l.document.composite()[0], [0.4832, 0.3208, 0.34, 0.76]);
+        assert!(l.project(&[[0.; 4]; 4]).is_err());
+        l.edit(UvLayerOp::Visible(id, false)).unwrap();
+        assert_eq!(l.document.composite()[0], [0.48, 0.18, 0.3, 0.6]);
+        l.edit(UvLayerOp::Visible(id, true)).unwrap();
+        l.edit(UvLayerOp::Opacity(id, 0.)).unwrap();
+        assert_eq!(l.document.composite()[0], [0.48, 0.18, 0.3, 0.6]);
+        l.edit(UvLayerOp::Opacity(id, 0.5)).unwrap();
+        l.edit(UvLayerOp::Reorder(id, 0)).unwrap();
+        near(
+            l.document.composite()[0],
+            uv_over([0.48, 0.18, 0.3, 0.6], [0.08, 0.28, 0.16, 0.4]),
+        );
+        assert!(same_uv_pixels(&raw, &l.document.layers[0].pixels));
+        let replacement = vec![[0.1, 0.2, 0.3, 0.5]; 4];
+        near(
+            l.document.composite_active(Some(&replacement))[0],
+            uv_over([0.48, 0.18, 0.3, 0.6], [0.05, 0.1, 0.15, 0.25]),
+        );
+    }
+    #[test]
+    fn blends_mode_history_noop_redo_duplicate_delete_and_policy_are_atomic() {
+        let mut l = layer();
+        l.paint(0, vec![[0.2, 0.1, 0.3, 0.5]; 4]).unwrap();
+        let original = l.document.clone();
+        l.edit(UvLayerOp::BlendMode(0, UvBlendMode::Multiply))
+            .unwrap();
+        let blended = l.document.clone();
+        assert_eq!(blended.compositor, UV_BLEND_COMPOSITOR);
+        l.exchange(false);
+        assert_eq!(l.document, original);
+        assert_eq!(l.redo_count(), 1);
+        assert!(
+            !l.edit(UvLayerOp::BlendMode(0, UvBlendMode::Normal))
+                .unwrap()
+        );
+        assert_eq!(l.redo_count(), 1);
+        assert!(
+            l.edit(UvLayerOp::BlendMode(999, UvBlendMode::Screen))
+                .is_err()
+        );
+        assert_eq!(l.redo_count(), 1);
+        l.exchange(true);
+        assert_eq!(l.document, blended);
+        l.edit(UvLayerOp::Duplicate(0)).unwrap();
+        let copy = l.document.active_layer;
+        assert_eq!(l.active().meta.blend_mode, UvBlendMode::Multiply);
+        l.edit(UvLayerOp::Delete(0)).unwrap();
+        l.edit(UvLayerOp::BlendMode(copy, UvBlendMode::Normal))
+            .unwrap();
+        assert_eq!(l.document.compositor, UV_COMPOSITOR);
+        l.exchange(false);
+        assert_eq!(l.document.compositor, UV_BLEND_COMPOSITOR);
+        l.edit(UvLayerOp::BlendMode(copy, UvBlendMode::Overlay))
+            .unwrap();
+        assert_eq!(l.redo_count(), 0);
+        assert!(l.history_bytes() <= UV_HISTORY_BYTES);
+    }
+    #[test]
+    fn blends_v3_serialization_defaults_old_mode_and_rejects_unsafe_policies() {
+        let mut l = layer();
+        let old = serde_json::to_value(l.document()).unwrap();
+        assert!(old["layers"][0]["meta"].get("blend_mode").is_none());
+        assert_eq!(
+            serde_json::from_value::<UvLayersDocument>(old.clone()).unwrap(),
+            *l.document()
+        );
+        for mode in MODES {
+            l.edit(UvLayerOp::BlendMode(0, mode)).unwrap();
+            let saved = serde_json::to_value(l.document()).unwrap();
+            let restored: UvLayersDocument = serde_json::from_value(saved).unwrap();
+            restored.validate().unwrap();
+            assert_eq!(restored, *l.document());
+        }
+        let mut unsafe_doc = l.document.clone();
+        unsafe_doc.compositor = UV_COMPOSITOR.into();
+        assert!(unsafe_doc.validate().is_err());
+        let mut unknown = old;
+        unknown["layers"][0]["meta"]["blend_mode"] = serde_json::json!("SoftLight");
+        assert!(serde_json::from_value::<UvLayersDocument>(unknown).is_err());
+    }
     fn layer() -> UvLayers {
         UvLayers::new(2, 2).unwrap()
     }

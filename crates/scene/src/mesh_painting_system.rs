@@ -1415,7 +1415,7 @@ fn linear_to_srgb_u8(linear: f32) -> u8 {
 #[cfg(test)]
 mod mixed_history_regression_tests {
     use super::*;
-    use painting::uv_layers::{UvLayerOp, UvLayers};
+    use painting::uv_layers::{UvBlendMode, UvLayerOp, UvLayers};
 
     fn legacy_commit(r: &mut MeshPaintingResource, size: u32, value: f32) {
         let p = PaintableMesh {
@@ -1448,9 +1448,18 @@ mod mixed_history_regression_tests {
             let mut shared = UvLayers::new(1, 1).unwrap();
             for n in 0..shared_entries {
                 shared
-                    .edit(UvLayerOp::Rename(0, format!("Shared {n}")))
+                    .edit(UvLayerOp::BlendMode(
+                        0,
+                        [
+                            UvBlendMode::Multiply,
+                            UvBlendMode::Screen,
+                            UvBlendMode::Overlay,
+                            UvBlendMode::Normal,
+                        ][n % 4],
+                    ))
                     .unwrap();
             }
+            let shared_before = shared.document().clone();
             r.uv_layers.insert(12, shared);
             legacy_commit(&mut r, 2, 0.2);
             assert_eq!(
@@ -1460,6 +1469,7 @@ mod mixed_history_regression_tests {
             );
             assert_eq!(r.undo_count(44), usize::from(shared_entries == 127));
             assert_eq!(r.undo_count(12) + r.undo_count(44), 128);
+            assert_eq!(r.uv_layers[&12].document(), &shared_before);
             assert!(r.history_bytes() <= r.history_limit_bytes());
             let evicted = r.evicted_history_strokes();
             assert_eq!(evicted, usize::from(shared_entries == 128));
@@ -1491,6 +1501,9 @@ mod mixed_history_regression_tests {
         let mut r = MeshPaintingResource::default();
         r.get_or_create_uv_surface(44, 512, 512);
         let mut shared = UvLayers::new(512, 512).unwrap();
+        shared
+            .edit(UvLayerOp::BlendMode(0, UvBlendMode::Overlay))
+            .unwrap();
         for n in 1..=7 {
             shared
                 .paint(0, vec![[n as f32 / 10., 0., 0., 1.]; 512 * 512])
@@ -1507,7 +1520,7 @@ mod mixed_history_regression_tests {
         legacy_commit(&mut r, 512, 0.2);
         assert!(r.history_bytes() <= r.history_limit_bytes());
         assert_eq!(r.history_bytes(), retained);
-        assert_eq!(r.undo_count(12), 7);
+        assert_eq!(r.undo_count(12), 8);
         assert_eq!(
             r.undo_count(44),
             0,

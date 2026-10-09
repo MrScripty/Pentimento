@@ -1224,6 +1224,342 @@ fn focus_reset_releases_retained_direct_history_modifiers() {
 }
 
 #[test]
+fn shared_blends_actual_modes_history_upload_and_owned_reopen() {
+    use pentimento_ipc::UvLayerBlendMode as Mode;
+    let mut f = Fixture::new_with_projection(true);
+    f.enable_layers();
+    f.direct();
+    f.command(PaintCommand::SetBrushOpacity { opacity: 0.45 });
+    f.command(PaintCommand::SetBrushColor {
+        color: [0.8, 0.3, 0.5, 1.],
+    });
+    f.gesture();
+    f.settle();
+    f.uv(UvLayerCommand::Create {
+        name: "Blended".into(),
+    });
+    let id = f.layers().active_layer;
+    f.command(PaintCommand::SetBrushColor {
+        color: [0.2, 0.7, 0.4, 1.],
+    });
+    f.gesture();
+    f.settle();
+    let raw = f
+        .layers()
+        .layers
+        .iter()
+        .map(|l| l.pixels.clone())
+        .collect::<Vec<_>>();
+    let mut images = Vec::new();
+    for mode in [Mode::Normal, Mode::Multiply, Mode::Screen, Mode::Overlay] {
+        let before = f.layers();
+        let before_image = f.image();
+        let n = counts(&f).0;
+        f.uv(UvLayerCommand::BlendMode { layer_id: id, mode });
+        let after = f.layers();
+        let display = f.image();
+        assert_eq!(
+            raw,
+            after
+                .layers
+                .iter()
+                .map(|l| l.pixels.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(counts(&f).0, n + usize::from(mode != Mode::Normal));
+        let state = f.state();
+        let ui = state["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|m| m["type"] == "PaintBrushStateChanged")
+            .unwrap();
+        assert_eq!(
+            ui["data"]["target"]["uv_layers"]["layers"][0]["blend_mode"],
+            serde_json::to_value(mode).unwrap()
+        );
+        if mode != Mode::Normal {
+            assert_ne!(display, before_image);
+            f.uv(UvLayerCommand::Undo);
+            assert_eq!(f.layers(), before);
+            assert_eq!(f.image(), before_image);
+            f.uv(UvLayerCommand::Redo);
+            assert_eq!(f.layers(), after);
+            assert_eq!(f.image(), display);
+        }
+        let path = f.path.join(format!("blend-{mode:?}.json"));
+        assert!(f.save(&path));
+        f.uv(UvLayerCommand::Rename {
+            layer_id: id,
+            name: "Temporary".into(),
+        });
+        assert!(f.open(&path));
+        f.settle();
+        assert_eq!(f.layers(), after);
+        assert_eq!(f.image(), display);
+        assert_eq!(counts(&f), (0, 0));
+        images.push(display);
+    }
+    for a in 0..images.len() {
+        for b in a + 1..images.len() {
+            assert_ne!(
+                images[a], images[b],
+                "modes must reach the actual display uploader"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_blends_actual_mode_order_opacity_history_and_reopen_after_repairs() {
+    use pentimento_ipc::UvLayerBlendMode as Mode;
+    for mode in [Mode::Normal, Mode::Multiply, Mode::Screen, Mode::Overlay] {
+        let mut f = Fixture::new_with_projection(true);
+        f.enable_layers();
+        f.direct();
+        f.command(PaintCommand::SetBrushOpacity { opacity: 0.45 });
+        f.command(PaintCommand::SetBrushColor {
+            color: [0.8, 0.3, 0.5, 1.],
+        });
+        f.gesture();
+        f.settle();
+        f.uv(UvLayerCommand::Create {
+            name: "Upper".into(),
+        });
+        let id = f.layers().active_layer;
+        f.command(PaintCommand::SetBrushColor {
+            color: [0.2, 0.7, 0.4, 1.],
+        });
+        f.gesture();
+        f.settle();
+        f.uv(UvLayerCommand::BlendMode { layer_id: id, mode });
+        let before = f.layers();
+        let before_image = f.image();
+        let raw = before
+            .layers
+            .iter()
+            .map(|l| (l.meta.id, l.pixels.clone()))
+            .collect::<Vec<_>>();
+        // Production gestures have empty texels and partially transparent brush edges.
+        assert!(raw.iter().any(|(_, p)| p.iter().any(|v| v[3] == 0.)));
+        assert!(
+            raw.iter()
+                .any(|(_, p)| p.iter().any(|v| v[3] > 0. && v[3] < 1.))
+        );
+        f.uv(UvLayerCommand::Opacity {
+            layer_id: id,
+            opacity: 0.35,
+        });
+        let faded = f.layers();
+        let faded_image = f.image();
+        assert_ne!(faded_image, before_image);
+        assert_eq!(faded.compositor, before.compositor);
+        f.uv(UvLayerCommand::Reorder {
+            layer_id: id,
+            new_index: 0,
+        });
+        let reordered = f.layers();
+        let reordered_image = f.image();
+        assert_ne!(reordered_image, faded_image);
+        for (layer_id, pixels) in &raw {
+            assert!(painting::uv_layers::same_uv_pixels(
+                pixels,
+                &reordered
+                    .layers
+                    .iter()
+                    .find(|l| l.meta.id == *layer_id)
+                    .unwrap()
+                    .pixels
+            ));
+        }
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), faded);
+        assert_eq!(f.image(), faded_image);
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), before);
+        assert_eq!(f.image(), before_image);
+        f.uv(UvLayerCommand::Redo);
+        f.uv(UvLayerCommand::Redo);
+        assert_eq!(f.layers(), reordered);
+        assert_eq!(f.image(), reordered_image);
+        let path = f.path.join(format!("combined-{mode:?}.json"));
+        assert!(f.save(&path));
+        f.uv(UvLayerCommand::BlendMode {
+            layer_id: id,
+            mode: if mode == Mode::Normal {
+                Mode::Multiply
+            } else {
+                Mode::Normal
+            },
+        });
+        assert!(f.open(&path));
+        f.settle();
+        assert_eq!(f.layers(), reordered);
+        assert_eq!(f.image(), reordered_image);
+        assert_eq!(counts(&f), (0, 0));
+    }
+}
+
+#[test]
+fn shared_blends_actual_direct_projection_and_live_use_same_layer_modes() {
+    use pentimento_ipc::UvLayerBlendMode as Mode;
+    for mode in [Mode::Normal, Mode::Multiply, Mode::Screen, Mode::Overlay] {
+        let mut f = Fixture::new_with_projection(true);
+        f.enable_layers();
+        f.direct();
+        f.command(PaintCommand::SetBrushColor {
+            color: [0.8, 0.3, 0.5, 1.],
+        });
+        f.gesture();
+        f.settle();
+        f.uv(UvLayerCommand::Create {
+            name: "Projection".into(),
+        });
+        let id = f.layers().active_layer;
+        f.uv(UvLayerCommand::BlendMode { layer_id: id, mode });
+        f.command(PaintCommand::SetBrushColor {
+            color: [0.2, 0.7, 0.4, 1.],
+        });
+        f.gesture();
+        f.settle();
+        let direct = f.layers();
+        let image = f.image();
+        f.uv(UvLayerCommand::Undo);
+        f.uv(UvLayerCommand::Redo);
+        assert_eq!(f.layers(), direct);
+        assert_eq!(f.image(), image);
+        f.command(PaintCommand::SetTarget {
+            target: PaintTarget::Canvas,
+        });
+        f.gesture();
+        f.settle();
+        let source = f.source();
+        let before = f.layers();
+        let n = counts(&f).0;
+        let committed = f.image();
+        f.command(PaintCommand::SetLiveProjection { enabled: true });
+        f.settle();
+        let preview = f.image();
+        assert_ne!(preview, committed);
+        assert_eq!(f.layers(), before);
+        f.uv(UvLayerCommand::BlendMode {
+            layer_id: id,
+            mode: Mode::Normal,
+        });
+        assert_eq!(f.layers(), before);
+        f.command(PaintCommand::ProjectToScene);
+        f.settle();
+        assert_eq!(f.image(), preview);
+        assert_eq!(counts(&f).0, n + 1);
+        assert!(!f.app.world().resource::<ProjectionMode>().live_projection);
+        let applied = f.layers();
+        assert_eq!(applied.layers[0], before.layers[0]);
+        assert_eq!(applied.layers[1].meta, before.layers[1].meta);
+        f.uv(UvLayerCommand::Undo);
+        assert_eq!(f.layers(), before);
+        assert_eq!(f.image(), committed);
+        f.command(PaintCommand::SetLiveProjection { enabled: true });
+        f.settle();
+        f.command(PaintCommand::CancelUvProjection);
+        f.settle();
+        assert_eq!(f.layers(), before);
+        assert_eq!(counts(&f).1, 1);
+        f.uv(UvLayerCommand::Redo);
+        assert_eq!(f.layers(), applied);
+        assert_eq!(f.image(), preview);
+        assert_eq!(f.source(), source);
+        f.uv(UvLayerCommand::Lock {
+            layer_id: id,
+            locked: true,
+        });
+        let locked = f.layers();
+        f.command(PaintCommand::ProjectToScene);
+        f.settle();
+        assert_eq!(f.layers(), locked);
+        f.uv(UvLayerCommand::Lock {
+            layer_id: id,
+            locked: false,
+        });
+        f.uv(UvLayerCommand::Visible {
+            layer_id: id,
+            visible: false,
+        });
+        let hidden = f.layers();
+        f.direct();
+        f.gesture();
+        f.settle();
+        assert_eq!(f.layers(), hidden);
+    }
+}
+
+#[test]
+fn shared_blends_actual_v3_legacy_defaults_and_bad_mode_policy_open_atomically() {
+    use pentimento_ipc::UvLayerBlendMode as Mode;
+    let mut f = Fixture::new_with_projection(true);
+    f.enable_layers();
+    f.direct();
+    f.gesture();
+    f.settle();
+    let path = f.path.join("old-v3.json");
+    assert!(f.save(&path));
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let uv = saved["objects"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|o| o["uv_layers"].is_object())
+        .unwrap()
+        .get_mut("uv_layers")
+        .unwrap();
+    for layer in uv["layers"].as_array_mut().unwrap() {
+        layer["meta"].as_object_mut().unwrap().remove("blend_mode");
+    }
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let legacy = f.layers();
+    let original_image = f.image();
+    assert!(f.open(&path));
+    f.settle();
+    assert_eq!(f.layers(), legacy);
+    assert_eq!(f.image(), original_image);
+    f.uv(UvLayerCommand::BlendMode {
+        layer_id: legacy.active_layer,
+        mode: Mode::Overlay,
+    });
+    let preserved = f.layers();
+    let image = f.image();
+    let history = counts(&f);
+    for bad in ["unknown-mode", "legacy-marker", "unknown-policy"] {
+        let mut invalid = saved.clone();
+        let uv = invalid["objects"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|o| o["uv_layers"].is_object())
+            .unwrap()
+            .get_mut("uv_layers")
+            .unwrap();
+        match bad {
+            "unknown-mode" => {
+                uv["compositor"] = serde_json::json!(painting::uv_layers::UV_BLEND_COMPOSITOR);
+                uv["layers"][0]["meta"]["blend_mode"] = serde_json::json!("SoftLight");
+            }
+            "legacy-marker" => {
+                uv["layers"][0]["meta"]["blend_mode"] = serde_json::json!("Multiply")
+            }
+            _ => uv["compositor"] = serde_json::json!("unknown"),
+        }
+        let badpath = f.path.join(format!("{bad}.json"));
+        std::fs::write(&badpath, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(!f.open(&badpath));
+        assert_eq!(f.layers(), preserved);
+        assert_eq!(f.image(), image);
+        assert_eq!(counts(&f), history);
+    }
+}
+
+#[test]
 fn shared_layers_actual_authoring_selection_structural_history_and_persistence() {
     let mut f = Fixture::new_with_projection(true);
     f.enable_layers();

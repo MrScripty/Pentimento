@@ -1,12 +1,13 @@
 <script lang="ts">
     import { bridge } from '$lib/bridge';
-    import type { UvLayerState, UvLayerCommand, PaintTargetState } from '$lib/types';
+    import type { UvLayerState, UvLayerCommand, UvLayerBlendMode, PaintTargetState } from '$lib/types';
     let { layerState, history }: {layerState:UvLayerState;history:PaintTargetState} = $props();
     let name=$state('');
     let locked=$derived(layerState.active || layerState.conflicted);
     let active=$derived(layerState.layers.find(l=>l.is_active));
     const percent=(opacity:number)=>Number((opacity*100).toFixed(3));
     const send=(command:UvLayerCommand)=>bridge.paintCommand({UvLayers:{command}});
+    const blendModes:UvLayerBlendMode[]=['Normal','Multiply','Screen','Overlay'];
 </script>
 <section aria-labelledby="uv-layer-heading">
     <div class="divider"></div><h3 id="uv-layer-heading">UV texture layers</h3>
@@ -19,7 +20,7 @@
         <button class="wide" disabled={locked || layerState.receiver===null} onclick={()=>send('Enable')}>Enable UV texture layers</button>
         <p class="hint">Keep exact existing pixels as editable layers. This enables linear Normal compositing; legacy appearance may change. Existing canvas projections become independent snapshots.</p>
     {:else}
-        <p class="hint">Both DirectUV and Canvas Apply paint the selected layer. Layers compose bottom to top with Normal blending in linear color. Hidden or locked layers refuse painting.</p>
+        <p class="hint">DirectUV and Canvas Apply paint the selected layer. Modes blend with lower visible UV layers in linear color; the UV stack then overlays the original material. A lone layer behaves like Normal. Hidden or locked layers refuse painting.</p>
         <label class="select-label" for="uv-new-name">New UV layer name</label>
         <input id="uv-new-name" type="text" bind:value={name} maxlength="256" disabled={locked} />
         <button class="wide" disabled={locked} onclick={()=>send({Create:{name}})}>Create UV layer</button>
@@ -32,6 +33,10 @@
                         <label><input type="checkbox" aria-label={`Lock UV layer ${layer.name}`} checked={layer.locked} disabled={locked} onchange={e=>{const locked=e.currentTarget.checked;e.currentTarget.checked=layer.locked;send({Lock:{layer_id:layer.id,locked}});}} /> Lock paint</label>
                     </div>
                     {#if layer.is_active}
+                        <label class="select-label" for={`uv-blend-${layer.id}`}>UV layer blend mode</label>
+                        <select id={`uv-blend-${layer.id}`} value={layer.blend_mode} disabled={locked} onchange={e=>{const mode=e.currentTarget.value as UvLayerBlendMode;e.currentTarget.value=layer.blend_mode;send({BlendMode:{layer_id:layer.id,mode}});}}>
+                            {#each blendModes as mode}<option value={mode}>{mode}</option>{/each}
+                        </select>
                         <label class="select-label" for={`uv-name-${layer.id}`}>UV layer name</label>
                         <input id={`uv-name-${layer.id}`} type="text" value={layer.name} maxlength="256" disabled={locked} onchange={e=>{const name=e.currentTarget.value;e.currentTarget.value=layer.name;send({Rename:{layer_id:layer.id,name}});}} />
                         <label class="select-label" for={`uv-opacity-${layer.id}`}>UV layer opacity (%)</label>

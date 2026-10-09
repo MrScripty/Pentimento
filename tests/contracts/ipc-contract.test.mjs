@@ -251,6 +251,8 @@ test('native keyboard samples preserve physical keys, native text, and additive 
   const state=samples.bevy_to_ui.find(m=>m.type==='PaintBrushStateChanged').data.target.uv_layers;
   assert.equal(state.receiver,12);assert.equal(state.enabled,true);assert.equal(state.layers[0].is_active,true);
   assert.equal(state.layers[0].locked,false);assert.equal(state.layers[0].opacity,0.5);
+  assert.equal(state.layers[0].blend_mode,'Overlay');
+  assert.ok(commands.some(c=>c.BlendMode?.layer_id===3 && c.BlendMode.mode==='Multiply'));
   assert.equal(state.can_undo,true);assert.equal(state.can_redo,false);assert.equal(state.conflicted,false);
  });
 

@@ -140,6 +140,7 @@ fn main() {
                         layers: vec![UvLayerInfo {
                             id: 3,
                             name: "Detail".into(),
+                            blend_mode: pentimento_ipc::UvLayerBlendMode::Overlay,
                             visible: true,
                             opacity: 0.5,
                             locked: false,
@@ -197,6 +198,12 @@ fn main() {
             }),
             UiToBevy::PaintCommand(PaintCommand::UvLayers {
                 command: UvLayerCommand::Enable,
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::BlendMode {
+                    layer_id: 3,
+                    mode: pentimento_ipc::UvLayerBlendMode::Multiply,
+                },
             }),
             UiToBevy::PaintCommand(PaintCommand::UvLayers {
                 command: UvLayerCommand::Create {

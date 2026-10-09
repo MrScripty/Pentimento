@@ -3,10 +3,11 @@
 use crate::{MeshPaintTexture, MeshPaintingResource, PaintMode, PaintableMesh};
 use bevy::prelude::*;
 use painting::uv_layers::{
-    UV_COMPOSITOR, UvLayerDocument, UvLayerMeta, UvLayerOp, UvLayers, UvLayersDocument,
+    UV_COMPOSITOR, UvBlendMode, UvLayerDocument, UvLayerMeta, UvLayerOp, UvLayers, UvLayersDocument,
 };
 use pentimento_ipc::{
-    PaintCommand, UvLayerCommand as Command, UvLayerInfo, UvLayerState, UvReceiverInfo,
+    PaintCommand, UvLayerBlendMode as WireBlend, UvLayerCommand as Command, UvLayerInfo,
+    UvLayerState, UvReceiverInfo,
 };
 
 pub(crate) fn composite_display(
@@ -64,6 +65,40 @@ fn linear_to_srgb(v: f32) -> u8 {
         1.055 * v.powf(1. / 2.4) - 0.055
     };
     (s * 255.).round() as u8
+}
+
+#[cfg(test)]
+mod blend_display_tests {
+    use super::*;
+    #[test]
+    fn lone_blended_layer_keeps_isolated_stack_over_colored_original() {
+        let mut d = UvLayers::new(2, 2).unwrap();
+        d.paint(0, vec![[0.08, 0.28, 0.16, 0.4]; 4]).unwrap();
+        let color = [0.2, 0.4, 0.7, 0.8];
+        let texture = [20, 128, 200, 175].repeat(4);
+        let normal = composite_display(d.document(), color, Some(&texture));
+        for mode in [
+            UvBlendMode::Multiply,
+            UvBlendMode::Screen,
+            UvBlendMode::Overlay,
+        ] {
+            d.edit(UvLayerOp::BlendMode(0, mode)).unwrap();
+            assert_eq!(
+                composite_display(d.document(), color, Some(&texture)),
+                normal
+            );
+        }
+        d.edit(UvLayerOp::Create("upper".into())).unwrap();
+        let id = d.document().active_layer;
+        d.paint(id, vec![[0.48, 0.18, 0.3, 0.6]; 4]).unwrap();
+        let under_normal = composite_display(d.document(), color, Some(&texture));
+        d.edit(UvLayerOp::BlendMode(id, UvBlendMode::Screen))
+            .unwrap();
+        assert_ne!(
+            composite_display(d.document(), color, Some(&texture)),
+            under_normal
+        );
+    }
 }
 
 pub(crate) fn validate_display(
@@ -216,6 +251,12 @@ pub(crate) fn state(world: &mut World) -> UvLayerState {
                     visible: l.meta.visible,
                     opacity: l.meta.opacity,
                     locked: l.meta.locked,
+                    blend_mode: match l.meta.blend_mode {
+                        UvBlendMode::Normal => WireBlend::Normal,
+                        UvBlendMode::Multiply => WireBlend::Multiply,
+                        UvBlendMode::Screen => WireBlend::Screen,
+                        UvBlendMode::Overlay => WireBlend::Overlay,
+                    },
                     is_active: l.meta.id == l_document_active(r, id),
                 })
                 .collect();
@@ -376,6 +417,7 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
             meta: UvLayerMeta {
                 id: data.len() as u32,
                 name: format!("Canvas {plane} snapshot"),
+                blend_mode: UvBlendMode::Normal,
                 visible: true,
                 opacity: 1.,
                 locked: false,
@@ -387,6 +429,7 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
         meta: UvLayerMeta {
             id: data.len() as u32,
             name: "UV Layer 1".into(),
+            blend_mode: UvBlendMode::Normal,
             visible: true,
             opacity: 1.,
             locked: false,
@@ -625,6 +668,15 @@ pub(crate) fn command(world: &mut World, command: &PaintCommand) -> bool {
             Command::Visible { layer_id, visible } => UvLayerOp::Visible(*layer_id, *visible),
             Command::Opacity { layer_id, opacity } => UvLayerOp::Opacity(*layer_id, *opacity),
             Command::Lock { layer_id, locked } => UvLayerOp::Lock(*layer_id, *locked),
+            Command::BlendMode { layer_id, mode } => UvLayerOp::BlendMode(
+                *layer_id,
+                match mode {
+                    WireBlend::Normal => UvBlendMode::Normal,
+                    WireBlend::Multiply => UvBlendMode::Multiply,
+                    WireBlend::Screen => UvBlendMode::Screen,
+                    WireBlend::Overlay => UvBlendMode::Overlay,
+                },
+            ),
             _ => unreachable!(),
         };
         world

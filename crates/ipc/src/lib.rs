@@ -28,7 +28,7 @@ pub use commands::{
     GizmoAxis, GizmoCommand, GizmoMode, LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool,
     MeshSelectionMode, ObjectCommand, PaintBrushPresetInfo, PaintBrushSettings, PaintCommand,
     PaintTarget, PaintTargetState, SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool,
-    UvLayerCommand, UvLayerInfo, UvLayerState, UvReceiverInfo,
+    UvLayerBlendMode, UvLayerCommand, UvLayerInfo, UvLayerState, UvReceiverInfo,
 };
 
 // Input types
