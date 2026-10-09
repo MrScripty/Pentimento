@@ -21,6 +21,8 @@ sculpting = ["bevy/bevy_picking", "bevy/mesh_picking", "painting/bevy", "dep:scu
 atmosphere = []
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 pentimento-ipc = { path = "../ipc" }
 painting = { path = "../painting", features = ["bevy"] }
 sculpting = { path = "../sculpting", features = ["bevy"], optional = true }

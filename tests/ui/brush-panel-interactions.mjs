@@ -28,7 +28,7 @@ for (const mode of ['None', 'MeshEdit']) {
 }
 
 let paint = { preset_id: 0, customized: true, color: [0.2158605, 0.2158605, 0.2158605, 1], size: 50, opacity: 1, hardness: 0.8, spacing: 0.25, blend_mode: 'Normal' };
-const paintState = () => receive({ type: 'PaintBrushStateChanged', data: { settings: paint, presets: [{ id: 0, name: 'Hard Round' }, { id: 1, name: 'Soft Round' }], can_undo: true } });
+const paintState = () => receive({ type: 'PaintBrushStateChanged', data: { settings: paint, presets: [{ id: 0, name: 'Hard Round' }, { id: 1, name: 'Soft Round' }], can_undo: true, can_redo: true, source_visible: true } });
 await paintState();
 await receive({ type: 'EditModeChanged', data: { mode: 'Paint' } });
 await page.getByRole('heading', { name: 'Projection paint' }).waitFor();
@@ -56,17 +56,56 @@ await page.getByLabel('Brush preset', { exact: true }).selectOption('1');
 assert.deepEqual((await lastCommand('PaintCommand')).data, { SelectBrushPreset: { preset_id: 1 } });
 await page.getByRole('button', { name: 'Undo canvas stroke' }).click();
 assert.equal((await lastCommand('PaintCommand')).data, 'Undo');
+await page.getByRole('button', { name: 'Redo canvas stroke', exact: true }).click();
+assert.equal((await lastCommand('PaintCommand')).data, 'Redo');
 await page.getByLabel('Live projection', { exact: true }).check();
 assert.deepEqual((await lastCommand('PaintCommand')).data, { SetLiveProjection: { enabled: true } });
 await page.getByRole('button', { name: 'Apply canvas to UV surfaces' }).click();
 assert.equal((await lastCommand('PaintCommand')).data, 'ProjectToScene');
+await page.getByRole('checkbox', { name: 'Show source canvas', exact: true }).uncheck();
+assert.deepEqual((await lastCommand('PaintCommand')).data, { SetSourceVisible: { visible: false } });
 const output = process.env.PENTIMENTO_EVIDENCE_DIR ?? '/tmp/pentimento-brush-evidence';
 await mkdir(output, { recursive: true });
 await page.screenshot({ path: `${output}/projection-paint-controls.jpg`, type: 'jpeg', quality: 85 });
-let sculpt = { tool: 'Push', radius: 0.5, strength: 1, hardness: 0.5, falloff: 'Smooth' };
+let sculpt = { tool: 'Push', radius: 0.5, strength: 1, hardness: 0.5, autosmooth: 0.5, falloff: 'Smooth' };
 await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
 await receive({ type: 'EditModeChanged', data: { mode: 'Sculpt' } });
 await page.getByRole('heading', { name: 'Sculpt brushes' }).waitFor();
+const smoothingValue = page.getByRole('spinbutton', { name: 'Auto smoothing value', exact: true });
+const smoothingSlider = page.locator('#sculpt-autosmooth');
+assert.equal(await smoothingValue.inputValue(), '50');
+for (const [accepted, draft] of [[1, '200'], [0, '-10']]) {
+    sculpt.autosmooth = accepted;
+    await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+    await smoothingValue.fill(draft); await smoothingValue.press('Enter');
+    assert.deepEqual((await lastCommand('SculptCommand')).data, { SetAutoSmooth: { amount: accepted } });
+    assert.equal(await smoothingValue.inputValue(), String(accepted * 100));
+    assert.equal(await smoothingSlider.inputValue(), String(accepted * 100));
+}
+await smoothingValue.fill('20'); await smoothingValue.press('Enter');
+assert.deepEqual((await lastCommand('SculptCommand')).data, { SetAutoSmooth: { amount: 0.2 } });
+sculpt.autosmooth = 0.2;
+await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+assert.equal(await smoothingSlider.inputValue(), '20');
+// A stale enabled UI can submit just as a native stroke takes ownership.
+// The refused edit must roll back even when the accepted snapshot is unchanged.
+await smoothingValue.fill('80'); await smoothingValue.press('Enter');
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: true, notice: null } });
+await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+assert.equal(await smoothingValue.inputValue(), '20');
+assert.equal(await smoothingSlider.inputValue(), '20');
+assert.equal(await smoothingValue.isDisabled(), true);
+assert.equal(await smoothingSlider.isDisabled(), true);
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: false, notice: null } });
+await smoothingSlider.scrollIntoViewIfNeeded();
+const smoothingBox = await smoothingSlider.boundingBox();
+await page.mouse.click(smoothingBox.x + smoothingBox.width / 3, smoothingBox.y + smoothingBox.height / 2);
+const smoothingRequested = Number(await smoothingSlider.inputValue());
+assert.deepEqual((await lastCommand('SculptCommand')).data, { SetAutoSmooth: { amount: smoothingRequested / 100 } });
+assert.equal(Number(await smoothingValue.inputValue()), smoothingRequested);
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: true, notice: null } });
+assert.equal(await smoothingSlider.inputValue(), '20');
+await receive({ type: 'SculptHistoryChanged', data: { undo_strokes: 0, redo_strokes: 0, active: false, notice: null } });
 assert.equal(await page.getByRole('heading', { name: 'Projection paint' }).count(), 0);
 for (const tool of ['Push', 'Pull', 'Grab', 'Smooth', 'Flatten', 'Inflate', 'Pinch', 'Crease']) {
     await page.getByRole('button', { name: tool, exact: true }).click();
@@ -84,9 +123,52 @@ for (const [label, value, expected] of [
 await page.getByLabel('Falloff curve').selectOption('Sharp');
 assert.deepEqual((await lastCommand('SculptCommand')).data, { SetFalloff: { falloff: 'Sharp' } });
 // A keyboard-originated backend update replaces displayed values, including tool.
-sculpt = { tool: 'Grab', radius: 1.7, strength: 0.4, hardness: 0.25, falloff: 'Sharp' };
+sculpt = { tool: 'Grab', radius: 1.7, strength: 0.4, hardness: 0.25, autosmooth: 0, falloff: 'Sharp' };
 await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+assert.equal(await smoothingValue.inputValue(), '0');
+assert.equal(await smoothingValue.isDisabled(), true);
+assert.equal(await smoothingSlider.isDisabled(), true);
+sculpt.tool = 'Push'; sculpt.autosmooth = 0.2;
+await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+assert.equal(await smoothingValue.inputValue(), '20');
+assert.equal(await smoothingValue.isDisabled(), false);
+console.log(JSON.stringify({ type: 'pentimento.ui.sculpt_autosmooth', status: 'passed', checks: ['numeric-command', 'pointer-command', 'unchanged-upper-lower-clamp', 'same-value-active-refusal-number-and-slider', 'grab-disabled-zero', 'stamped-custom-amount-restored'], renderer_qualification: false }));
 assert.equal(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue(), '1.7');
+// Both controls show the same draft while backend acknowledgement is pending.
+// This uses a real pointer event, not programmatic value assignment.
+const sculptRadius = page.locator('#sculpt-radius');
+await sculptRadius.scrollIntoViewIfNeeded();
+const radiusBox = await sculptRadius.boundingBox();
+await page.mouse.click(radiusBox.x + radiusBox.width / 2, radiusBox.y + radiusBox.height / 2);
+const requestedRadius = Number(await sculptRadius.inputValue());
+assert.equal(Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue()), requestedRadius);
+assert.deepEqual((await lastCommand('SculptCommand')).data, { SetRadius: { radius: requestedRadius } });
+sculpt.radius = Math.fround(requestedRadius); await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+assert.equal(Number(await sculptRadius.inputValue()), Number(sculpt.radius.toFixed(2)));
+await receive({ type: 'EditModeChanged', data: { mode: 'None' } });
+await receive({ type: 'EditModeChanged', data: { mode: 'Sculpt' } });
+assert.equal(Number(await page.locator('#sculpt-radius').inputValue()), Number(sculpt.radius.toFixed(2)));
+assert.equal(Number(await page.getByRole('spinbutton', { name: 'Radius value', exact: true }).inputValue()), Number(sculpt.radius.toFixed(2)));
+// A clamped commit must update the real DOM even when normalized state is unchanged.
+const radiusNumber = page.getByRole('spinbutton', { name: 'Radius value', exact: true });
+for (const [current, draft] of [[10, '100'], [0.01, '-100']]) {
+    sculpt.radius = current; await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+    const commandCount = await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length);
+    await radiusNumber.fill(draft);
+    assert.equal(await radiusNumber.inputValue(), draft, 'allow an uncommitted numeric draft');
+    assert.equal(await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length), commandCount);
+    await radiusNumber.press('Enter');
+    assert.equal(Number(await radiusNumber.inputValue()), current, 'committed number must show its clamp');
+    assert.equal(Number(await sculptRadius.inputValue()), current);
+    assert.deepEqual((await lastCommand('SculptCommand')).data, { SetRadius: { radius: current } });
+}
+sculpt.radius = Math.fround(requestedRadius); await receive({ type: 'SculptBrushStateChanged', data: { settings: sculpt } });
+const finiteCommandCount = await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length);
+await radiusNumber.fill('');
+assert.equal(await radiusNumber.inputValue(), '', 'allow an empty draft while editing');
+await radiusNumber.press('Enter');
+assert.equal(await page.evaluate(() => window.commands.filter(message => message.type === 'SculptCommand').length), finiteCommandCount, 'invalid commit must not send a command');
+assert.equal(await smoothingValue.inputValue(), '20');
 await page.screenshot({ path: `${output}/sculpt-brush-controls.jpg`, type: 'jpeg', quality: 85 });
 // History availability comes from the native owner; buttons emit real protocol commands.
 const sculptUndo = page.getByRole('button', { name: 'Undo sculpt stroke', exact: true });

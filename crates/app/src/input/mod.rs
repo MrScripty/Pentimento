@@ -29,6 +29,8 @@ use bevy::prelude::*;
 use std::time::Instant;
 
 mod backend;
+#[cfg(all(test, feature = "mesh_painting", feature = "egui"))]
+mod direct_uv_native_tests;
 mod hotkeys;
 mod keyboard;
 mod mouse;
@@ -38,6 +40,7 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseState>()
+            .init_resource::<pentimento_scene::FrontendScenePointerInput>()
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(
                 PreUpdate,

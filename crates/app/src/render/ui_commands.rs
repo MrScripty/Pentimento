@@ -16,7 +16,22 @@ pub(crate) fn dispatch_ui_commands(
     let mut canvas_events = Vec::new();
 
     for command in commands {
+        if matches!(
+            &command,
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Save { .. })
+        ) {
+            if let Some(mut messages) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
+                for event in canvas_events.drain(..) {
+                    messages.write(event);
+                }
+            }
+        }
+        let generation = pentimento_scene::project_generation(world);
         if pentimento_scene::dispatch_brush_ui_command(world, &command) {
+            if generation != pentimento_scene::project_generation(world) {
+                canvas_events.clear();
+                break;
+            }
             continue;
         }
         match command {
@@ -54,6 +69,7 @@ pub(crate) fn dispatch_ui_commands(
             UiToBevy::MeshEditCommand(command) => handle_mesh_edit_command(world, command),
             UiToBevy::GizmoCommand(command) => handle_gizmo_command(world, command),
             UiToBevy::PaintCommand(_)
+            | UiToBevy::ProjectCommand(_)
             | UiToBevy::SculptCommand(_)
             | UiToBevy::RequestBrushState
             | UiToBevy::SetUiInputCapture { .. }
@@ -359,5 +375,115 @@ fn handle_gizmo_command(world: &mut World, command: GizmoCommand) {
             gizmo_state.axis_constraint = pentimento_ipc::GizmoAxis::None;
             gizmo_state.is_active = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod project_command_tests {
+    use super::*;
+    use pentimento_ipc::ProjectCommand;
+    #[test]
+    fn save_refuses_earlier_unapplied_object_and_canvas_commands_in_native_batch() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<pentimento_scene::PaintingResource>();
+        world.init_resource::<pentimento_scene::OutboundUiMessages>();
+        world.init_resource::<Messages<CanvasPlaneEvent>>();
+        world.init_resource::<Messages<AddObjectEvent>>();
+        let directory = std::env::temp_dir().join(format!(
+            "pentimento-native-project-save-order-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory
+            .join("owned.pentimento.json")
+            .to_string_lossy()
+            .into_owned();
+        dispatch_ui_commands(
+            &mut world,
+            [
+                UiToBevy::AddObject(pentimento_ipc::AddObjectRequest {
+                    primitive_type: pentimento_ipc::PrimitiveType::Cube,
+                    position: None,
+                    name: None,
+                }),
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(2),
+                    height: Some(2),
+                }),
+                UiToBevy::ProjectCommand(ProjectCommand::Save { path: path.clone() }),
+            ],
+        );
+        assert!(!std::path::Path::new(&path).exists());
+        assert!(!world.resource::<Messages<CanvasPlaneEvent>>().is_empty());
+        assert!(!world.resource::<Messages<AddObjectEvent>>().is_empty());
+        assert_eq!(pentimento_scene::project_generation(&world), 0);
+        assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished{operation,success:false,..} if operation=="Save")));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn successful_open_discards_prefix_queued_actions_and_suffix_commands_in_native_batch() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<pentimento_scene::PaintingResource>();
+        world.init_resource::<pentimento_scene::OutboundUiMessages>();
+        world.init_resource::<Messages<CanvasPlaneEvent>>();
+        world.init_resource::<Messages<AddObjectEvent>>();
+        let mesh = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Rectangle::new(2., 2.));
+        let mat = world
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        world.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::default()));
+        let directory = std::env::temp_dir().join(format!(
+            "pentimento-native-project-batch-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory
+            .join("owned.pentimento.json")
+            .to_string_lossy()
+            .into_owned();
+        dispatch_ui_commands(
+            &mut world,
+            [UiToBevy::ProjectCommand(ProjectCommand::Save {
+                path: path.clone(),
+            })],
+        );
+        assert!(std::path::Path::new(&path).is_file());
+        let add = || {
+            UiToBevy::AddObject(pentimento_ipc::AddObjectRequest {
+                primitive_type: pentimento_ipc::PrimitiveType::Cube,
+                position: None,
+                name: None,
+            })
+        };
+        dispatch_ui_commands(
+            &mut world,
+            [
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(2),
+                    height: Some(2),
+                }),
+                add(),
+                UiToBevy::ProjectCommand(ProjectCommand::Open { path }),
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(4),
+                    height: Some(4),
+                }),
+                add(),
+            ],
+        );
+        assert_eq!(pentimento_scene::project_generation(&world), 1);
+        assert!(world.resource::<Messages<CanvasPlaneEvent>>().is_empty());
+        assert!(world.resource::<Messages<AddObjectEvent>>().is_empty());
+        assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), 1);
+        assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished{operation,success:true,..} if operation=="Open")));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -64,9 +64,18 @@ pub struct NativeInputState {
     pending_move: Option<Vec2>,
     buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     ui_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
+    scene_buttons: ButtonInput<bevy::input::mouse::MouseButton>,
     alt_graph: ButtonInput<KeyCode>,
     layout_reported: bool,
     focus_suspended: bool,
+    scene_cursor: Option<Vec2>,
+    touch: Option<NativeTouch>,
+}
+
+struct NativeTouch {
+    last: bevy::input::touch::TouchInput,
+    scene: bool,
+    ui: bool,
 }
 
 fn over_ui(layout: &pentimento_scene::FrontendUiLayout, position: Vec2) -> bool {
@@ -91,7 +100,7 @@ fn flush_move(state: &mut NativeInputState, mouse: &mut MouseState, backend: &mu
 
 /// Winit publishes an ordered WindowEvent stream as well as typed messages.
 /// Consume the ordered stream without taking typed input away from Bevy/egui.
-/// Only consecutive moves coalesce; every button, wheel, key and focus event
+/// Only consecutive moves coalesce; every touch, button, wheel, key and focus event
 /// is a barrier, so clicks retain their origin and focus changes precede text.
 pub fn forward_native_input(
     mut events: MessageReader<WindowEvent>,
@@ -102,13 +111,46 @@ pub fn forward_native_input(
     config: Res<crate::config::PentimentoConfig>,
     mut layout: ResMut<pentimento_scene::FrontendUiLayout>,
     mut input_blocks: ResMut<pentimento_scene::FrontendInputBlockState>,
+    mut scene_input: ResMut<pentimento_scene::FrontendScenePointerInput>,
     mut state: Local<NativeInputState>,
+    paint_mode: Res<pentimento_scene::PaintMode>,
 ) {
     let Ok((window_id, window)) = windows.single() else {
         events.clear();
+        scene_input.clear();
         return;
     };
     let batch: Vec<_> = events.read().collect();
+    let svelte_browser = matches!(
+        config.composite_mode,
+        crate::config::CompositeMode::Capture
+            | crate::config::CompositeMode::Overlay
+            | crate::config::CompositeMode::Cef
+    );
+    let arbitrates = svelte_browser
+        || (config.composite_mode == crate::config::CompositeMode::Dioxus && layout.received);
+    let scene_ready = !svelte_browser || layout.received;
+    let mut scene_events = Vec::new();
+    let direct = paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv;
+    if !direct {
+        close_scene_touch(&mut state, true, &mut scene_events);
+    }
+    // A first/stationary button can arrive without CursorMoved. Only use the
+    // window cursor when this batch has no later move that could change origin.
+    if state.touch.is_none()
+        && !batch
+            .iter()
+            .any(|e| matches!(e, WindowEvent::CursorMoved(_)))
+    {
+        if let Some(position) = window.cursor_position().filter(|p| p.is_finite()) {
+            let (x, y) =
+                backend.scale_coordinates(position.x, position.y, window.resolution.scale_factor());
+            mouse.window_x = position.x;
+            mouse.window_y = position.y;
+            mouse.webview_x = x;
+            mouse.webview_y = y;
+        }
+    }
     let focus_lost = batch.iter().any(|event| match event {
         WindowEvent::KeyboardFocusLost(_) => true,
         WindowEvent::WindowFocused(event) => event.window == window_id && !event.focused,
@@ -139,6 +181,9 @@ pub fn forward_native_input(
     for event in batch {
         match event {
             WindowEvent::CursorMoved(event) if event.window == window_id => {
+                if state.touch.is_some() {
+                    continue;
+                }
                 let (x, y) = backend.scale_coordinates(
                     event.position.x,
                     event.position.y,
@@ -149,17 +194,54 @@ pub fn forward_native_input(
                 mouse.webview_x = x;
                 mouse.webview_y = y;
                 state.pending_move = Some(Vec2::new(x, y));
+                if scene_ready
+                    && !state.focus_suspended
+                    && !over_ui(&layout, Vec2::new(x, y))
+                    && state.ui_buttons.get_pressed().next().is_none()
+                {
+                    state.scene_cursor = Some(event.position);
+                    scene_events.push(WindowEvent::CursorMoved(event.clone()));
+                } else {
+                    close_scene_buttons(&mut state, window_id, &mut scene_events);
+                }
             }
             WindowEvent::MouseButtonInput(event) if event.window == window_id => {
+                if state.touch.is_some() {
+                    continue;
+                }
                 flush_move(&mut state, &mut mouse, &mut backend);
                 let position = Vec2::new(mouse.webview_x, mouse.webview_y);
                 if event.state.is_pressed() {
+                    if scene_ready
+                        && !state.focus_suspended
+                        && !state.buttons.pressed(event.button)
+                        && !over_ui(&layout, position)
+                        && state.ui_buttons.get_pressed().next().is_none()
+                    {
+                        let origin = Vec2::new(mouse.window_x, mouse.window_y);
+                        if state.scene_cursor != Some(origin) {
+                            scene_events.push(WindowEvent::CursorMoved(
+                                bevy::window::CursorMoved {
+                                    window: window_id,
+                                    position: origin,
+                                    delta: None,
+                                },
+                            ));
+                            state.scene_cursor = Some(origin);
+                        }
+                        state.scene_buttons.press(event.button);
+                        scene_events.push(WindowEvent::MouseButtonInput(*event));
+                    }
                     if !state.buttons.pressed(event.button) && over_ui(&layout, position) {
                         state.ui_buttons.press(event.button);
                     }
                     state.buttons.press(event.button);
                     ui_owned_in_frame |= state.ui_buttons.get_pressed().next().is_some();
                 } else {
+                    if state.scene_buttons.pressed(event.button) {
+                        scene_events.push(WindowEvent::MouseButtonInput(*event));
+                        state.scene_buttons.release(event.button);
+                    }
                     ui_owned_in_frame |= state.ui_buttons.pressed(event.button);
                     state.ui_buttons.release(event.button);
                     state.buttons.release(event.button);
@@ -182,6 +264,20 @@ pub fn forward_native_input(
                     backend.send_mouse_event(packet);
                 }
             }
+            WindowEvent::TouchInput(event) if event.window == window_id => {
+                // Preserve chronology before a touch takes exclusive ownership.
+                flush_move(&mut state, &mut mouse, &mut backend);
+                forward_touch(
+                    *event,
+                    direct && scene_ready,
+                    &mut state,
+                    &mut mouse,
+                    &mut backend,
+                    &layout,
+                    window.resolution.scale_factor(),
+                    &mut scene_events,
+                );
+            }
             WindowEvent::MouseWheel(event) if event.window == window_id => {
                 flush_move(&mut state, &mut mouse, &mut backend);
                 let (delta_x, delta_y) = convert_scroll_delta(event);
@@ -193,41 +289,57 @@ pub fn forward_native_input(
                 });
             }
             WindowEvent::KeyboardInput(event) if event.window == window_id => {
+                if !input_blocks.blocks_keyboard() && !state.focus_suspended {
+                    scene_events.push(WindowEvent::KeyboardInput(event.clone()));
+                }
                 flush_move(&mut state, &mut mouse, &mut backend);
                 if let Some(event) = translated.next() {
                     backend.send_keyboard_event(event);
                 }
             }
             WindowEvent::KeyboardFocusLost(_) => {
+                close_scene_buttons(&mut state, window_id, &mut scene_events);
+                close_scene_touch(&mut state, true, &mut scene_events);
+                scene_events.push(WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                    window: window_id,
+                    focused: false,
+                }));
                 release_on_focus_loss(&mut state, &mut mouse, &mut backend);
             }
             WindowEvent::WindowFocused(event) if event.window == window_id => {
+                scene_events.push(WindowEvent::WindowFocused(event.clone()));
                 if event.focused {
                     flush_move(&mut state, &mut mouse, &mut backend);
                     state.focus_suspended = false;
                 } else {
+                    close_scene_buttons(&mut state, window_id, &mut scene_events);
+                    close_scene_touch(&mut state, true, &mut scene_events);
                     release_on_focus_loss(&mut state, &mut mouse, &mut backend);
                 }
             }
             _ => {}
         }
     }
-    layout.pointer_captured = state.ui_buttons.get_pressed().next().is_some();
+    layout.pointer_captured = state.ui_buttons.get_pressed().next().is_some()
+        || state.touch.as_ref().is_some_and(|t| t.ui);
     // egui owns its own flags. Browser startup blocks scene input until native
     // hit-testing has rectangles; Dioxus/Tauri do not use the Svelte reporter.
-    let svelte_browser = matches!(
-        config.composite_mode,
-        crate::config::CompositeMode::Capture
-            | crate::config::CompositeMode::Overlay
-            | crate::config::CompositeMode::Cef
-    );
-    if svelte_browser
-        || (config.composite_mode == crate::config::CompositeMode::Dioxus && layout.received)
-    {
+    if arbitrates {
+        if !scene_ready
+            || state.focus_suspended
+            || layout.pointer_captured
+            || over_ui(&layout, Vec2::new(mouse.webview_x, mouse.webview_y))
+        {
+            close_scene_buttons(&mut state, window_id, &mut scene_events);
+            let suspended = state.focus_suspended;
+            close_scene_touch(&mut state, suspended, &mut scene_events);
+        }
+        scene_input.publish(window_id, scene_events);
         input_blocks.block_pointer = (svelte_browser && !layout.received)
             || focus_lost
             || state.focus_suspended
             || ui_owned_in_frame
+            || state.touch.is_some()
             || layout.pointer_captured
             || over_ui(&layout, Vec2::new(mouse.webview_x, mouse.webview_y));
         debug!(
@@ -238,6 +350,8 @@ pub fn forward_native_input(
             layout.pointer_captured,
             layout.received
         );
+    } else {
+        scene_input.clear();
     }
     // Idle hover is throttled; held drags must reach their latest position.
     if state.buttons.get_pressed().next().is_some()
@@ -245,6 +359,126 @@ pub fn forward_native_input(
     {
         flush_move(&mut state, &mut mouse, &mut backend);
     }
+}
+
+/// One native contact owns either the scene or UI until its End/Cancel. A second
+/// contact or companion mouse event cannot promote, steal, or close that owner.
+fn forward_touch(
+    event: bevy::input::touch::TouchInput,
+    direct_ready: bool,
+    state: &mut NativeInputState,
+    mouse: &mut MouseState,
+    backend: &mut FrontendBackend,
+    layout: &pentimento_scene::FrontendUiLayout,
+    scale: f32,
+    scene: &mut Vec<WindowEvent>,
+) {
+    use bevy::input::touch::TouchPhase;
+    if event.phase == TouchPhase::Started {
+        if state.touch.is_some() || state.buttons.get_pressed().next().is_some() {
+            return;
+        }
+        let position = Vec2::new(event.position.x, event.position.y);
+        let (x, y) = backend.scale_coordinates(position.x, position.y, scale);
+        let valid = position.is_finite() && x.is_finite() && y.is_finite();
+        let ui = valid && !state.focus_suspended && over_ui(layout, Vec2::new(x, y));
+        let owns_scene = valid
+            && direct_ready
+            && !ui
+            && !state.focus_suspended
+            && state.ui_buttons.get_pressed().next().is_none()
+            && pentimento_scene::touch_pressure(event.force).is_some();
+        state.touch = Some(NativeTouch {
+            last: event,
+            scene: owns_scene,
+            ui,
+        });
+        if valid {
+            mouse.window_x = position.x;
+            mouse.window_y = position.y;
+            mouse.webview_x = x;
+            mouse.webview_y = y;
+            if ui {
+                backend.send_mouse_event(MouseEvent::Move { x, y });
+                backend.send_mouse_event(MouseEvent::ButtonDown {
+                    button: IpcMouseButton::Left,
+                    x,
+                    y,
+                });
+            }
+        }
+        if owns_scene {
+            scene.push(WindowEvent::TouchInput(event));
+        }
+        return;
+    }
+    if !state.touch.as_ref().is_some_and(|t| t.last.id == event.id) {
+        return;
+    }
+    let (x, y) = backend.scale_coordinates(event.position.x, event.position.y, scale);
+    let valid = event.position.is_finite() && x.is_finite() && y.is_finite();
+    if !valid || event.phase == TouchPhase::Canceled {
+        close_scene_touch(state, true, scene);
+    } else if state.touch.as_ref().unwrap().scene {
+        if pentimento_scene::touch_pressure(event.force).is_none() {
+            close_scene_touch(state, true, scene);
+        } else if !direct_ready || over_ui(layout, Vec2::new(x, y)) {
+            close_scene_touch(state, false, scene);
+        } else {
+            scene.push(WindowEvent::TouchInput(event));
+            state.touch.as_mut().unwrap().last = event;
+        }
+    }
+    if valid {
+        mouse.window_x = event.position.x;
+        mouse.window_y = event.position.y;
+        mouse.webview_x = x;
+        mouse.webview_y = y;
+        if state.touch.as_ref().unwrap().ui {
+            backend.send_mouse_event(MouseEvent::Move { x, y });
+        }
+    }
+    if matches!(event.phase, TouchPhase::Ended | TouchPhase::Canceled) {
+        if state.touch.as_ref().unwrap().ui {
+            backend.send_mouse_event(MouseEvent::ButtonUp {
+                button: IpcMouseButton::Left,
+                x: mouse.webview_x,
+                y: mouse.webview_y,
+            });
+        }
+        state.touch = None;
+    }
+}
+fn close_scene_touch(state: &mut NativeInputState, cancel: bool, events: &mut Vec<WindowEvent>) {
+    if let Some(t) = state.touch.as_mut() {
+        if t.scene {
+            let mut end = t.last;
+            end.phase = if cancel {
+                bevy::input::touch::TouchPhase::Canceled
+            } else {
+                bevy::input::touch::TouchPhase::Ended
+            };
+            events.push(WindowEvent::TouchInput(end));
+            t.scene = false;
+        }
+    }
+}
+
+fn close_scene_buttons(
+    state: &mut NativeInputState,
+    window: Entity,
+    events: &mut Vec<WindowEvent>,
+) {
+    for button in state.scene_buttons.get_pressed().copied() {
+        events.push(WindowEvent::MouseButtonInput(
+            bevy::input::mouse::MouseButtonInput {
+                window,
+                button,
+                state: bevy::input::ButtonState::Released,
+            },
+        ));
+    }
+    state.scene_buttons.reset_all();
 }
 
 fn release_on_focus_loss(
@@ -263,6 +497,15 @@ fn release_on_focus_loss(
             });
         }
     }
+    if state.touch.as_ref().is_some_and(|t| t.ui) {
+        backend.send_mouse_event(MouseEvent::ButtonUp {
+            button: IpcMouseButton::Left,
+            x: mouse.webview_x,
+            y: mouse.webview_y,
+        });
+    }
+    state.touch = None;
+    state.scene_cursor = None;
     state.focus_suspended = true;
     state.buttons.reset_all();
     state.ui_buttons.reset_all();

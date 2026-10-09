@@ -66,10 +66,10 @@ export async function waitForSculptPresentation(wait, { historyReady, capture, m
 // Four fresh parked-pointer updates span input acknowledgement, Last gizmo mesh
 // changes, the next PostUpdate asset event flush, and pipelined render turnover.
 // This is a scheduling barrier, not a substitute for native pixel assertions.
-export function parkedPointerFrames(log, x, y) {
+export function parkedPointerFrames(log, x, y, { uiOwned = false } = {}) {
     let consecutive = 0;
     for (const match of log.matchAll(/Native capture after batch: last \(([-\d.]+), ([-\d.]+)\) blocked=(true|false) latched=(true|false) layout_received=(true|false)\r?\n/g)) {
-        if (Number(match[1]) === x && Number(match[2]) === y && match[3] === 'false' && match[4] === 'false' && match[5] === 'true') consecutive++;
+        if (Number(match[1]) === x && Number(match[2]) === y && match[3] === String(uiOwned) && match[4] === 'false' && match[5] === 'true') consecutive++;
         else consecutive = 0;
     }
     return consecutive >= 4 ? { x, y, consecutive_updates: consecutive } : null;
@@ -109,11 +109,17 @@ export function assertNativeClickBounds(rect, width, height) {
 // leave Tab briefly unmodified. Both can change browser keyboard ownership.
 export async function tapNativeShortcut(modifier, trigger, observed, description, { send, wait, pause, releaseFailed }) {
     assert.equal(typeof observed, 'function', 'A native shortcut needs a bounded backend receipt');
+    const modifiers = Array.isArray(modifier) ? modifier : [modifier];
+    assert.ok(modifiers.length > 0 && modifiers.every(key => typeof key === 'string' && key.length > 0));
+    const ownedModifiers = [];
     let triggerNeedsRelease = false;
     let failed = false;
     let failure;
     try {
-        send('keydown', modifier);
+        for (const key of modifiers) {
+            ownedModifiers.push(key);
+            send('keydown', key);
+        }
         triggerNeedsRelease = true;
         send('keydown', trigger);
         send('keyup', trigger);
@@ -128,7 +134,9 @@ export async function tapNativeShortcut(modifier, trigger, observed, description
         if (triggerNeedsRelease) {
             try { send('keyup', trigger); } catch (error) { releaseErrors.push(error); }
         }
-        try { send('keyup', modifier); } catch (error) { releaseErrors.push(error); }
+        for (const key of ownedModifiers.reverse()) {
+            try { send('keyup', key); } catch (error) { releaseErrors.push(error); }
+        }
         for (const error of releaseErrors) {
             if (failed) releaseFailed(error);
             else { failed = true; failure = error; }

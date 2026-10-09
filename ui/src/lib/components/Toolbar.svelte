@@ -1,14 +1,37 @@
 <script lang="ts">
+    import { onMount } from 'svelte';
     import { bridge } from '$lib/bridge';
+    import type { EditMode, SculptHistoryState } from '$lib/types';
+    import type { ProjectState } from '$lib/types';
+    import ProjectDialog from './ProjectDialog.svelte';
 
     interface Props {
+        mode: EditMode;
         renderStats: {
             fps: number;
             frameTime: number;
         };
     }
 
-    let { renderStats }: Props = $props();
+    let { renderStats, mode }: Props = $props();
+    let project=$state<ProjectState>({path:null,available:false,active:false,blocked:false,notice:null});
+    let projectOperation=$state<'Save'|'Open'|null>(null);
+    let paintUndo = $state(false);
+    let paintRedo = $state(false);
+    let sculptHistory = $state<SculptHistoryState>({ undo_strokes: 0, redo_strokes: 0, active: false, notice: null });
+    let canUndo = $derived(mode === 'Paint' ? paintUndo : mode === 'Sculpt' && !sculptHistory.active && sculptHistory.undo_strokes > 0);
+    let canRedo = $derived(mode === 'Paint' ? paintRedo : mode === 'Sculpt' && !sculptHistory.active && sculptHistory.redo_strokes > 0);
+
+    onMount(() => bridge.subscribe(message => {
+        if (message.type === 'PaintBrushStateChanged') {
+            paintUndo = message.data.can_undo;
+            paintRedo = message.data.can_redo;
+        } else if (message.type === 'SculptHistoryChanged') {
+            sculptHistory = message.data;
+        } else if(message.type==='ProjectStateChanged'){
+            project=message.data;
+        }
+    }));
 
     // Track which dropdown is open
     let openMenu = $state<string | null>(null);
@@ -25,6 +48,7 @@
     }
 
     function toggleMenu(menu: string) {
+        if(menu==='file')bridge.projectCommand('GetState');
         openMenu = openMenu === menu ? null : menu;
     }
 
@@ -50,7 +74,15 @@
     }
 
     function handleMenuAction(action: string) {
-        void action;
+        if((action==='save'||action==='open'||action==='save-as') && project.available && !project.active){
+            if(action==='save' && project.path && !project.blocked)bridge.projectCommand({Save:{path:project.path}});
+            else projectOperation=action==='open'?'Open':'Save';
+        }
+        if ((action === 'undo' && canUndo) || (action === 'redo' && canRedo)) {
+            const command = action === 'undo' ? 'Undo' : 'Redo';
+            if (mode === 'Paint') bridge.paintCommand(command);
+            else if (mode === 'Sculpt') bridge.sculptCommand(command);
+        }
         closeMenu();
     }
 
@@ -60,6 +92,7 @@
 </script>
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
+{#if projectOperation}<ProjectDialog operation={projectOperation} {project} onclose={()=>projectOperation=null}/>{/if}
 
 <header bind:this={toolbarElement} class="toolbar panel">
     <div class="toolbar-left">
@@ -78,11 +111,13 @@
                 </button>
                 {#if openMenu === 'file'}
                     <div class="dropdown" role="menu" aria-label="File">
-                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('new')}>New Project</button>
-                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('open')}>Open...</button>
-                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('save')}>Save</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled title="Start a fresh document by restarting the editor">New Project</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('open')}>Open...</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('save')}>Save</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled={!project.available||project.active} onclick={() => handleMenuAction('save-as')}>Save As...</button>
                         <div class="dropdown-divider"></div>
-                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('export')}>Export...</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled>Export...</button>
+                        {#if project.notice}<p class="project-notice" role="status">{project.notice}</p>{/if}
                     </div>
                 {/if}
             </div>
@@ -99,8 +134,8 @@
                 </button>
                 {#if openMenu === 'edit'}
                     <div class="dropdown" role="menu" aria-label="Edit">
-                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('undo')}>Undo</button>
-                        <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('redo')}>Redo</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled={!canUndo} onclick={() => handleMenuAction('undo')}>Undo</button>
+                        <button type="button" class="dropdown-item" role="menuitem" disabled={!canRedo} onclick={() => handleMenuAction('redo')}>Redo</button>
                         <div class="dropdown-divider"></div>
                         <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('cut')}>Cut</button>
                         <button type="button" class="dropdown-item" role="menuitem" onclick={() => handleMenuAction('copy')}>Copy</button>
@@ -294,6 +329,12 @@
 
     .dropdown-item:hover {
         background: rgba(255, 255, 255, 0.1);
+    }
+
+    .dropdown-item:disabled {
+        opacity: 0.45;
+        cursor: default;
+        background: transparent;
     }
 
     .dropdown-divider {

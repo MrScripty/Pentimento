@@ -4,10 +4,11 @@
 //! points and generates dabs for painting. This is a placeholder for
 //! future libmypaint FFI integration.
 
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 /// Brush preset configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrushPreset {
     /// Unique preset ID
     pub id: u32,
@@ -242,10 +243,10 @@ impl BrushEngine {
             dab_start += spacing_distance;
         }
 
-        // Update distance accumulator for next segment
-        self.distance_accumulator = distance - current_distance;
-        if self.distance_accumulator < 0.0 {
-            self.distance_accumulator = 0.0;
+        // Only an emitted dab consumes accumulated distance. With no dab, the
+        // previous residual plus this whole segment must survive the next move.
+        if !dabs.is_empty() {
+            self.distance_accumulator = (distance - current_distance).max(0.0);
         }
 
         // Update state for next call
