@@ -3638,3 +3638,257 @@ fn shared_masks_actual_untouched_scalar_bits_and_disabled_mask_survive_owned_reo
     assert_eq!(f.image(), image);
     assert_eq!(counts(&f), (0, 0));
 }
+
+// Real egui widgets -> the existing shared dispatcher -> production CPU assets.
+fn egui_snapshot(f: &mut Fixture) -> pentimento_egui_ui::EguiUiSnapshot {
+    crate::render::dispatch_ui_commands(f.app.world_mut(), [UiToBevy::RequestBrushState]);
+    let mut snapshot = pentimento_egui_ui::EguiUiSnapshot::default();
+    for message in f
+        .app
+        .world_mut()
+        .resource_mut::<OutboundUiMessages>()
+        .drain()
+    {
+        pentimento_egui_ui::apply_bevy_message(&mut snapshot, message);
+    }
+    snapshot
+}
+fn egui_frame(
+    context: &pentimento_egui_ui::egui::Context,
+    snapshot: &mut pentimento_egui_ui::EguiUiSnapshot,
+    runtime: &mut pentimento_egui_ui::EguiUiRuntime,
+    events: Vec<pentimento_egui_ui::egui::Event>,
+) -> (pentimento_egui_ui::egui::FullOutput, Vec<UiToBevy>) {
+    use pentimento_egui_ui::egui;
+    let mut commands = Vec::new();
+    let output = context.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000., 1800.),
+            )),
+            events,
+            ..default()
+        },
+        |ctx| commands.extend(pentimento_egui_ui::show_root_ui(ctx, snapshot, runtime)),
+    );
+    (output, commands)
+}
+fn egui_click(
+    f: &mut Fixture,
+    context: &pentimento_egui_ui::egui::Context,
+    snapshot: &mut pentimento_egui_ui::EguiUiSnapshot,
+    runtime: &mut pentimento_egui_ui::EguiUiRuntime,
+    label: &str,
+) {
+    use pentimento_egui_ui::egui;
+    egui_frame(context, snapshot, runtime, vec![]);
+    let (output, _) = egui_frame(context, snapshot, runtime, vec![]);
+    fn position(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.text() == label => {
+                Some(text.pos + text.galley.size() / 2.)
+            }
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(|s| position(s, label)),
+            _ => None,
+        }
+    }
+    let pos = output
+        .shapes
+        .iter()
+        .find_map(|s| position(&s.shape, label))
+        .unwrap_or_else(|| panic!("missing egui widget: {label}"));
+    egui_frame(
+        context,
+        snapshot,
+        runtime,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    egui_frame(
+        context,
+        snapshot,
+        runtime,
+        vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: default(),
+        }],
+    );
+    let (_, commands) = egui_frame(
+        context,
+        snapshot,
+        runtime,
+        vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: default(),
+        }],
+    );
+    crate::render::dispatch_ui_commands(f.app.world_mut(), commands);
+    f.settle();
+}
+#[test]
+fn egui_widgets_restore_real_directuv_pixels_and_redo_via_shared_backend() {
+    let mut f = Fixture::new();
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    f.direct();
+    f.command(PaintCommand::SetBrushSize { size: 8. });
+    let before = f.raw();
+    pen_stroke(&mut f, 91, 0.7);
+    let accepted = f.raw();
+    assert!(!same(&before, &accepted));
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    ctx.style_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Undo paint stroke",
+    );
+    assert!(same(&before, &f.raw()));
+    assert_eq!(counts(&f), (0, 1));
+    snapshot = egui_snapshot(&mut f);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Redo paint stroke",
+    );
+    assert!(same(&accepted, &f.raw()));
+    assert_eq!(counts(&f), (1, 0));
+}
+#[test]
+fn egui_actual_panel_regions_capture_stationary_press_and_drag_origin() {
+    let mut f = Fixture::new();
+    f.direct();
+    f.command(PaintCommand::SetBrushSize { size: 8. });
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    let regions = runtime
+        .ui_regions()
+        .iter()
+        .enumerate()
+        .map(|(i, r)| pentimento_ipc::LayoutRegion {
+            id: format!("egui-{i}"),
+            x: r.min.x,
+            y: r.min.y,
+            width: r.width(),
+            height: r.height(),
+            z_index: i as i32,
+            accepts_keyboard: true,
+        })
+        .collect();
+    crate::render::dispatch_ui_commands(
+        f.app.world_mut(),
+        [UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions,
+        })],
+    );
+    let before = f.raw();
+    let w = f.window;
+    f.batch(vec![movement(w, 700.)]);
+    f.batch(vec![button(w, true), movement(w, 450.), button(w, false)]);
+    f.settle();
+    assert!(same(&before, &f.raw()));
+    assert_eq!(counts(&f), (0, 0));
+    pen_stroke(&mut f, 92, 0.7);
+    assert!(!same(&before, &f.raw()));
+    assert_eq!(counts(&f), (1, 0));
+}
+#[test]
+fn egui_widgets_select_and_remove_the_real_uv_mask() {
+    let mut f = Fixture::new();
+    f.enable_layers();
+    let layer = f.layers().layers[0].meta.id;
+    f.uv(UvLayerCommand::AddMask { layer_id: layer });
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    ctx.style_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Paint mask");
+    assert_eq!(
+        f.layers().layers[0].meta.paint_target,
+        painting::uv_layers::UvPaintTarget::Mask
+    );
+    snapshot = egui_snapshot(&mut f);
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Remove mask");
+    assert!(f.layers().layers[0].mask.is_none());
+}
+#[test]
+fn egui_actual_file_popup_captures_a_stationary_native_press() {
+    let mut f = Fixture::new();
+    f.direct();
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    ctx.style_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "File");
+    egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    let popup = *runtime
+        .ui_regions()
+        .iter()
+        .find(|r| r.max.y > 44. && r.max.x < 660. && r.height() > 40.)
+        .expect("actual File popup rectangle");
+    let point = popup.center();
+    assert!(point.y > 44.);
+    let regions = runtime
+        .ui_regions()
+        .iter()
+        .enumerate()
+        .map(|(i, r)| pentimento_ipc::LayoutRegion {
+            id: format!("egui-{i}"),
+            x: r.min.x,
+            y: r.min.y,
+            width: r.width(),
+            height: r.height(),
+            z_index: i as i32,
+            accepts_keyboard: true,
+        })
+        .collect();
+    crate::render::dispatch_ui_commands(
+        f.app.world_mut(),
+        [UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions,
+        })],
+    );
+    let w = f.window;
+    f.batch(vec![WindowEvent::CursorMoved(CursorMoved {
+        window: w,
+        position: Vec2::new(point.x, point.y),
+        delta: None,
+    })]);
+    f.batch(vec![button(w, true)]);
+    assert!(
+        !f.app
+            .world()
+            .resource::<FrontendScenePointerInput>()
+            .has_scene_press()
+    );
+    assert!(
+        f.app
+            .world()
+            .resource::<FrontendUiLayout>()
+            .pointer_captured
+    );
+    f.batch(vec![button(w, false)]);
+    assert_eq!(counts(&f), (0, 0));
+}

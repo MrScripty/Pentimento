@@ -414,8 +414,17 @@ fn coordinates_follow_capture_overlay_and_cef_dpi_contracts() {
 }
 
 #[test]
-fn browser_producer_preserves_egui_owned_input_flags() {
+fn egui_layout_arbitrates_pointer_and_preserves_keyboard_capture() {
     let (mut app, window, _) = fixture();
+    app.world_mut().resource_mut::<FrontendUiLayout>().regions = vec![LayoutRegion {
+        id: "egui-popup".into(),
+        x: 300.,
+        y: 200.,
+        width: 200.,
+        height: 100.,
+        z_index: 1,
+        accepts_keyboard: true,
+    }];
     app.world_mut()
         .resource_mut::<crate::config::PentimentoConfig>()
         .composite_mode = crate::config::CompositeMode::Egui;
@@ -578,7 +587,7 @@ fn window_focus_loss_also_releases_a_held_pointer() {
 }
 
 #[test]
-fn browser_waits_for_layout_but_dioxus_and_egui_do_not_wait_for_svelte() {
+fn region_frontends_wait_for_their_own_layout_but_dioxus_can_start_without_it() {
     for mode in [
         crate::config::CompositeMode::Capture,
         crate::config::CompositeMode::Overlay,
@@ -597,6 +606,7 @@ fn browser_waits_for_layout_but_dioxus_and_egui_do_not_wait_for_svelte() {
             crate::config::CompositeMode::Capture
                 | crate::config::CompositeMode::Overlay
                 | crate::config::CompositeMode::Cef
+                | crate::config::CompositeMode::Egui
         );
         assert_eq!(
             app.world()

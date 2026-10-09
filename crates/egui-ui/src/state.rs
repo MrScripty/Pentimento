@@ -1,5 +1,6 @@
 use pentimento_frontend_core::{NativeUiState, apply_native_ui_message};
-use pentimento_ipc::BevyToUi;
+use pentimento_ipc::{BevyToUi, EditMode};
+use std::collections::BTreeMap;
 
 pub type EguiUiSnapshot = NativeUiState;
 
@@ -15,10 +16,18 @@ pub struct EguiUiRuntime {
     pub ao_enabled: bool,
     pub ao_quality_level: u8,
     pub ao_thickness: f32,
-    pub brush_size: f32,
-    pub brush_opacity_percent: f32,
-    pub brush_hardness_percent: f32,
-    pub live_projection_enabled: bool,
+    pub(crate) last_mode: Option<EditMode>,
+    pub(crate) paint_preset_name: String,
+    pub(crate) sculpt_preset_name: String,
+    pub(crate) new_canvas_layer_name: String,
+    pub(crate) new_uv_layer_name: String,
+    pub(crate) canvas_layer_names: BTreeMap<u32, (String, String)>,
+    pub(crate) uv_layer_names: BTreeMap<u32, (String, String)>,
+    pub(crate) project_dialog: Option<crate::project_dialog::ProjectDialog>,
+    pub(crate) project_requested: bool,
+    pub(crate) ui_regions: Vec<egui::Rect>,
+    last_generation: Option<String>,
+    last_uv_receiver: Option<u32>,
 }
 
 impl Default for EguiUiRuntime {
@@ -33,16 +42,50 @@ impl Default for EguiUiRuntime {
             ao_enabled: false,
             ao_quality_level: 2,
             ao_thickness: 0.25,
-            brush_size: 20.0,
-            brush_opacity_percent: 100.0,
-            brush_hardness_percent: 80.0,
-            live_projection_enabled: false,
+            last_mode: None,
+            paint_preset_name: String::new(),
+            sculpt_preset_name: String::new(),
+            new_canvas_layer_name: String::new(),
+            new_uv_layer_name: String::new(),
+            canvas_layer_names: BTreeMap::new(),
+            uv_layer_names: BTreeMap::new(),
+            project_dialog: None,
+            project_requested: false,
+            ui_regions: Vec::new(),
+            last_generation: None,
+            last_uv_receiver: None,
         }
     }
 }
 
 impl EguiUiRuntime {
+    /// Actual panel/modal rectangles in egui points; the Bevy adapter converts to window coordinates.
+    pub fn ui_regions(&self) -> &[egui::Rect] {
+        &self.ui_regions
+    }
+    pub fn modal_open(&self) -> bool {
+        self.project_dialog.is_some()
+    }
+
     pub fn sync_from_snapshot(&mut self, snapshot: &mut EguiUiSnapshot) {
+        if self.last_generation.as_ref() != Some(&snapshot.project.generation) {
+            self.canvas_layer_names.clear();
+            self.uv_layer_names.clear();
+            self.last_generation = Some(snapshot.project.generation.clone());
+        }
+        let layers = snapshot
+            .paint
+            .as_ref()
+            .and_then(|p| p.target.uv_layers.as_ref());
+        let receiver = layers.and_then(|l| l.receiver);
+        if self.last_uv_receiver != receiver {
+            self.uv_layer_names.clear();
+            self.last_uv_receiver = receiver;
+        }
+        self.canvas_layer_names
+            .retain(|id, _| snapshot.layers.iter().any(|l| l.id == *id));
+        self.uv_layer_names
+            .retain(|id, _| layers.is_some_and(|s| s.layers.iter().any(|l| l.id == *id)));
         if snapshot.show_add_menu {
             self.add_object_menu_open = true;
             snapshot.show_add_menu = false;

@@ -9,7 +9,14 @@ experimental Bevy-integrated frontend path.
 |-------------|-------------|
 | `lib.rs` | Public facade for the egui UI crate and its exported state types. |
 | `state.rs` | Framework-neutral egui-facing snapshot/runtime state and inbound message application. |
-| `app.rs` | Immediate-mode egui layout for the current frontend spike. |
+| `app.rs` | Toolbar, panels, popup/modal capture geometry and startup state requests. |
+| `paint_panel.rs` | Acknowledged Canvas/DirectUV brushes, sampling, projection and Canvas layers. |
+| `sculpt_panel.rs` | Supported sculpt tools, controls and actual stroke Undo/Redo commands. |
+| `uv_layer_panel.rs` | Receiver stacks, linear blend modes, Color/Mask targeting and shared UV history. |
+| `presets.rs` | Backend-owned saved paint/sculpt catalogs. |
+| `project_dialog.rs` | Local Save/Open/New workflows, frozen owner confirmation and pending receipts. |
+| `controls.rs` | Shared typed command and widget helpers. |
+| `tests.rs` | Actual headless egui frames and pointer/key interaction regressions. |
 
 ## Problem
 Pentimento needs an egui implementation path that can mirror the existing native
@@ -59,17 +66,50 @@ use pentimento_egui_ui::egui;
 use pentimento_egui_ui::{EguiUiRuntime, EguiUiSnapshot, show_root_ui};
 
 let mut runtime = EguiUiRuntime::default();
-let snapshot = EguiUiSnapshot::default();
-let _commands = show_root_ui(&egui::Context::default(), &snapshot, &mut runtime);
+let mut snapshot = EguiUiSnapshot::default();
+let _commands = show_root_ui(&egui::Context::default(), &mut snapshot, &mut runtime);
 ```
 
 ## API Consumer Contract
 - Consumers provide the current backend snapshot and a mutable runtime state.
 - The root UI returns typed `UiToBevy` commands for the host to dispatch.
-- The host owns command timing, retry behavior, and any scene/resource side
-  effects.
+- The host owns command timing and scene/resource side effects. It applies backend
+  receipts before drawing and dispatches returned commands through the shared owner.
+- Brush settings, selection, history availability, projection status and document
+  ownership come from acknowledged snapshots. Editing controls send commands;
+  they do not optimistically change accepted settings.
+- `runtime.ui_regions()` supplies real panel/window/menu/picker rectangles in egui
+  points. The native adapter converts by `pixels_per_point / window_scale_factor`
+  and publishes `LayoutUpdate`; an open document modal includes the whole viewport.
+- New freezes the exact decimal generation on confirmation creation. Pending
+  operations suppress duplicate submission and cancellation; only a newer matching
+  operation receipt closes the modal. The shared native reducer retains exactly
+  three latest operation receipts so a different operation cannot hide completion.
+- Rename drafts reconcile with changed accepted names and reset on submission.
+  Draft maps retain live layer identities and clear on document/receiver replacement.
+- UV history counters describe retained/pending payload, not total process memory.
+  Backend notices expose expiration, admission refusal and external-edit conflicts.
+  Sculpt Undo/Redo restores committed strokes through the existing validated owner;
+  these controls do not add nondestructive sculpt deformation layers.
+
+## Validation
+`cargo test -p pentimento-egui-ui --lib` exercises real egui widgets without the
+Bevy renderer. Production native-controller tests in
+`crates/app/src/input/direct_uv_native_tests.rs` also drive egui widgets through
+shared commands into CPU paint assets and input arbitration. Those headless checks
+are separate from native GUI, GPU and stylus qualification. Dependency migration
+and the egui version coupling remain a separate workstream.
 
 ## Structured Producer Contract
 - Produces in-process `UiToBevy` command values only.
 - Command shapes and enum variants must remain aligned with `crates/ipc`.
 - No persisted artifact or stable external serialization is produced here.
+
+## Remaining Input Qualification
+This source milestone includes real history buttons and acknowledged availability.
+Fresh text-field focus and a history shortcut arriving in the same native event
+batch remain an integration limitation. An app-owned ordered Canvas/DirectUV fix
+and real-field regressions are preserved separately pending execution; their
+controller rebuild exhausted disk before running. Sculpt's raw keyboard history
+consumer also needs the scene owner's ordered-input integration. These limitations
+prevent claiming complete native keyboard/history parity or native GUI validation.

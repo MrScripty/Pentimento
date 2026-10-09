@@ -1,15 +1,14 @@
-use egui::{self, Align, Layout, RichText, Vec2};
+use egui::{self, Align, Layout, Vec2};
 use pentimento_ipc::{
     AddObjectRequest, AmbientOcclusionSettings, CameraCommand, EditMode, LightingSettings,
-    PaintCommand, PrimitiveType, UiToBevy,
+    PrimitiveType, ProjectCommand, UiToBevy,
 };
 
 use crate::state::{EguiUiRuntime, EguiUiSnapshot};
 
 const TOP_PANEL_HEIGHT: f32 = 44.0;
-const SIDE_PANEL_WIDTH: f32 = 300.0;
+const SIDE_PANEL_WIDTH: f32 = 340.0;
 const WINDOW_PADDING: f32 = 12.0;
-const PAINT_TOOLBAR_WIDTH: f32 = 280.0;
 const ADD_MENU_DEFAULT_X: f32 = 24.0;
 const ADD_MENU_DEFAULT_Y: f32 = 72.0;
 
@@ -21,15 +20,36 @@ pub fn show_root_ui(
     runtime.sync_from_snapshot(snapshot);
 
     let mut commands = Vec::new();
+    runtime.ui_regions.clear();
+    if runtime.last_mode != Some(snapshot.edit_mode) {
+        commands.push(UiToBevy::RequestBrushState);
+        runtime.last_mode = Some(snapshot.edit_mode);
+    }
+    if !runtime.project_requested {
+        commands.push(UiToBevy::ProjectCommand(ProjectCommand::GetState));
+        runtime.project_requested = true;
+    }
 
     draw_top_panel(ctx, snapshot, runtime, &mut commands);
     draw_side_panel(ctx, snapshot, runtime, &mut commands);
     draw_add_object_menu(ctx, snapshot, runtime, &mut commands);
 
-    if snapshot.edit_mode == EditMode::Paint {
-        draw_paint_toolbar(ctx, runtime, &mut commands);
+    crate::project_dialog::show(ctx, snapshot, runtime, &mut commands);
+    if runtime.modal_open() {
+        runtime.ui_regions.push(ctx.viewport_rect());
     }
-
+    // Menus and color-picker popups can extend beyond the fixed panels.
+    // Include their actual areas in the same native hit-test contract.
+    let floating = ctx.memory(|memory| {
+        memory
+            .areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter(|layer| matches!(layer.order, egui::Order::Middle | egui::Order::Foreground))
+            .filter_map(|layer| memory.area_rect(layer.id))
+            .collect::<Vec<_>>()
+    });
+    runtime.ui_regions.extend(floating);
     commands
 }
 
@@ -39,11 +59,12 @@ fn draw_top_panel(
     runtime: &mut EguiUiRuntime,
     commands: &mut Vec<UiToBevy>,
 ) {
-    egui::TopBottomPanel::top("egui_toolbar")
+    let panel = egui::TopBottomPanel::top("egui_toolbar")
         .exact_height(TOP_PANEL_HEIGHT)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Pentimento");
+                crate::project_dialog::toolbar(ui, snapshot, runtime, commands);
                 ui.separator();
                 ui.label(edit_mode_label(snapshot.edit_mode));
 
@@ -82,6 +103,7 @@ fn draw_top_panel(
                 });
             });
         });
+    runtime.ui_regions.push(panel.response.rect);
 }
 
 fn draw_side_panel(
@@ -90,23 +112,23 @@ fn draw_side_panel(
     runtime: &mut EguiUiRuntime,
     commands: &mut Vec<UiToBevy>,
 ) {
-    egui::SidePanel::right("egui_side_panel")
+    let panel = egui::SidePanel::right("egui_side_panel")
         .resizable(false)
         .exact_width(SIDE_PANEL_WIDTH)
         .show(ctx, |ui| {
             ui.add_space(WINDOW_PADDING);
-            ui.heading(match snapshot.edit_mode {
-                EditMode::Paint => "Paint",
-                _ => "Scene",
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                match snapshot.edit_mode {
+                    EditMode::Paint => crate::paint_panel::show(ui, snapshot, runtime, commands),
+                    EditMode::Sculpt => crate::sculpt_panel::show(ui, snapshot, runtime, commands),
+                    _ => draw_scene_panel(ui, runtime, commands),
+                }
+                if let Some(error) = &snapshot.error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
             });
-            ui.add_space(WINDOW_PADDING);
-
-            if snapshot.edit_mode == EditMode::Paint {
-                draw_paint_panel(ui, snapshot, runtime, commands);
-            } else {
-                draw_scene_panel(ui, runtime, commands);
-            }
         });
+    runtime.ui_regions.push(panel.response.rect);
 }
 
 fn draw_scene_panel(ui: &mut egui::Ui, runtime: &mut EguiUiRuntime, commands: &mut Vec<UiToBevy>) {
@@ -176,79 +198,6 @@ fn draw_scene_panel(ui: &mut egui::Ui, runtime: &mut EguiUiRuntime, commands: &m
     });
 }
 
-fn draw_paint_panel(
-    ui: &mut egui::Ui,
-    snapshot: &EguiUiSnapshot,
-    runtime: &mut EguiUiRuntime,
-    commands: &mut Vec<UiToBevy>,
-) {
-    ui.collapsing("Brush", |ui| {
-        if ui
-            .add(egui::Slider::new(&mut runtime.brush_size, 1.0..=128.0).text("Size"))
-            .changed()
-        {
-            commands.push(UiToBevy::PaintCommand(PaintCommand::SetBrushSize {
-                size: runtime.brush_size,
-            }));
-        }
-
-        if ui
-            .add(egui::Slider::new(&mut runtime.brush_opacity_percent, 0.0..=100.0).text("Opacity"))
-            .changed()
-        {
-            commands.push(UiToBevy::PaintCommand(PaintCommand::SetBrushOpacity {
-                opacity: runtime.brush_opacity_percent / 100.0,
-            }));
-        }
-
-        if ui
-            .add(
-                egui::Slider::new(&mut runtime.brush_hardness_percent, 0.0..=100.0)
-                    .text("Hardness"),
-            )
-            .changed()
-        {
-            commands.push(UiToBevy::PaintCommand(PaintCommand::SetBrushHardness {
-                hardness: runtime.brush_hardness_percent / 100.0,
-            }));
-        }
-    });
-
-    ui.add_space(WINDOW_PADDING);
-
-    ui.collapsing("Layers", |ui| {
-        for layer in &snapshot.layers {
-            let label = if layer.is_active {
-                RichText::new(&layer.name).strong()
-            } else {
-                RichText::new(&layer.name)
-            };
-
-            ui.horizontal(|ui| {
-                if ui.selectable_label(layer.is_active, label).clicked() {
-                    commands.push(UiToBevy::PaintCommand(PaintCommand::SetActiveLayer {
-                        layer_id: layer.id,
-                    }));
-                }
-
-                let visibility_label = if layer.visible { "Hide" } else { "Show" };
-                if ui.small_button(visibility_label).clicked() {
-                    commands.push(UiToBevy::PaintCommand(PaintCommand::SetLayerVisibility {
-                        layer_id: layer.id,
-                        visible: !layer.visible,
-                    }));
-                }
-            });
-        }
-
-        if ui.button("Add Layer").clicked() {
-            commands.push(UiToBevy::PaintCommand(PaintCommand::AddLayer {
-                name: String::new(),
-            }));
-        }
-    });
-}
-
 fn draw_add_object_menu(
     ctx: &egui::Context,
     snapshot: &EguiUiSnapshot,
@@ -275,7 +224,7 @@ fn draw_add_object_menu(
 
     let mut open = runtime.add_object_menu_open;
     let mut should_close_menu = false;
-    egui::Window::new("Add Object")
+    let response = egui::Window::new("Add Object")
         .default_pos(position)
         .default_size(Vec2::new(180.0, 220.0))
         .collapsible(false)
@@ -297,54 +246,10 @@ fn draw_add_object_menu(
             }
         });
 
+    if let Some(response) = response {
+        runtime.ui_regions.push(response.response.rect);
+    }
     runtime.add_object_menu_open = open && !should_close_menu;
-}
-
-fn draw_paint_toolbar(
-    ctx: &egui::Context,
-    runtime: &mut EguiUiRuntime,
-    commands: &mut Vec<UiToBevy>,
-) {
-    egui::Area::new("egui_paint_toolbar".into())
-        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
-        .show(ctx, |ui| {
-            egui::Frame::window(ui.style()).show(ui, |ui| {
-                ui.set_width(PAINT_TOOLBAR_WIDTH);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Brush").clicked() {
-                        commands.push(UiToBevy::PaintCommand(PaintCommand::SetBlendMode {
-                            mode: pentimento_ipc::BlendMode::Normal,
-                        }));
-                    }
-
-                    if ui.button("Eraser").clicked() {
-                        commands.push(UiToBevy::PaintCommand(PaintCommand::SetBlendMode {
-                            mode: pentimento_ipc::BlendMode::Erase,
-                        }));
-                    }
-
-                    if ui.button("Undo").clicked() {
-                        commands.push(UiToBevy::PaintCommand(PaintCommand::Undo));
-                    }
-
-                    let live_label = if runtime.live_projection_enabled {
-                        "Live Projection: On"
-                    } else {
-                        "Live Projection: Off"
-                    };
-                    if ui.button(live_label).clicked() {
-                        runtime.live_projection_enabled = !runtime.live_projection_enabled;
-                        commands.push(UiToBevy::PaintCommand(PaintCommand::SetLiveProjection {
-                            enabled: runtime.live_projection_enabled,
-                        }));
-                    }
-
-                    if ui.button("Project").clicked() {
-                        commands.push(UiToBevy::PaintCommand(PaintCommand::ProjectToScene));
-                    }
-                });
-            });
-        });
 }
 
 fn primitive_buttons(ui: &mut egui::Ui, commands: &mut Vec<UiToBevy>) -> bool {

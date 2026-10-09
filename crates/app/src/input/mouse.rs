@@ -154,9 +154,11 @@ pub fn forward_native_input(
             | crate::config::CompositeMode::Overlay
             | crate::config::CompositeMode::Cef
     );
-    let arbitrates = svelte_browser
+    let region_frontend =
+        svelte_browser || config.composite_mode == crate::config::CompositeMode::Egui;
+    let arbitrates = region_frontend
         || (config.composite_mode == crate::config::CompositeMode::Dioxus && layout.received);
-    let scene_ready = !svelte_browser || layout.received;
+    let scene_ready = !region_frontend || layout.received;
     let mut scene_events = Vec::new();
     let direct = paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv;
     if !direct {
@@ -368,8 +370,9 @@ pub fn forward_native_input(
     }
     layout.pointer_captured = state.ui_buttons.get_pressed().next().is_some()
         || state.touch.as_ref().is_some_and(|t| t.ui);
-    // egui owns its own flags. Browser startup blocks scene input until native
-    // hit-testing has rectangles; Dioxus/Tauri do not use the Svelte reporter.
+    // Region frontends block scene input until hit-testing has rectangles.
+    // egui also publishes real panel/modal geometry, so the first press and a
+    // stationary release cannot leak through a widget into a sculpt/paint stroke.
     if arbitrates {
         if !scene_ready
             || state.focus_suspended
@@ -381,7 +384,7 @@ pub fn forward_native_input(
             close_scene_touch(&mut state, suspended, &mut scene_events);
         }
         scene_input.publish(window_id, scene_events);
-        input_blocks.block_pointer = (svelte_browser && !layout.received)
+        input_blocks.block_pointer = (region_frontend && !layout.received)
             || focus_lost
             || state.focus_suspended
             || ui_owned_in_frame
