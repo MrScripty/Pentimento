@@ -5,6 +5,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-bevy_egui = { workspace = true }
+egui = { workspace = true }
 pentimento-frontend-core = { path = "../frontend-core" }
 pentimento-ipc = { path = "../ipc" }

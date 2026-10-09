@@ -57,6 +57,8 @@ dioxus-native = "0.7"
 # Version 0.7.0 uses wgpu 27 which is compatible with Bevy 0.18
 vello = "0.7"
 bevy_egui = "0.39.1"
+# Presentation widgets share the plugin's egui version without pulling its renderer.
+egui = "0.33.3"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

@@ -48,14 +48,14 @@ backend-derived native frontend state lives in `crates/frontend-core`.
 
 ## Dependencies
 **Internal:** `crates/ipc`, `crates/frontend-core`  
-**External:** `bevy_egui` re-exported `egui`
+**External:** `egui` (the same version as `bevy_egui` uses in the Bevy adapter)
 
 ## Related ADRs
 - `ADR-001` active frontends and contract ownership.
 
 ## Usage Examples
 ```rust
-use bevy_egui::egui;
+use pentimento_egui_ui::egui;
 use pentimento_egui_ui::{EguiUiRuntime, EguiUiSnapshot, show_root_ui};
 
 let mut runtime = EguiUiRuntime::default();
