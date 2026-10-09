@@ -1,4 +1,4 @@
-use bevy_egui::egui::{self, Align, Layout, RichText, Vec2};
+use egui::{self, Align, Layout, RichText, Vec2};
 use pentimento_ipc::{
     AddObjectRequest, AmbientOcclusionSettings, CameraCommand, EditMode, LightingSettings,
     PaintCommand, PrimitiveType, UiToBevy,
