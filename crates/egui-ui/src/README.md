@@ -105,13 +105,28 @@ and the egui version coupling remain a separate workstream.
 - Command shapes and enum variants must remain aligned with `crates/ipc`.
 - No persisted artifact or stable external serialization is produced here.
 
-## Remaining Input Qualification
-Canvas and DirectUV history shortcuts follow native event ownership and modifier
-order. Production CPU tests cover fresh egui text-field focus by mouse and touch,
-held modifiers, accepted shortcuts before UI focus, startup layout and focus return;
-blocked shortcuts do not replay on later frames. The qualified run passed 108
-controller tests and 14 real egui widget tests, using freshly compiled App/Core/UI
-source with compatible preserved official CPU libraries after full Cargo builds
-exhausted disk. This does not qualify native GUI, GPU, stylus or Bevy 0.20 rendering.
-Sculpt's raw keyboard history consumer still needs the scene owner's ordered-input
-integration. Its existing validated history buttons remain available.
+## Native Input Contract
+The egui producer publishes admitted keys with chronological modifiers, focus and
+cursor origins. One Scene dispatcher orders Canvas, DirectUV and Sculpt pointer
+segments with Undo/Redo, Escape, Ctrl+Tab, Shift+Tab and F/Enter brush adjustments.
+Each segment settles through the existing owner before the next intent. Scheduled
+and explicit queue processing share one cached reader; other message observers
+retain their messages. Mode changes resolve against accepted state.
+
+Empty or stale document frames do not fall back to raw keys. Frame reconciliation
+samples held Canvas gestures once and touches only verified native strokes.
+Public Canvas and DirectUV strokes retain their owner; native mode changes refuse
+until those strokes finish. Public Sculpt events retain their existing Exit
+semantics. A public replacement or termination detaches stale native input ownership,
+including reused IDs, without cancelling the public stroke. Open discards old
+input and starts fresh history. Existing validated geometry restoration, memory
+limits and external-edit conflict handling remain authoritative. Other frontends
+retain their existing routes.
+
+Production CPU regressions exercise real egui fields, mouse/touch capture, held
+modifiers, repeated chords, AltGraph, focus return, stroke/history order, rejected
+targets, public lifecycle ownership and New/Open replacement. Fresh Scene/App/Core/
+UI compilation against compatible official Bevy 0.18.1 and egui 0.33.3 libraries
+qualified 154 controller tests, 135 Scene tests and 14 widget tests; two manual tests
+remain ignored. Native GUI, GPU, physical stylus and Bevy 0.20 renderer/UI migration
+remain separate qualifications.

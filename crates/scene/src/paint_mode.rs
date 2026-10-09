@@ -129,7 +129,19 @@ pub(crate) fn handle_paint_mode_toggle(
     mut paint_events: MessageWriter<PaintEvent>,
     mut outbound: ResMut<crate::OutboundUiMessages>,
     input_blocks: Res<FrontendInputBlockState>,
+    native: (
+        Option<Res<crate::NativeSceneHistoryOwner>>,
+        Option<Res<crate::FrontendSceneKeyboardInput>>,
+    ),
 ) {
+    if native.0.is_some()
+        && native
+            .1
+            .as_ref()
+            .is_some_and(|input| input.events(0).is_some())
+    {
+        return;
+    }
     if input_blocks.blocks_keyboard() {
         return;
     }
@@ -175,7 +187,13 @@ pub(crate) fn handle_paint_mode_toggle(
 }
 
 /// Handle paint input (left mouse button for strokes)
-pub(super) fn handle_paint_input(
+pub(super) fn handle_paint_input(world: &mut World) {
+    world
+        .run_system_cached(collect_paint_input)
+        .expect("Canvas input resources available");
+}
+
+fn collect_paint_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut window_events: MessageReader<WindowEvent>,
@@ -188,11 +206,17 @@ pub(super) fn handle_paint_input(
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut paint_events: MessageWriter<PaintEvent>,
     time: Res<Time>,
-    input_blocks: Res<FrontendInputBlockState>,
-    scene_input: Option<Res<FrontendScenePointerInput>>,
+    frontend: (
+        Res<FrontendInputBlockState>,
+        Option<Res<FrontendScenePointerInput>>,
+        Option<Res<crate::FrontendSceneKeyboardInput>>,
+        Option<Res<crate::NativeSceneHistoryOwner>>,
+        Option<ResMut<crate::frontend_input::NativePointerSegment>>,
+    ),
     mut painting: ResMut<crate::PaintingResource>,
     mut outbound: ResMut<crate::OutboundUiMessages>,
 ) {
+    let (input_blocks, scene_input, keyboard, native_owner, mut segment) = frontend;
     let generation = project.as_ref().map_or(0, |p| p.generation);
     if last_cursor.1 != generation {
         *last_cursor = (None, generation);
@@ -203,11 +227,34 @@ pub(super) fn handle_paint_input(
     };
     // Consume every frame, including blocked/inactive frames, to prevent replay.
     let raw_batch: Vec<_> = window_events.read().cloned().collect();
+    if native_owner.is_some()
+        && keyboard
+            .as_ref()
+            .is_some_and(|input| input.events(generation).is_some())
+        && segment.is_none()
+    {
+        return;
+    }
     let arbitrated = scene_input
         .as_ref()
         .and_then(|input| input.events(window_entity));
-    let batch = arbitrated.map_or(raw_batch, |events| events.to_vec());
-    let mut cursor = last_cursor.0;
+    let batch = segment.as_ref().map_or_else(
+        || arbitrated.map_or(raw_batch, |events| events.to_vec()),
+        |segment| segment.events.clone(),
+    );
+    let focused = segment
+        .as_ref()
+        .map_or(window.focused, |segment| segment.focused);
+    let left_down = segment.as_ref().map_or_else(
+        || mouse_button.pressed(MouseButton::Left),
+        |segment| segment.left_down,
+    );
+    let mut cursor = segment
+        .as_ref()
+        .map_or(last_cursor.0, |segment| segment.cursor);
+    if segment.is_some() {
+        last_cursor.0 = cursor;
+    }
     let mut has_movement = false;
     for event in &batch {
         if let WindowEvent::CursorMoved(event) = event {
@@ -218,7 +265,9 @@ pub(super) fn handle_paint_input(
         }
     }
     if cursor.is_none() && !has_movement {
-        cursor = window.cursor_position();
+        cursor = segment
+            .as_ref()
+            .map_or_else(|| window.cursor_position(), |segment| segment.cursor);
     }
     // Window holds the final batch focus. An ordered focus transition lets us
     // finish earlier valid input before processing the loss itself.
@@ -226,16 +275,16 @@ pub(super) fn handle_paint_input(
         WindowEvent::WindowFocused(event) if event.window == window_entity => Some(event.focused),
         _ => None,
     });
-    if (arbitrated.is_none() && input_blocks.blocks_pointer())
-        || (!window.focused && first_focus.is_none())
+    if (segment.is_none() && arbitrated.is_none() && input_blocks.blocks_pointer())
+        || (!focused && first_focus.is_none())
     {
-        if !mouse_button.pressed(MouseButton::Left) {
+        if !left_down {
             paint_mode.sample_press_owned = false;
         }
         if paint_mode.current_stroke.take().is_some() {
             paint_events.write(PaintEvent::StrokeEnd);
         }
-        if !window.focused {
+        if !focused {
             last_cursor.0 = None;
             paint_mode.sample_color = false;
             paint_mode.sample_press_owned = false;
@@ -244,7 +293,7 @@ pub(super) fn handle_paint_input(
     }
     if !paint_mode.active || paint_mode.target != pentimento_ipc::PaintTarget::Canvas {
         paint_mode.sample_color = false;
-        if !mouse_button.pressed(MouseButton::Left) {
+        if !left_down {
             paint_mode.sample_press_owned = false;
         }
         return;
@@ -274,7 +323,7 @@ pub(super) fn handle_paint_input(
     let current_time = time.elapsed_secs_f64();
     let mut moved = false;
     let mut began = false;
-    let mut focus_lost = first_focus.map_or(!window.focused, |focused| focused);
+    let mut focus_lost = first_focus.map_or(!focused, |focused| focused);
     for event in batch {
         match event {
             WindowEvent::CursorMoved(event) if event.window == window_entity => {
@@ -362,7 +411,7 @@ pub(super) fn handle_paint_input(
                     && event.key_code == KeyCode::Escape
                     && event.state.is_pressed()
                     && !focus_lost
-                    && !input_blocks.blocks_keyboard() =>
+                    && (segment.is_some() || !input_blocks.blocks_keyboard()) =>
             {
                 paint_mode.sample_color = false;
                 if paint_mode.current_stroke.take().is_some() {
@@ -373,13 +422,19 @@ pub(super) fn handle_paint_input(
             _ => {}
         }
     }
-    if !mouse_button.pressed(MouseButton::Left) {
+    if let Some(segment) = segment.as_mut() {
+        segment.sampled |= began || moved;
+    }
+    if segment.as_ref().is_some_and(|segment| !segment.finish) {
+        return;
+    }
+    if !left_down {
         paint_mode.sample_press_owned = false;
         // A host reset may release ownership without delivering a button event.
         if paint_mode.current_stroke.take().is_some() {
             paint_events.write(PaintEvent::StrokeEnd);
         }
-    } else if !began && !moved {
+    } else if !began && !moved && !segment.as_ref().is_some_and(|segment| segment.sampled) {
         if let Some(state) = paint_mode.current_stroke.as_mut() {
             if let Some((world_pos, uv_pos)) = cursor.and_then(hit) {
                 emit_move(state, world_pos, uv_pos, current_time, &mut paint_events);

@@ -77,7 +77,8 @@ pub use depth_view::{
 };
 pub use edit_mode::{EditModeEvent, EditModePlugin, EditModeState};
 pub use frontend_input::{
-    FrontendInputBlockState, FrontendScenePointerInput, FrontendUiLayout, touch_pressure,
+    FrontendInputBlockState, FrontendSceneKeyboardInput, FrontendScenePointerInput,
+    FrontendUiLayout, NativeSceneHistoryOwner, touch_pressure,
 };
 pub use gizmo::{GizmoPlugin, GizmoState};
 #[cfg(feature = "selection")]

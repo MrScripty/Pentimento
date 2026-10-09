@@ -100,6 +100,12 @@ impl PaintingResource {
     pub(crate) fn has_active_stroke(&self) -> bool {
         self.pipelines.values().any(PaintingPipeline::is_stroking)
     }
+    /// Native mode changes may exempt only their verified active plane.
+    pub(crate) fn has_unowned_active_stroke(&self, native_plane: Option<u32>) -> bool {
+        self.pipelines
+            .iter()
+            .any(|(id, pipeline)| pipeline.is_stroking() && Some(*id) != native_plane)
+    }
     /// Create a new painting resource
     pub fn new() -> Self {
         Self {
@@ -324,7 +330,7 @@ impl Plugin for PaintingSystemPlugin {
 }
 
 /// Setup textures for newly created canvas planes
-fn setup_canvas_textures(
+pub(crate) fn setup_canvas_textures(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -402,7 +408,13 @@ fn setup_canvas_textures(
 }
 
 /// Process paint events and update the pipeline
-fn process_paint_events(
+pub(crate) fn process_paint_events(world: &mut World) {
+    world
+        .run_system_cached(apply_paint_events)
+        .expect("Canvas owner resources available");
+}
+
+fn apply_paint_events(
     mut paint_events: MessageReader<PaintEvent>,
     mut painting_res: ResMut<PaintingResource>,
     canvas_query: Query<&CanvasPlane>,
@@ -507,7 +519,7 @@ fn process_paint_events(
 ///
 /// This system runs in the main world and prepares tile data for upload.
 /// The actual GPU upload happens in the render world via `upload_dirty_tiles_to_gpu`.
-fn extract_dirty_tiles(
+pub(crate) fn extract_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
     canvas_query: Query<(&CanvasPlane, &CanvasTexture)>,
     mut buffer: ResMut<DirtyTileUploadBuffer>,

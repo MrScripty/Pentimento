@@ -4172,3 +4172,1759 @@ fn egui_history_keys_wait_for_own_layout_and_do_not_replay_after_startup() {
         assert_eq!(history, (1, 0));
     }
 }
+
+fn egui_sculpt_target(f: &mut Fixture) -> Entity {
+    f.app.add_plugins((
+        bevy::asset::AssetPlugin::default(),
+        bevy::gizmos::GizmoPlugin,
+        PixelCoveragePlugin,
+        SculptModePlugin,
+    ));
+    f.app.init_resource::<ActiveRenderCamera>();
+    let handle = f
+        .app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Sphere::new(1.).mesh().uv(16, 8));
+    let material = f
+        .app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let entity = f
+        .app
+        .world_mut()
+        .spawn((
+            Mesh3d(handle),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            Selected,
+        ))
+        .id();
+    entity
+}
+
+// Production SculptModePlugin, mesh assets and shared command owner; no history stub.
+fn egui_sculpt_fixture() -> (Fixture, Entity) {
+    let mut f = Fixture::new();
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    let entity = egui_sculpt_target(&mut f);
+    f.app
+        .world_mut()
+        .write_message(SculptEvent::Enter { entity });
+    f.settle();
+    crate::render::dispatch_ui_commands(
+        f.app.world_mut(),
+        [
+            UiToBevy::SculptCommand(pentimento_ipc::SculptCommand::SetTool {
+                tool: pentimento_ipc::SculptTool::Grab,
+            }),
+            UiToBevy::SculptCommand(pentimento_ipc::SculptCommand::SetRadius { radius: 0.75 }),
+            UiToBevy::SculptCommand(pentimento_ipc::SculptCommand::SetStrength { strength: 0.4 }),
+        ],
+    );
+    f.app.world_mut().write_message(SculptEvent::StrokeStart {
+        world_pos: Vec3::Z,
+        normal: Vec3::Z,
+        stroke_id: 810,
+    });
+    f.app.update();
+    f.app.world_mut().write_message(SculptEvent::StrokeMove {
+        world_pos: Vec3::new(0.02, 0., 1.),
+        normal: Vec3::Z,
+        pressure: 1.,
+    });
+    f.app.update();
+    f.app.world_mut().write_message(SculptEvent::StrokeEnd);
+    f.settle();
+    assert_eq!(
+        sculpt_counts(&mut f),
+        (1, 0),
+        "fixture must commit an accepted real sculpt stroke"
+    );
+    (f, entity)
+}
+fn sculpt_counts(f: &mut Fixture) -> (usize, usize) {
+    let snapshot = egui_snapshot(f);
+    (
+        snapshot.sculpt_history.undo_strokes,
+        snapshot.sculpt_history.redo_strokes,
+    )
+}
+fn sculpt_mesh(f: &Fixture, entity: Entity) -> String {
+    let mesh = f
+        .app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(&f.app.world().get::<Mesh3d>(entity).unwrap().0)
+        .unwrap();
+    format!(
+        "{:?}/{:?}",
+        mesh.attributes().collect::<Vec<_>>(),
+        mesh.indices()
+    )
+}
+fn egui_sculpt_field(f: &mut Fixture) -> pentimento_egui_ui::egui::Pos2 {
+    use pentimento_egui_ui::egui;
+    let ctx = egui::Context::default();
+    ctx.style_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(f);
+    egui_click(f, &ctx, &mut snapshot, &mut runtime, "Saved brushes");
+    fn text(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::epaint::Shape::Text(t) if t.galley.text() == label => {
+                Some(t.pos + t.galley.size() / 2.)
+            }
+            egui::epaint::Shape::Vec(v) => v.iter().find_map(|s| text(s, label)),
+            _ => None,
+        }
+    }
+    let (output, _) = egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    let combo = output
+        .shapes
+        .iter()
+        .find_map(|s| text(&s.shape, "Choose saved brush"))
+        .expect("actual Sculpt saved-brush combo");
+    let point = combo + egui::vec2(0., 22.);
+    egui_frame(
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: default(),
+            },
+        ],
+    );
+    egui_frame(
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        vec![
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: default(),
+            },
+            egui::Event::Text("Sculpt keyboard regression".into()),
+        ],
+    );
+    assert!(
+        ctx.wants_keyboard_input(),
+        "real Sculpt TextEdit must gain focus"
+    );
+    let (output, _) = egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    let point = output
+        .shapes
+        .iter()
+        .find_map(|s| text(&s.shape, "Sculpt keyboard regression"))
+        .expect("typed text must render in real Sculpt TextEdit");
+    ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
+    assert!(!ctx.wants_keyboard_input());
+    egui_frame(
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: default(),
+            },
+        ],
+    );
+    assert!(ctx.wants_keyboard_input());
+    let regions = runtime
+        .ui_regions()
+        .iter()
+        .enumerate()
+        .map(|(i, r)| pentimento_ipc::LayoutRegion {
+            id: format!("sculpt-egui-{i}"),
+            x: r.min.x,
+            y: r.min.y,
+            width: r.width(),
+            height: r.height(),
+            z_index: i as i32,
+            accepts_keyboard: true,
+        })
+        .collect();
+    crate::render::dispatch_ui_commands(
+        f.app.world_mut(),
+        [UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions,
+        })],
+    );
+    assert!(
+        !f.app
+            .world()
+            .resource::<FrontendInputBlockState>()
+            .blocks_keyboard()
+    );
+    point
+}
+#[test]
+fn egui_sculpt_fresh_field_focus_cannot_undo_an_accepted_stroke() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let point = egui_sculpt_field(&mut f);
+    let w = f.window;
+    f.batch(vec![
+        key(w, KeyCode::ControlLeft, true),
+        WindowEvent::CursorMoved(CursorMoved {
+            window: w,
+            position: Vec2::new(point.x, point.y),
+            delta: None,
+        }),
+        button(w, true),
+        button(w, false),
+        key(w, KeyCode::KeyZ, true),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+    f.batch(vec![
+        key(w, KeyCode::KeyZ, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+}
+#[test]
+fn egui_sculpt_complete_chords_restore_real_geometry_in_native_order() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    f.batch(vec![
+        key(w, KeyCode::ControlLeft, true),
+        key(w, KeyCode::KeyZ, true),
+        key(w, KeyCode::KeyZ, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (0, 1));
+    assert_ne!(sculpt_mesh(&f, entity), accepted);
+    f.batch(vec![
+        key(w, KeyCode::ControlLeft, true),
+        key(w, KeyCode::KeyY, true),
+        key(w, KeyCode::KeyY, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+}
+
+fn sculpt_chord(window: Entity, code: KeyCode, shift: bool) -> Vec<WindowEvent> {
+    let mut events = vec![key(window, KeyCode::ControlLeft, true)];
+    if shift {
+        events.push(key(window, KeyCode::ShiftLeft, true));
+    }
+    events.extend([key(window, code, true), key(window, code, false)]);
+    if shift {
+        events.push(key(window, KeyCode::ShiftLeft, false));
+    }
+    events.push(key(window, KeyCode::ControlLeft, false));
+    events
+}
+#[test]
+fn egui_sculpt_held_ctrl_prefix_survives_fresh_mouse_and_touch_focus() {
+    for touch_field in [false, true] {
+        let (mut f, entity) = egui_sculpt_fixture();
+        let accepted = sculpt_mesh(&f, entity);
+        let point = egui_sculpt_field(&mut f);
+        let w = f.window;
+        f.batch(vec![key(w, KeyCode::ControlLeft, true)]);
+        let mut events = vec![key(w, KeyCode::KeyZ, true), key(w, KeyCode::KeyZ, false)];
+        if touch_field {
+            let WindowEvent::TouchInput(mut contact) =
+                touch(w, 908, point.x, TouchPhase::Started, 0.7)
+            else {
+                unreachable!()
+            };
+            contact.position.y = point.y;
+            events.push(WindowEvent::TouchInput(contact));
+            contact.phase = TouchPhase::Ended;
+            events.push(WindowEvent::TouchInput(contact));
+        } else {
+            events.extend([
+                WindowEvent::CursorMoved(CursorMoved {
+                    window: w,
+                    position: Vec2::new(point.x, point.y),
+                    delta: None,
+                }),
+                button(w, true),
+                button(w, false),
+            ]);
+        }
+        events.extend([
+            key(w, KeyCode::ShiftLeft, true),
+            key(w, KeyCode::KeyY, true),
+            key(w, KeyCode::KeyY, false),
+            key(w, KeyCode::ControlLeft, false),
+            key(w, KeyCode::ShiftLeft, false),
+        ]);
+        f.batch(events);
+        assert_eq!(sculpt_counts(&mut f), (0, 1));
+        assert_ne!(sculpt_mesh(&f, entity), accepted);
+        f.settle();
+        assert_eq!(sculpt_counts(&mut f), (0, 1));
+    }
+}
+#[test]
+fn egui_sculpt_multiple_history_chords_and_repeats_use_event_modifiers() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    let mut events = sculpt_chord(w, KeyCode::KeyZ, false);
+    events.extend(sculpt_chord(w, KeyCode::KeyZ, true));
+    f.batch(events);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+    let WindowEvent::KeyboardInput(mut repeat) = key(w, KeyCode::KeyZ, true) else {
+        unreachable!()
+    };
+    repeat.repeat = true;
+    f.batch(vec![
+        key(w, KeyCode::ControlLeft, true),
+        WindowEvent::KeyboardInput(repeat),
+        key(w, KeyCode::KeyZ, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    let WindowEvent::KeyboardInput(mut alt) = key(w, KeyCode::AltRight, true) else {
+        unreachable!()
+    };
+    alt.logical_key = Key::AltGraph;
+    f.batch(vec![
+        key(w, KeyCode::ControlLeft, true),
+        WindowEvent::KeyboardInput(alt),
+        key(w, KeyCode::KeyZ, true),
+        key(w, KeyCode::KeyZ, false),
+        key(w, KeyCode::AltRight, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+}
+#[test]
+fn egui_sculpt_startup_and_focus_return_never_replay_rejected_keys() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    f.app
+        .world_mut()
+        .resource_mut::<FrontendUiLayout>()
+        .received = false;
+    f.batch(sculpt_chord(w, KeyCode::KeyZ, false));
+    f.app
+        .world_mut()
+        .resource_mut::<FrontendUiLayout>()
+        .received = true;
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    f.batch(vec![WindowEvent::WindowFocused(
+        bevy::window::WindowFocused {
+            window: w,
+            focused: false,
+        },
+    )]);
+    let mut events = sculpt_chord(w, KeyCode::KeyZ, false);
+    events.extend([
+        WindowEvent::WindowFocused(bevy::window::WindowFocused {
+            window: w,
+            focused: true,
+        }),
+        key(w, KeyCode::KeyZ, true),
+        key(w, KeyCode::KeyZ, false),
+    ]);
+    f.batch(events);
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+}
+#[test]
+fn egui_sculpt_double_toggles_resolve_actual_mode_and_rejected_target() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let w = f.window;
+    let mut events = sculpt_chord(w, KeyCode::Tab, false);
+    events.extend(sculpt_chord(w, KeyCode::Tab, false));
+    f.batch(events.clone());
+    assert!(f.app.world().resource::<SculptState>().active);
+    assert_eq!(
+        f.app.world().resource::<SculptState>().target_entity,
+        Some(entity)
+    );
+    f.batch(sculpt_chord(w, KeyCode::Tab, false));
+    assert!(!f.app.world().resource::<SculptState>().active);
+    f.app
+        .world_mut()
+        .get_mut::<GlobalTransform>(entity)
+        .unwrap()
+        .clone_from(&GlobalTransform::from(Transform::from_scale(Vec3::ZERO)));
+    f.app.world_mut().resource_mut::<EditModeState>().mode = pentimento_ipc::EditMode::Paint;
+    f.app.world_mut().resource_mut::<PaintMode>().active = true;
+    f.app
+        .world_mut()
+        .resource_mut::<OutboundUiMessages>()
+        .messages
+        .clear();
+    f.batch(events);
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert_eq!(
+        f.app.world().resource::<EditModeState>().mode,
+        pentimento_ipc::EditMode::Paint
+    );
+    assert!(f.app.world().resource::<PaintMode>().active);
+    let modes = f
+        .app
+        .world()
+        .resource::<OutboundUiMessages>()
+        .messages
+        .iter()
+        .filter(|m| matches!(m, BevyToUi::EditModeChanged { .. }))
+        .count();
+    assert_eq!(
+        modes, 0,
+        "rejected Enter must not manufacture Exit or mode acknowledgements"
+    );
+}
+#[test]
+fn egui_sculpt_document_replacement_invalidates_already_admitted_keys() {
+    let (mut f, _) = egui_sculpt_fixture();
+    let w = f.window;
+    let generation = project_generation(f.app.world()).to_string();
+    f.app
+        .world_mut()
+        .resource_mut::<QueuedUi>()
+        .0
+        .push(UiToBevy::ProjectCommand(ProjectCommand::New {
+            expected_generation: generation,
+            confirm_discard: true,
+        }));
+    // CtrlTab would otherwise enter the freshly created document's selected mesh.
+    f.batch(sculpt_chord(w, KeyCode::Tab, false));
+    assert_ne!(project_generation(f.app.world()), 0);
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert!(
+        f.app
+            .world()
+            .resource::<FrontendSceneKeyboardInput>()
+            .events(project_generation(f.app.world()))
+            .is_some_and(|events| events.is_empty())
+    );
+    f.settle();
+    assert!(!f.app.world().resource::<SculptState>().active);
+}
+#[test]
+fn egui_sculpt_fresh_field_does_not_start_brush_adjustment_or_exit_mode() {
+    let (mut f, _) = egui_sculpt_fixture();
+    let point = egui_sculpt_field(&mut f);
+    let w = f.window;
+    let mut events = vec![
+        WindowEvent::CursorMoved(CursorMoved {
+            window: w,
+            position: Vec2::new(point.x, point.y),
+            delta: None,
+        }),
+        button(w, true),
+        button(w, false),
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+    ];
+    events.extend(sculpt_chord(w, KeyCode::Tab, false));
+    f.batch(events);
+    f.settle();
+    assert!(f.app.world().resource::<SculptState>().active);
+    assert_eq!(
+        format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+        "None"
+    );
+}
+
+#[test]
+fn egui_sculpt_brush_keyboard_intents_follow_chronology_and_actual_mode() {
+    let (mut f, _) = egui_sculpt_fixture();
+    let w = f.window;
+    let radius = f.app.world().resource::<SculptState>().brush_radius;
+    let strength = f.app.world().resource::<SculptState>().brush_strength;
+    for finish in [KeyCode::Enter, KeyCode::Escape] {
+        f.batch(vec![
+            key(w, KeyCode::KeyF, true),
+            key(w, KeyCode::KeyF, false),
+            key(w, finish, true),
+            key(w, finish, false),
+        ]);
+        assert_eq!(
+            format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+            "None"
+        );
+        f.batch(vec![movement(w, 650.)]);
+        assert_eq!(f.app.world().resource::<SculptState>().brush_radius, radius);
+        assert_eq!(
+            f.app.world().resource::<SculptState>().brush_strength,
+            strength
+        );
+    }
+    f.batch(vec![
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+    ]);
+    assert_eq!(
+        format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+        "Radius"
+    );
+    f.batch(vec![
+        key(w, KeyCode::Escape, true),
+        key(w, KeyCode::Escape, false),
+        key(w, KeyCode::ShiftLeft, true),
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+        key(w, KeyCode::ShiftLeft, false),
+    ]);
+    assert_eq!(
+        format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+        "Strength"
+    );
+    f.batch(vec![
+        key(w, KeyCode::Enter, true),
+        key(w, KeyCode::Enter, false),
+    ]);
+    f.batch(sculpt_chord(w, KeyCode::Tab, false));
+    assert!(!f.app.world().resource::<SculptState>().active);
+    let mut events = sculpt_chord(w, KeyCode::Tab, false);
+    events.extend([
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+        key(w, KeyCode::Enter, true),
+        key(w, KeyCode::Enter, false),
+    ]);
+    f.batch(events);
+    assert!(f.app.world().resource::<SculptState>().active);
+    assert_eq!(
+        format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+        "None"
+    );
+    f.settle();
+    assert_eq!(f.app.world().resource::<SculptState>().brush_radius, radius);
+}
+
+#[test]
+fn sculpt_other_frontends_retain_raw_keyboard_and_pointer_capture_semantics() {
+    for mode in [
+        crate::config::CompositeMode::Cef,
+        crate::config::CompositeMode::Dioxus,
+    ] {
+        let (mut f, _) = egui_sculpt_fixture();
+        let w = f.window;
+        f.app
+            .world_mut()
+            .resource_mut::<crate::config::PentimentoConfig>()
+            .composite_mode = mode;
+        f.app.world_mut().resource_mut::<FrontendUiLayout>().regions =
+            vec![pentimento_ipc::LayoutRegion {
+                id: "legacy-ui".into(),
+                x: 0.,
+                y: 0.,
+                width: 1000.,
+                height: 1000.,
+                z_index: 1,
+                accepts_keyboard: true,
+            }];
+        f.batch(vec![movement(w, 500.), key(w, KeyCode::KeyF, true)]);
+        assert!(
+            f.app
+                .world()
+                .resource::<FrontendSceneKeyboardInput>()
+                .events(project_generation(f.app.world()))
+                .is_none()
+        );
+        assert_eq!(
+            format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+            "None"
+        );
+        f.batch(vec![
+            key(w, KeyCode::KeyF, false),
+            key(w, KeyCode::ControlLeft, true),
+            key(w, KeyCode::KeyZ, true),
+        ]);
+        assert_eq!(
+            sculpt_counts(&mut f),
+            (0, 1),
+            "legacy held-Ctrl route remains available"
+        );
+    }
+}
+#[test]
+fn egui_sculpt_cancel_history_and_mode_exit_apply_in_native_order() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    f.app
+        .world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    f.app.world_mut().write_message(SculptEvent::StrokeStart {
+        world_pos: Vec3::Z,
+        normal: Vec3::Z,
+        stroke_id: 811,
+    });
+    f.app.update();
+    f.app.world_mut().write_message(SculptEvent::StrokeMove {
+        world_pos: Vec3::new(0.04, 0., 1.),
+        normal: Vec3::Z,
+        pressure: 1.,
+    });
+    f.app.update();
+    assert!(egui_snapshot(&mut f).sculpt_history.active);
+    let WindowEvent::KeyboardInput(mut alt) = key(w, KeyCode::AltRight, true) else {
+        unreachable!()
+    };
+    alt.logical_key = Key::AltGraph;
+    let mut events = vec![
+        WindowEvent::KeyboardInput(alt),
+        key(w, KeyCode::Escape, true),
+        key(w, KeyCode::Escape, false),
+        key(w, KeyCode::AltRight, false),
+    ];
+    events.extend(sculpt_chord(w, KeyCode::KeyZ, false));
+    f.batch(events);
+    assert_eq!(sculpt_counts(&mut f), (0, 1));
+    assert_ne!(sculpt_mesh(&f, entity), accepted);
+    f.batch(sculpt_chord(w, KeyCode::KeyY, false));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+    let mut events = sculpt_chord(w, KeyCode::KeyZ, false);
+    events.extend(sculpt_chord(w, KeyCode::Tab, false));
+    f.batch(events);
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert_ne!(sculpt_mesh(&f, entity), accepted);
+    let mut events = sculpt_chord(w, KeyCode::Tab, false);
+    events.extend(sculpt_chord(w, KeyCode::KeyY, false));
+    f.batch(events);
+    assert!(f.app.world().resource::<SculptState>().active);
+    assert_eq!(sculpt_counts(&mut f), (0, 0));
+    assert_ne!(sculpt_mesh(&f, entity), accepted);
+}
+#[test]
+fn egui_sculpt_global_focus_and_missing_window_keep_empty_frames_authoritative() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    f.app
+        .world_mut()
+        .resource_mut::<FrontendInputBlockState>()
+        .block_keyboard = true;
+    f.batch(sculpt_chord(w, KeyCode::KeyZ, false));
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    f.app
+        .world_mut()
+        .resource_mut::<FrontendInputBlockState>()
+        .block_keyboard = false;
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    let saved_window = f.app.world().get::<Window>(w).unwrap().clone();
+    f.app.world_mut().entity_mut(w).remove::<Window>();
+    f.batch(vec![
+        key(w, KeyCode::ControlLeft, true),
+        key(w, KeyCode::KeyZ, true),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert!(
+        f.app
+            .world()
+            .resource::<FrontendSceneKeyboardInput>()
+            .events(project_generation(f.app.world()))
+            .is_some_and(|keys| keys.is_empty())
+    );
+    f.app.world_mut().entity_mut(w).insert(saved_window);
+    f.batch(vec![
+        key(w, KeyCode::KeyZ, false),
+        key(w, KeyCode::ControlLeft, false),
+    ]);
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert_eq!(sculpt_mesh(&f, entity), accepted);
+}
+
+fn sculpt_native_gesture(window: Entity) -> Vec<WindowEvent> {
+    vec![
+        movement(window, 500.),
+        button(window, true),
+        movement(window, 505.),
+        button(window, false),
+    ]
+}
+#[test]
+fn egui_sculpt_native_gesture_then_undo_restores_latest_committed_stroke() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    let mut events = sculpt_native_gesture(w);
+    events.extend(sculpt_chord(w, KeyCode::KeyZ, false));
+    f.batch(events);
+    assert_eq!(sculpt_counts(&mut f), (1, 1));
+    assert!(
+        sculpt_mesh(&f, entity) == accepted,
+        "Undo must restore geometry from before the newest native stroke"
+    );
+    f.batch(sculpt_chord(w, KeyCode::KeyY, false));
+    assert_eq!(sculpt_counts(&mut f), (2, 0));
+    assert!(sculpt_mesh(&f, entity) != accepted);
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (2, 0));
+}
+#[test]
+fn egui_sculpt_native_gesture_then_escape_rolls_back_before_release() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    f.batch(vec![
+        movement(w, 500.),
+        button(w, true),
+        movement(w, 505.),
+        key(w, KeyCode::Escape, true),
+        key(w, KeyCode::Escape, false),
+        button(w, false),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert!(sculpt_mesh(&f, entity) == accepted);
+    f.batch(sculpt_native_gesture(w));
+    assert_eq!(
+        sculpt_counts(&mut f),
+        (2, 0),
+        "cancel cannot poison the next scene press"
+    );
+}
+#[test]
+fn egui_sculpt_native_f_then_pointer_confirm_never_creates_a_stroke() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let accepted = sculpt_mesh(&f, entity);
+    let w = f.window;
+    f.batch(vec![
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+        movement(w, 500.),
+        button(w, true),
+        button(w, false),
+        movement(w, 505.),
+    ]);
+    assert_eq!(
+        format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+        "None"
+    );
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    assert!(sculpt_mesh(&f, entity) == accepted);
+    f.batch(sculpt_native_gesture(w));
+    assert_eq!(sculpt_counts(&mut f), (2, 0));
+}
+#[test]
+fn egui_sculpt_rejected_enter_drops_native_pointer_suffix() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let w = f.window;
+    f.batch(sculpt_chord(w, KeyCode::Tab, false));
+    f.app
+        .world_mut()
+        .get_mut::<Transform>(entity)
+        .unwrap()
+        .scale = Vec3::ZERO;
+    f.app
+        .world_mut()
+        .get_mut::<GlobalTransform>(entity)
+        .unwrap()
+        .clone_from(&GlobalTransform::from(Transform::from_scale(Vec3::ZERO)));
+    let mut events = sculpt_chord(w, KeyCode::Tab, false);
+    events.extend(sculpt_native_gesture(w));
+    f.batch(events);
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert!(
+        f.app
+            .world()
+            .resource::<SculptState>()
+            .current_stroke_id
+            .is_none()
+    );
+    assert_eq!(sculpt_counts(&mut f), (0, 0));
+    f.settle();
+    assert!(!f.app.world().resource::<SculptState>().active);
+}
+
+#[test]
+fn egui_sculpt_idle_native_frames_do_not_close_public_event_strokes() {
+    let (mut f, _) = egui_sculpt_fixture();
+    f.app.world_mut().write_message(SculptEvent::StrokeStart {
+        world_pos: Vec3::Z,
+        normal: Vec3::Z,
+        stroke_id: 812,
+    });
+    f.app.update();
+    for _ in 0..3 {
+        f.app.update();
+        assert!(egui_snapshot(&mut f).sculpt_history.active);
+        assert_eq!(sculpt_counts(&mut f), (1, 0));
+    }
+    f.app.world_mut().write_message(SculptEvent::StrokeMove {
+        world_pos: Vec3::new(0.04, 0., 1.),
+        normal: Vec3::Z,
+        pressure: 1.,
+    });
+    f.app.update();
+    assert!(egui_snapshot(&mut f).sculpt_history.active);
+    f.app.world_mut().write_message(SculptEvent::StrokeEnd);
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (2, 0));
+}
+#[test]
+fn egui_sculpt_open_invalidates_native_pointer_and_keyboard_prefix() {
+    let (mut f, old_entity) = egui_sculpt_fixture();
+    let w = f.window;
+    let path = f.path.join("sculpt-replacement.pentimento.json");
+    assert!(
+        f.save(&path),
+        "{:?}",
+        f.app
+            .world()
+            .resource::<OutboundUiMessages>()
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| {
+                if let BevyToUi::ProjectOperationFinished { message, .. } = message {
+                    Some(message)
+                } else {
+                    None
+                }
+            })
+    );
+    let generation = project_generation(f.app.world());
+    f.app
+        .world_mut()
+        .resource_mut::<QueuedUi>()
+        .0
+        .push(UiToBevy::ProjectCommand(ProjectCommand::Open {
+            path: path.to_string_lossy().into_owned(),
+        }));
+    let mut events = sculpt_native_gesture(w);
+    events.extend(sculpt_chord(w, KeyCode::KeyZ, false));
+    f.batch(events);
+    assert_ne!(project_generation(f.app.world()), generation);
+    assert!(f.app.world().get_entity(old_entity).is_err());
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert!(
+        f.app
+            .world()
+            .resource::<SculptState>()
+            .current_stroke_id
+            .is_none()
+    );
+    assert!(
+        f.app
+            .world()
+            .resource::<FrontendScenePointerInput>()
+            .events(w)
+            .is_none()
+    );
+    assert!(
+        f.app
+            .world()
+            .resource::<FrontendSceneKeyboardInput>()
+            .events(project_generation(f.app.world()))
+            .is_some_and(|events| events.is_empty())
+    );
+    f.settle();
+    assert_eq!(sculpt_counts(&mut f), (0, 0));
+}
+#[test]
+fn egui_sculpt_f_closes_native_stroke_before_confirming_brush() {
+    let (mut f, _) = egui_sculpt_fixture();
+    let w = f.window;
+    f.batch(vec![
+        movement(w, 500.),
+        button(w, true),
+        movement(w, 505.),
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+        key(w, KeyCode::Enter, true),
+        key(w, KeyCode::Enter, false),
+        button(w, false),
+    ]);
+    assert_eq!(sculpt_counts(&mut f), (2, 0));
+    assert!(!egui_snapshot(&mut f).sculpt_history.active);
+    assert_eq!(
+        format!("{:?}", f.app.world().resource::<SculptState>().adjust_mode),
+        "None"
+    );
+}
+
+#[test]
+fn egui_sculpt_f_enter_then_fresh_pointer_gesture_keeps_the_new_press() {
+    let (mut f, _) = egui_sculpt_fixture();
+    let w = f.window;
+    let mut events = vec![
+        key(w, KeyCode::KeyF, true),
+        key(w, KeyCode::KeyF, false),
+        key(w, KeyCode::Enter, true),
+        key(w, KeyCode::Enter, false),
+    ];
+    events.extend(sculpt_native_gesture(w));
+    f.batch(events);
+    assert_eq!(
+        sculpt_counts(&mut f),
+        (2, 0),
+        "keyboard Enter must not consume a later scene press"
+    );
+}
+
+#[test]
+fn egui_history_mode_transitions_route_one_key_to_one_canvas_or_uv_owner() {
+    for direct in [false, true] {
+        for order in [0, 1, 2] {
+            let mut f = Fixture::new();
+            f.app
+                .world_mut()
+                .resource_mut::<crate::config::PentimentoConfig>()
+                .composite_mode = crate::config::CompositeMode::Egui;
+            let entity = egui_sculpt_target(&mut f);
+            f.app
+                .world_mut()
+                .get_mut::<Transform>(entity)
+                .unwrap()
+                .translation
+                .x = 20.;
+            f.settle();
+            if direct {
+                f.enable_layers();
+                f.direct();
+            }
+            f.command(PaintCommand::SetBrushSize { size: 8. });
+            f.gesture();
+            f.settle();
+            let accepted = if direct { f.image() } else { f.source() };
+            if direct {
+                assert_eq!(counts(&f), (1, 0), "initial accepted UV stroke");
+            }
+            f.app
+                .world_mut()
+                .get_mut::<Transform>(entity)
+                .unwrap()
+                .translation
+                .x = 0.;
+            f.app
+                .world_mut()
+                .get_mut::<GlobalTransform>(entity)
+                .unwrap()
+                .clone_from(&GlobalTransform::IDENTITY);
+            if order == 2 {
+                f.app
+                    .world_mut()
+                    .get_mut::<Transform>(entity)
+                    .unwrap()
+                    .scale = Vec3::ZERO;
+                f.app
+                    .world_mut()
+                    .get_mut::<GlobalTransform>(entity)
+                    .unwrap()
+                    .clone_from(&GlobalTransform::from(Transform::from_scale(Vec3::ZERO)));
+            }
+            let w = f.window;
+            let mut events = if order == 1 {
+                sculpt_chord(w, KeyCode::KeyZ, false)
+            } else {
+                sculpt_chord(w, KeyCode::Tab, false)
+            };
+            events.extend(if order == 1 {
+                sculpt_chord(w, KeyCode::Tab, false)
+            } else {
+                sculpt_chord(w, KeyCode::KeyZ, false)
+            });
+            f.batch(events);
+            f.settle();
+            let count = if direct {
+                counts(&f)
+            } else {
+                let p = f
+                    .app
+                    .world()
+                    .resource::<PaintingResource>()
+                    .get_pipeline(7)
+                    .unwrap();
+                (p.undo_count(), p.redo_count())
+            };
+            assert_eq!(
+                count,
+                if order == 0 { (1, 0) } else { (0, 1) },
+                "history order={order}, DirectUV={direct}"
+            );
+            let current = if direct { f.image() } else { f.source() };
+            assert_eq!(
+                current == accepted,
+                order == 0,
+                "only the actual chronological paint owner can restore this stroke"
+            );
+            assert_eq!(f.app.world().resource::<SculptState>().active, order != 2);
+            assert_eq!(sculpt_counts(&mut f), (0, 0));
+        }
+    }
+}
+
+fn assert_egui_paint_history_and_pointer_order(direct: bool, undo_first: bool) {
+    let prepare = || {
+        let mut f = Fixture::new();
+        f.app
+            .world_mut()
+            .resource_mut::<crate::config::PentimentoConfig>()
+            .composite_mode = crate::config::CompositeMode::Egui;
+        let entity = egui_sculpt_target(&mut f);
+        f.app
+            .world_mut()
+            .get_mut::<Transform>(entity)
+            .unwrap()
+            .translation
+            .x = 20.;
+        f.settle();
+        if direct {
+            f.enable_layers();
+            f.direct();
+        }
+        f.command(PaintCommand::SetBrushSize { size: 8. });
+        f.gesture();
+        f.settle();
+        f
+    };
+    let gesture = |window| {
+        vec![
+            movement(window, 550.),
+            button(window, true),
+            movement(window, 600.),
+            button(window, false),
+        ]
+    };
+    let mut split = prepare();
+    let w = split.window;
+    if undo_first {
+        split.batch(sculpt_chord(w, KeyCode::KeyZ, false));
+        split.settle();
+        split.batch(gesture(w));
+    } else {
+        split.batch(gesture(w));
+        split.settle();
+        split.batch(sculpt_chord(w, KeyCode::KeyZ, false));
+    }
+    split.settle();
+    let mut joined = prepare();
+    let w = joined.window;
+    let mut events = if undo_first {
+        sculpt_chord(w, KeyCode::KeyZ, false)
+    } else {
+        gesture(w)
+    };
+    events.extend(if undo_first {
+        gesture(w)
+    } else {
+        sculpt_chord(w, KeyCode::KeyZ, false)
+    });
+    joined.batch(events);
+    joined.settle();
+    let surface = |f: &Fixture| if direct { f.image() } else { f.source() };
+    let history = |f: &Fixture| {
+        if direct {
+            counts(f)
+        } else {
+            let pipeline = f
+                .app
+                .world()
+                .resource::<PaintingResource>()
+                .get_pipeline(7)
+                .unwrap();
+            (pipeline.undo_count(), pipeline.redo_count())
+        }
+    };
+    assert_eq!(
+        history(&joined),
+        history(&split),
+        "DirectUV={direct}, Undo first={undo_first}"
+    );
+    assert!(
+        surface(&joined) == surface(&split),
+        "exact split-frame bytes: DirectUV={direct}, Undo first={undo_first}"
+    );
+}
+
+#[test]
+fn egui_canvas_gesture_then_undo_matches_split_frames_with_sculpt_owner() {
+    assert_egui_paint_history_and_pointer_order(false, false);
+}
+#[test]
+fn egui_canvas_undo_then_gesture_matches_split_frames_with_sculpt_owner() {
+    assert_egui_paint_history_and_pointer_order(false, true);
+}
+#[test]
+fn egui_direct_uv_gesture_then_undo_matches_split_frames_with_sculpt_owner() {
+    assert_egui_paint_history_and_pointer_order(true, false);
+}
+#[test]
+fn egui_direct_uv_undo_then_gesture_matches_split_frames_with_sculpt_owner() {
+    assert_egui_paint_history_and_pointer_order(true, true);
+}
+
+fn shared_dispatch_paint_fixture(direct: bool) -> (Fixture, Entity) {
+    let mut f = Fixture::new();
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    let target = egui_sculpt_target(&mut f);
+    f.app
+        .world_mut()
+        .get_mut::<Transform>(target)
+        .unwrap()
+        .translation
+        .x = 20.;
+    f.settle();
+    if direct {
+        f.enable_layers();
+        f.direct();
+    }
+    f.command(PaintCommand::SetBrushSize { size: 8. });
+    f.gesture();
+    f.settle();
+    (f, target)
+}
+fn shared_dispatch_paint_counts(f: &Fixture, direct: bool) -> (usize, usize) {
+    if direct {
+        counts(f)
+    } else {
+        let pipeline = f
+            .app
+            .world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap();
+        (pipeline.undo_count(), pipeline.redo_count())
+    }
+}
+fn shared_dispatch_surface(f: &Fixture, direct: bool) -> Vec<u8> {
+    if direct { f.image() } else { f.source() }
+}
+fn shared_dispatch_public_start(f: &mut Fixture, direct: bool) {
+    if direct {
+        f.app
+            .world_mut()
+            .write_message(MeshPaintEvent::StrokeStart {
+                mesh_entity: f.a,
+                mesh_id: 12,
+                stroke_id: 920,
+                hit: painting::MeshHit {
+                    world_pos: Vec3::ZERO,
+                    face_id: 0,
+                    barycentric: Vec3::new(0.2, 0.3, 0.5),
+                    normal: Vec3::Z,
+                    tangent: Vec3::X,
+                    bitangent: Vec3::Y,
+                    uv: Some(Vec2::new(0.8, 0.7)),
+                },
+            });
+    } else {
+        f.app.world_mut().write_message(PaintEvent::StrokeStart {
+            plane_entity: f.canvas,
+            world_pos: Vec3::ZERO,
+            uv_pos: Vec2::new(0.8, 0.7),
+            stroke_id: 920,
+            space_id: 7,
+        });
+    }
+    f.app.update();
+}
+fn shared_dispatch_public_end(f: &mut Fixture, direct: bool) {
+    if direct {
+        f.app.world_mut().write_message(MeshPaintEvent::StrokeEnd);
+    } else {
+        f.app.world_mut().write_message(PaintEvent::StrokeEnd);
+    }
+}
+fn shared_dispatch_public_active(f: &Fixture, direct: bool) -> bool {
+    if direct {
+        f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .has_active_stroke()
+    } else {
+        f.app
+            .world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .is_stroking()
+    }
+}
+fn assert_shared_dispatch_programmatic_stroke(direct: bool) {
+    let (mut f, _) = shared_dispatch_paint_fixture(direct);
+    shared_dispatch_public_start(&mut f, direct);
+    let pending = shared_dispatch_surface(&f, direct);
+    assert!(shared_dispatch_public_active(&f, direct));
+    f.settle();
+    let w = f.window;
+    let mut events = sculpt_native_gesture(w);
+    events.extend([
+        key(w, KeyCode::Escape, true),
+        key(w, KeyCode::Escape, false),
+    ]);
+    f.batch(events);
+    f.settle();
+    assert!(
+        shared_dispatch_public_active(&f, direct),
+        "native input cannot finish or cancel a public stroke"
+    );
+    assert!(
+        shared_dispatch_surface(&f, direct) == pending,
+        "native input cannot dab into a public stroke"
+    );
+    assert_eq!(shared_dispatch_paint_counts(&f, direct), (1, 0));
+    shared_dispatch_public_end(&mut f, direct);
+    f.settle();
+    assert!(!shared_dispatch_public_active(&f, direct));
+    assert_eq!(shared_dispatch_paint_counts(&f, direct), (2, 0));
+}
+#[test]
+fn egui_shared_dispatch_canvas_preserves_programmatic_stroke() {
+    assert_shared_dispatch_programmatic_stroke(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_preserves_programmatic_stroke() {
+    assert_shared_dispatch_programmatic_stroke(true);
+}
+
+fn assert_shared_dispatch_public_commit_before_history(direct: bool) {
+    let (mut f, _) = shared_dispatch_paint_fixture(direct);
+    let accepted = shared_dispatch_surface(&f, direct);
+    shared_dispatch_public_start(&mut f, direct);
+    shared_dispatch_public_end(&mut f, direct);
+    let w = f.window;
+    f.batch(sculpt_chord(w, KeyCode::KeyZ, false));
+    f.settle();
+    assert_eq!(shared_dispatch_paint_counts(&f, direct), (1, 1));
+    assert!(shared_dispatch_surface(&f, direct) == accepted);
+}
+#[test]
+fn egui_shared_dispatch_canvas_settles_public_commit_before_history() {
+    assert_shared_dispatch_public_commit_before_history(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_settles_public_commit_before_history() {
+    assert_shared_dispatch_public_commit_before_history(true);
+}
+
+#[derive(Resource, Default)]
+struct SharedCanvasSamples(Vec<&'static str>);
+fn shared_canvas_samples(
+    mut reader: MessageReader<PaintEvent>,
+    mut samples: ResMut<SharedCanvasSamples>,
+) {
+    for event in reader.read() {
+        samples.0.push(match event {
+            PaintEvent::StrokeStart { .. } => "start",
+            PaintEvent::StrokeMove { .. } => "move",
+            PaintEvent::StrokeEnd => "end",
+            PaintEvent::StrokeCancel => "cancel",
+        });
+    }
+}
+#[test]
+fn egui_shared_dispatch_canvas_samples_held_frames_once() {
+    let (mut f, _) = shared_dispatch_paint_fixture(false);
+    f.app
+        .init_resource::<SharedCanvasSamples>()
+        .add_systems(Last, shared_canvas_samples);
+    let w = f.window;
+    f.batch(vec![movement(w, 550.), button(w, true), movement(w, 560.)]);
+    assert_eq!(
+        f.app.world().resource::<SharedCanvasSamples>().0,
+        ["start", "move"]
+    );
+    f.app.update();
+    assert_eq!(
+        f.app.world().resource::<SharedCanvasSamples>().0,
+        ["start", "move", "move"]
+    );
+    f.batch(vec![button(w, false)]);
+    assert_eq!(
+        f.app.world().resource::<SharedCanvasSamples>().0,
+        ["start", "move", "move", "end"]
+    );
+    assert_eq!(shared_dispatch_paint_counts(&f, false), (2, 0));
+}
+
+fn assert_shared_dispatch_focus_prefix(direct: bool) {
+    let (mut f, _) = shared_dispatch_paint_fixture(direct);
+    let accepted = shared_dispatch_surface(&f, direct);
+    let w = f.window;
+    let mut events = vec![
+        movement(w, 550.),
+        button(w, true),
+        movement(w, 600.),
+        button(w, false),
+    ];
+    events.extend(sculpt_chord(w, KeyCode::KeyZ, false));
+    events.push(WindowEvent::WindowFocused(bevy::window::WindowFocused {
+        window: w,
+        focused: false,
+    }));
+    f.batch(events);
+    f.settle();
+    assert_eq!(shared_dispatch_paint_counts(&f, direct), (1, 1));
+    assert!(shared_dispatch_surface(&f, direct) == accepted);
+}
+#[test]
+fn egui_shared_dispatch_canvas_keeps_admitted_prefix_before_focus_loss() {
+    assert_shared_dispatch_focus_prefix(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_keeps_admitted_prefix_before_focus_loss() {
+    assert_shared_dispatch_focus_prefix(true);
+}
+
+fn assert_shared_dispatch_unfocused(direct: bool) {
+    let (mut f, _) = shared_dispatch_paint_fixture(direct);
+    let accepted = shared_dispatch_surface(&f, direct);
+    f.app
+        .world_mut()
+        .get_mut::<Window>(f.window)
+        .unwrap()
+        .focused = false;
+    let w = f.window;
+    f.batch(sculpt_native_gesture(w));
+    f.settle();
+    assert_eq!(shared_dispatch_paint_counts(&f, direct), (1, 0));
+    assert!(shared_dispatch_surface(&f, direct) == accepted);
+}
+#[test]
+fn egui_shared_dispatch_canvas_refuses_unfocused_pointer_without_focus_event() {
+    assert_shared_dispatch_unfocused(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_refuses_unfocused_pointer_without_focus_event() {
+    assert_shared_dispatch_unfocused(true);
+}
+
+fn assert_shared_dispatch_stationary_cursor(direct: bool) {
+    let prepare = || {
+        let (mut f, _) = shared_dispatch_paint_fixture(direct);
+        let w = f.window;
+        f.batch(sculpt_chord(w, KeyCode::Tab, false));
+        assert!(f.app.world().resource::<SculptState>().active);
+        f.batch(vec![movement(w, 580.)]);
+        let mut events = sculpt_chord(w, KeyCode::Tab, false);
+        events.extend([
+            key(w, KeyCode::ShiftLeft, true),
+            key(w, KeyCode::Tab, true),
+            key(w, KeyCode::Tab, false),
+            key(w, KeyCode::ShiftLeft, false),
+        ]);
+        f.batch(events);
+        f.settle();
+        assert!(!f.app.world().resource::<SculptState>().active);
+        assert!(f.app.world().resource::<PaintMode>().active);
+        f
+    };
+    let mut stationary = prepare();
+    let w = stationary.window;
+    stationary.batch(vec![button(w, true), button(w, false)]);
+    stationary.settle();
+    let mut moved = prepare();
+    let w = moved.window;
+    moved.batch(vec![movement(w, 580.), button(w, true), button(w, false)]);
+    moved.settle();
+    assert!(
+        shared_dispatch_surface(&stationary, direct) == shared_dispatch_surface(&moved, direct),
+        "stationary press must retain the latest chronological origin"
+    );
+    assert_eq!(
+        shared_dispatch_paint_counts(&stationary, direct),
+        shared_dispatch_paint_counts(&moved, direct)
+    );
+}
+#[test]
+fn egui_shared_dispatch_canvas_stationary_press_after_mode_return_uses_latest_cursor() {
+    assert_shared_dispatch_stationary_cursor(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_stationary_press_after_mode_return_uses_latest_cursor() {
+    assert_shared_dispatch_stationary_cursor(true);
+}
+
+fn assert_shared_dispatch_mode_pointer_suffix(direct: bool, reject: bool) {
+    let (mut f, target) = shared_dispatch_paint_fixture(direct);
+    let w = f.window;
+    if reject {
+        f.app
+            .world_mut()
+            .get_mut::<Transform>(target)
+            .unwrap()
+            .scale = Vec3::ZERO;
+        f.app
+            .world_mut()
+            .get_mut::<GlobalTransform>(target)
+            .unwrap()
+            .clone_from(&GlobalTransform::from(Transform::from_scale(Vec3::ZERO)));
+    }
+    let accepted = shared_dispatch_surface(&f, direct);
+    let mut events = vec![movement(w, 550.), button(w, true), movement(w, 600.)];
+    events.extend(sculpt_chord(w, KeyCode::Tab, false));
+    events.extend([movement(w, 620.), button(w, false)]);
+    f.batch(events);
+    f.settle();
+    assert_eq!(f.app.world().resource::<SculptState>().active, !reject);
+    assert!(!shared_dispatch_public_active(&f, direct));
+    assert_eq!(
+        shared_dispatch_paint_counts(&f, direct),
+        if reject { (2, 0) } else { (1, 0) }
+    );
+    assert_eq!(
+        shared_dispatch_surface(&f, direct) == accepted,
+        !reject,
+        "accepted Enter cancels interrupted native paint; rejected Enter retains it"
+    );
+}
+#[test]
+fn egui_shared_dispatch_canvas_mode_transition_resolves_pointer_suffix() {
+    assert_shared_dispatch_mode_pointer_suffix(false, false);
+    assert_shared_dispatch_mode_pointer_suffix(false, true);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_mode_transition_resolves_pointer_suffix() {
+    assert_shared_dispatch_mode_pointer_suffix(true, false);
+    assert_shared_dispatch_mode_pointer_suffix(true, true);
+}
+
+#[test]
+fn egui_shared_dispatch_direct_uv_native_contact_preserves_pressure_and_cancellation() {
+    let alpha = |pressure| {
+        let (mut f, _) = shared_dispatch_paint_fixture(true);
+        let w = f.window;
+        f.batch(sculpt_chord(w, KeyCode::KeyZ, false));
+        f.settle();
+        pen_stroke(&mut f, 991, pressure);
+        assert_eq!(counts(&f), (1, 0));
+        f.image()
+            .chunks_exact(4)
+            .map(|pixel| u64::from(pixel[3]))
+            .sum::<u64>()
+    };
+    assert!(alpha(0.8) > alpha(0.2));
+    let (mut f, _) = shared_dispatch_paint_fixture(true);
+    let accepted = f.image();
+    let w = f.window;
+    let mut events = vec![
+        touch(w, 993, 550., TouchPhase::Started, 0.4),
+        touch(w, 993, 580., TouchPhase::Moved, 0.4),
+    ];
+    events.extend(sculpt_chord(w, KeyCode::Tab, false));
+    events.push(touch(w, 993, 600., TouchPhase::Ended, 0.4));
+    f.batch(events);
+    f.settle();
+    assert!(f.app.world().resource::<SculptState>().active);
+    assert!(!shared_dispatch_public_active(&f, true));
+    assert_eq!(counts(&f), (1, 0));
+    assert!(f.image() == accepted);
+}
+
+fn assert_shared_dispatch_public_mode_refusal(direct: bool) {
+    let (mut f, _) = shared_dispatch_paint_fixture(direct);
+    shared_dispatch_public_start(&mut f, direct);
+    let pending = shared_dispatch_surface(&f, direct);
+    let w = f.window;
+    let mut events = sculpt_chord(w, KeyCode::Tab, false);
+    events.extend([
+        movement(w, 560.),
+        button(w, true),
+        movement(w, 620.),
+        button(w, false),
+    ]);
+    f.batch(events);
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert!(shared_dispatch_public_active(&f, direct));
+    assert!(shared_dispatch_surface(&f, direct) == pending);
+    assert!(f.app.world().resource::<OutboundUiMessages>().messages.iter().any(|m| matches!(m, BevyToUi::Error { code, .. } if code == "native_mode_change_rejected")));
+    f.batch(vec![
+        key(w, KeyCode::ShiftLeft, true),
+        key(w, KeyCode::Tab, true),
+        key(w, KeyCode::Tab, false),
+        key(w, KeyCode::ShiftLeft, false),
+    ]);
+    assert!(f.app.world().resource::<PaintMode>().active);
+    assert!(shared_dispatch_public_active(&f, direct));
+    shared_dispatch_public_end(&mut f, direct);
+    f.batch(sculpt_chord(w, KeyCode::Tab, false));
+    assert!(
+        f.app.world().resource::<SculptState>().active,
+        "settled public commit allows retry"
+    );
+    assert!(!shared_dispatch_public_active(&f, direct));
+    assert_eq!(shared_dispatch_paint_counts(&f, direct), (2, 0));
+}
+#[test]
+fn egui_shared_dispatch_canvas_refuses_mode_change_during_public_stroke_then_retries() {
+    assert_shared_dispatch_public_mode_refusal(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_refuses_mode_change_during_public_stroke_then_retries() {
+    assert_shared_dispatch_public_mode_refusal(true);
+}
+fn assert_shared_dispatch_open(direct: bool) {
+    let (mut f, _) = shared_dispatch_paint_fixture(direct);
+    let w = f.window;
+    let path = f.path.join("paint-replacement.pentimento.json");
+    assert!(f.save(&path));
+    let saved_canvas = f.source();
+    let saved_uv = f.image();
+    let generation = project_generation(f.app.world());
+    let old_canvas = f.canvas;
+    let old_mesh = f.a;
+    f.app
+        .world_mut()
+        .resource_mut::<QueuedUi>()
+        .0
+        .push(UiToBevy::ProjectCommand(ProjectCommand::Open {
+            path: path.to_string_lossy().into_owned(),
+        }));
+    let mut events = vec![
+        movement(w, 550.),
+        button(w, true),
+        movement(w, 610.),
+        button(w, false),
+    ];
+    events.extend(sculpt_chord(w, KeyCode::KeyZ, false));
+    f.batch(events);
+    assert_ne!(project_generation(f.app.world()), generation);
+    assert!(f.app.world().get_entity(old_canvas).is_err());
+    assert!(f.app.world().get_entity(old_mesh).is_err());
+    assert!(
+        f.app
+            .world()
+            .resource::<PaintMode>()
+            .current_stroke
+            .is_none()
+    );
+    assert!(
+        f.app
+            .world()
+            .resource::<MeshPaintState>()
+            .current_stroke
+            .is_none()
+    );
+    assert!(
+        !f.app
+            .world()
+            .resource::<MeshPaintingResource>()
+            .has_active_stroke()
+    );
+    f.settle();
+    let mut planes = f.app.world_mut().query::<&CanvasPlane>();
+    let plane_ids = planes
+        .iter(f.app.world())
+        .map(|p| p.plane_id)
+        .collect::<Vec<_>>();
+    let painting = f.app.world().resource::<PaintingResource>();
+    for id in plane_ids {
+        let p = painting.get_pipeline(id).unwrap();
+        assert_eq!((p.undo_count(), p.redo_count()), (0, 0));
+        assert!(!p.is_stroking());
+        if id == 7 {
+            assert!(p.surface_as_bytes() == saved_canvas);
+        }
+    }
+    let mut meshes = f.app.world_mut().query::<(Entity, &PaintableMesh)>();
+    let restored = meshes
+        .iter(f.app.world())
+        .find(|(_, mesh)| mesh.mesh_id == 12)
+        .unwrap()
+        .0;
+    assert!(bound_image(f.app.world(), restored) == saved_uv);
+}
+#[test]
+fn egui_shared_dispatch_canvas_open_discards_old_input_and_history() {
+    assert_shared_dispatch_open(false);
+}
+#[test]
+fn egui_shared_dispatch_direct_uv_open_discards_old_input_and_history() {
+    assert_shared_dispatch_open(true);
+}
+
+#[test]
+fn egui_shared_dispatch_public_canvas_takeover_detaches_native_stroke() {
+    for reuse_id in [false, true] {
+        let (mut f, _) = shared_dispatch_paint_fixture(false);
+        let w = f.window;
+        f.batch(vec![movement(w, 550.), button(w, true), movement(w, 570.)]);
+        let native_id = f
+            .app
+            .world()
+            .resource::<PaintMode>()
+            .current_stroke
+            .as_ref()
+            .unwrap()
+            .stroke_id;
+        f.app.world_mut().write_message(PaintEvent::StrokeStart {
+            plane_entity: f.canvas,
+            world_pos: Vec3::ZERO,
+            uv_pos: Vec2::new(0.8, 0.7),
+            stroke_id: if reuse_id { native_id } else { 919 },
+            space_id: 7,
+        });
+        f.app.update();
+        let pending = f.source();
+        assert!(shared_dispatch_public_active(&f, false));
+        assert!(
+            f.app
+                .world()
+                .resource::<PaintMode>()
+                .current_stroke
+                .is_none(),
+            "public Start detaches stale native ownership even with reused ID"
+        );
+        f.batch(vec![
+            movement(w, 620.),
+            button(w, false),
+            key(w, KeyCode::Escape, true),
+            key(w, KeyCode::Escape, false),
+        ]);
+        assert!(shared_dispatch_public_active(&f, false));
+        assert!(f.source() == pending);
+        f.batch(sculpt_chord(w, KeyCode::Tab, false));
+        assert!(!f.app.world().resource::<SculptState>().active);
+        assert!(shared_dispatch_public_active(&f, false));
+        assert!(f.source() == pending);
+        shared_dispatch_public_end(&mut f, false);
+        f.settle();
+        assert_eq!(shared_dispatch_paint_counts(&f, false), (2, 0));
+    }
+}
+
+#[test]
+fn egui_shared_dispatch_public_direct_end_detaches_native_contact_for_next_contact() {
+    let (mut f, _) = shared_dispatch_paint_fixture(true);
+    let w = f.window;
+    f.batch(vec![
+        touch(w, 771, 550., TouchPhase::Started, 0.4),
+        touch(w, 771, 570., TouchPhase::Moved, 0.4),
+    ]);
+    shared_dispatch_public_end(&mut f, true);
+    shared_dispatch_public_start(&mut f, true);
+    f.batch(vec![touch(w, 771, 580., TouchPhase::Ended, 0.4)]);
+    assert!(shared_dispatch_public_active(&f, true));
+    shared_dispatch_public_end(&mut f, true);
+    f.app.update();
+    assert!(
+        f.app
+            .world()
+            .resource::<MeshPaintState>()
+            .current_stroke
+            .is_none()
+    );
+    assert!(!shared_dispatch_public_active(&f, true));
+    let committed = f.image();
+    f.batch(vec![
+        touch(w, 772, 610., TouchPhase::Started, 0.8),
+        touch(w, 772, 630., TouchPhase::Ended, 0.8),
+    ]);
+    f.settle();
+    assert_eq!(counts(&f), (4, 0));
+    assert!(f.image() != committed);
+}
+
+#[test]
+fn egui_shared_dispatch_native_canvas_does_not_exempt_other_public_canvas_from_mode_refusal() {
+    let (mut f, _) = shared_dispatch_paint_fixture(false);
+    let mesh = f.app.world().get::<Mesh3d>(f.canvas).unwrap().clone();
+    let material = f
+        .app
+        .world()
+        .get::<MeshMaterial3d<StandardMaterial>>(f.canvas)
+        .unwrap()
+        .clone();
+    let other = f
+        .app
+        .world_mut()
+        .spawn((
+            mesh,
+            material,
+            Transform::from_xyz(30., 0., 0.2),
+            CanvasPlane::new(88, 64, 64, 2., 2.),
+            Visibility::Visible,
+        ))
+        .id();
+    f.settle();
+    let w = f.window;
+    f.batch(vec![movement(w, 550.), button(w, true), movement(w, 570.)]);
+    let native_id = f
+        .app
+        .world()
+        .resource::<PaintMode>()
+        .current_stroke
+        .as_ref()
+        .unwrap()
+        .stroke_id;
+    f.app.world_mut().write_message(PaintEvent::StrokeStart {
+        plane_entity: other,
+        world_pos: Vec3::ZERO,
+        uv_pos: Vec2::new(0.8, 0.7),
+        stroke_id: 922,
+        space_id: 88,
+    });
+    f.batch(sculpt_chord(w, KeyCode::Tab, false));
+    assert!(!f.app.world().resource::<SculptState>().active);
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<PaintMode>()
+            .current_stroke
+            .as_ref()
+            .unwrap()
+            .stroke_id,
+        native_id
+    );
+    assert!(
+        f.app
+            .world()
+            .resource::<PaintingResource>()
+            .get_pipeline(88)
+            .unwrap()
+            .is_stroking()
+    );
+    f.app.world_mut().resource_mut::<ActiveCanvasPlane>().entity = Some(other);
+    shared_dispatch_public_end(&mut f, false);
+    f.app.update();
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<PaintMode>()
+            .current_stroke
+            .as_ref()
+            .unwrap()
+            .stroke_id,
+        native_id,
+        "public End on another active plane cannot detach this input token"
+    );
+    assert!(
+        !f.app
+            .world()
+            .resource::<PaintingResource>()
+            .get_pipeline(88)
+            .unwrap()
+            .is_stroking()
+    );
+}

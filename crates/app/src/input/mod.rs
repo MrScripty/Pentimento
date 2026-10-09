@@ -41,6 +41,7 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseState>()
             .init_resource::<pentimento_scene::FrontendScenePointerInput>()
+            .init_resource::<pentimento_scene::FrontendSceneKeyboardInput>()
             .init_resource::<hotkeys::EguiPaintHistory>()
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(

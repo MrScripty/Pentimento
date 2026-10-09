@@ -28,7 +28,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::OutboundUiMessages;
 use crate::camera::MainCamera;
 use crate::edit_mode::EditModeState;
-use crate::frontend_input::FrontendInputBlockState;
+use crate::frontend_input::{
+    FrontendInputBlockState, FrontendSceneKeyboardInput, FrontendScenePointerInput,
+};
 use crate::paint_mode::StrokeIdGenerator;
 use crate::pixel_coverage::{PixelCoverageState, estimate_pixel_coverage_cpu};
 use crate::render_camera::{ActiveRenderCamera, RenderCamera};
@@ -176,6 +178,68 @@ pub enum SculptEvent {
     StrokeCancel,
     Undo,
     Redo,
+    // Resolve native shortcuts against actual mode in the event consumer. An
+    // Enter can fail, so the keyboard producer must not speculate about mode.
+    NativeFrameBegin {
+        generation: u64,
+    },
+    NativePointerPress {
+        position: Option<Vec2>,
+        stroke_id: u64,
+    },
+    NativePointerMove {
+        position: Vec2,
+    },
+    NativePointerRelease,
+    NativeFrameEnd {
+        position: Option<Vec2>,
+        left_down: bool,
+    },
+    KeyboardCancel,
+    KeyboardUndo,
+    KeyboardRedo,
+    KeyboardAdjustStart {
+        strength: bool,
+        cursor: Option<Vec2>,
+    },
+    KeyboardAdjustConfirm,
+    KeyboardPaintToggle,
+    KeyboardToggle {
+        entity: Option<Entity>,
+    },
+}
+
+/// Internal frame buffer is separate from public SculptEvent messages. Idle
+/// hover/frame bookkeeping must not make document operations appear pending.
+#[derive(Resource, Default)]
+struct NativeSculptFrame {
+    generation: u64,
+    origin: (bool, bool, Option<Vec2>),
+    events: Vec<NativeSceneEvent>,
+}
+
+#[derive(Clone)]
+struct NativeSceneEvent {
+    raw: Option<WindowEvent>,
+    sculpt: Option<SculptEvent>,
+}
+
+#[derive(Default)]
+struct NativePaintOwnership {
+    generation: u64,
+    canvas: Option<(Entity, u64)>,
+    direct: Option<(Entity, u64)>,
+    sample: Option<Entity>,
+    canvas_sampled: bool,
+    reset_direct_contact: bool,
+}
+
+/// Observe public lifecycle provenance without consuming another owner's queue.
+#[derive(Default)]
+struct NativePaintPublicCursor {
+    canvas: bevy::ecs::message::MessageCursor<crate::PaintEvent>,
+    #[cfg(feature = "mesh_painting")]
+    direct: bevy::ecs::message::MessageCursor<crate::MeshPaintEvent>,
 }
 
 /// Plugin for sculpt mode functionality
@@ -183,7 +247,21 @@ pub struct SculptModePlugin;
 
 impl Plugin for SculptModePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SculptState>()
+        let dispatch = handle_sculpt_events
+            .after(crate::paint_mode::handle_paint_input)
+            .after(crate::painting_system::setup_canvas_textures)
+            .before(crate::painting_system::process_paint_events)
+            .before(crate::painting_system::extract_dirty_tiles);
+        #[cfg(feature = "mesh_painting")]
+        let dispatch = dispatch
+            .after(crate::mesh_paint_mode::handle_mesh_paint_input)
+            .after(crate::mesh_painting_system::setup_mesh_paint_textures)
+            .after(crate::mesh_painting_system::sync_mesh_paint_owners)
+            .before(crate::mesh_painting_system::process_mesh_paint_events)
+            .before(crate::mesh_painting_system::upload_mesh_dirty_tiles);
+        app.init_resource::<NativeSculptFrame>()
+            .init_resource::<crate::NativeSceneHistoryOwner>()
+            .init_resource::<SculptState>()
             .init_resource::<SculptingData>()
             .add_message::<SculptEvent>()
             .add_systems(
@@ -194,7 +272,7 @@ impl Plugin for SculptModePlugin {
                     handle_sculpt_mode_hotkey,
                     handle_brush_adjustment,
                     handle_sculpt_input,
-                    handle_sculpt_events,
+                    dispatch,
                     sync_sculpt_chunks_to_gpu,
                     render_sculpt_brush_gizmo,
                 )
@@ -351,7 +429,17 @@ fn handle_sculpt_mode_hotkey(
     selected_meshes: Query<Entity, (With<Selected>, With<Mesh3d>)>,
     input_blocks: Res<FrontendInputBlockState>,
     mut events: MessageWriter<SculptEvent>,
+    native_keys: Option<Res<FrontendSceneKeyboardInput>>,
+    project: Option<Res<crate::project::ProjectState>>,
 ) {
+    let generation = project.as_ref().map_or(0, |p| p.generation());
+    if native_keys
+        .as_ref()
+        .and_then(|native| native.events(generation))
+        .is_some()
+    {
+        return;
+    }
     if input_blocks.blocks_keyboard() {
         return;
     }
@@ -412,8 +500,18 @@ fn handle_brush_adjustment(
     mut sculpt_state: ResMut<SculptState>,
     mut sculpting_data: ResMut<SculptingData>,
     input_blocks: Res<FrontendInputBlockState>,
+    native_keys: Option<Res<FrontendSceneKeyboardInput>>,
+    project: Option<Res<crate::project::ProjectState>>,
 ) {
-    if input_blocks.blocks_keyboard() || input_blocks.blocks_pointer() {
+    let generation = project.as_ref().map_or(0, |p| p.generation());
+    let native = native_keys
+        .as_ref()
+        .and_then(|input| input.events(generation))
+        .is_some();
+    if native {
+        return;
+    }
+    if (!native && input_blocks.blocks_keyboard()) || input_blocks.blocks_pointer() {
         return;
     }
 
@@ -430,7 +528,10 @@ fn handle_brush_adjustment(
     let shift = key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
 
     // Check for starting adjustment mode
-    if key_input.just_pressed(KeyCode::KeyF) && sculpt_state.adjust_mode == BrushAdjustMode::None {
+    if !native
+        && key_input.just_pressed(KeyCode::KeyF)
+        && sculpt_state.adjust_mode == BrushAdjustMode::None
+    {
         if shift {
             // Shift+F: Strength adjustment
             sculpt_state.adjust_mode = BrushAdjustMode::Strength;
@@ -456,7 +557,7 @@ fn handle_brush_adjustment(
     // Handle active adjustment
     if sculpt_state.adjust_mode != BrushAdjustMode::None {
         // Cancel with Escape
-        if key_input.just_pressed(KeyCode::Escape) {
+        if !native && key_input.just_pressed(KeyCode::Escape) {
             match sculpt_state.adjust_mode {
                 BrushAdjustMode::Radius => {
                     sculpt_state.brush_radius = sculpt_state.adjust_start_value;
@@ -492,7 +593,9 @@ fn handle_brush_adjustment(
         }
 
         // Confirm with Enter or Left Click
-        if key_input.just_pressed(KeyCode::Enter) || mouse_button.just_pressed(MouseButton::Left) {
+        if (!native && key_input.just_pressed(KeyCode::Enter))
+            || mouse_button.just_pressed(MouseButton::Left)
+        {
             // The next chained system sees this same ButtonInput. Keep the
             // confirmation press consumed until release, even after this mode ends.
             sculpt_state.suppress_left_until_release = mouse_button.just_pressed(MouseButton::Left);
@@ -552,6 +655,34 @@ fn handle_brush_adjustment(
     }
 }
 
+fn native_sculpt_shortcut(
+    key: &pentimento_ipc::KeyboardEvent,
+    cursor: Option<Vec2>,
+    selected: Option<Entity>,
+) -> Option<SculptEvent> {
+    if !key.pressed {
+        return None;
+    }
+    match key.code.as_str() {
+        "Escape" => Some(SculptEvent::KeyboardCancel),
+        "Enter" => Some(SculptEvent::KeyboardAdjustConfirm),
+        _ if key.modifiers.alt_graph => None,
+        "KeyF" => Some(SculptEvent::KeyboardAdjustStart {
+            strength: key.modifiers.shift,
+            cursor,
+        }),
+        "KeyZ" if key.modifiers.ctrl => Some(if key.modifiers.shift {
+            SculptEvent::KeyboardRedo
+        } else {
+            SculptEvent::KeyboardUndo
+        }),
+        "KeyY" if key.modifiers.ctrl => Some(SculptEvent::KeyboardRedo),
+        "Tab" if key.modifiers.ctrl => Some(SculptEvent::KeyboardToggle { entity: selected }),
+        "Tab" if key.modifiers.shift => Some(SculptEvent::KeyboardPaintToggle),
+        _ => None,
+    }
+}
+
 /// Handle ordered pointer samples without dropping press/release-frame motion.
 fn handle_sculpt_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
@@ -566,8 +697,16 @@ fn handle_sculpt_input(
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut sculpt_events: MessageWriter<SculptEvent>,
     input_blocks: Res<FrontendInputBlockState>,
+    native_keys: Option<Res<FrontendSceneKeyboardInput>>,
+    admitted_pointer: Option<Res<FrontendScenePointerInput>>,
+    selected_meshes: Query<Entity, (With<Selected>, With<Mesh3d>)>,
+    mut native_frame: Option<ResMut<NativeSculptFrame>>,
 ) {
     let generation = project.as_ref().map_or(0, |p| p.generation);
+    if let Some(frame) = native_frame.as_mut() {
+        frame.events.clear();
+        frame.generation = generation;
+    }
     if last_cursor.1 != generation {
         *last_cursor = (None, generation);
     }
@@ -578,6 +717,66 @@ fn handle_sculpt_input(
     // Read our own ordered stream. Other frontend/scene readers retain theirs.
     // Track hover even during blocked or inactive frames, but never replay it.
     let batch: Vec<_> = window_events.read().cloned().collect();
+    if let Some(keys) = native_keys
+        .as_ref()
+        .and_then(|input| input.events(generation))
+    {
+        let Some(mut frame) = native_frame else {
+            return;
+        };
+        frame.origin = native_keys.as_ref().unwrap().pointer_origin();
+        frame.events.push(NativeSceneEvent {
+            raw: None,
+            sculpt: Some(SculptEvent::NativeFrameBegin { generation }),
+        });
+        let mut keys = keys.iter();
+        let admitted = admitted_pointer
+            .as_ref()
+            .and_then(|input| input.events(window_entity))
+            .unwrap_or(&[]);
+        for event in admitted {
+            let sculpt = match event {
+                WindowEvent::KeyboardInput(event) if !event.repeat => {
+                    keys.next().and_then(|(key, cursor)| {
+                        native_sculpt_shortcut(key, *cursor, selected_meshes.single().ok())
+                    })
+                }
+                WindowEvent::CursorMoved(event) => {
+                    last_cursor.0 = Some(event.position);
+                    Some(SculptEvent::NativePointerMove {
+                        position: event.position,
+                    })
+                }
+                WindowEvent::MouseButtonInput(event) if event.button == MouseButton::Left => {
+                    Some(if event.state.is_pressed() {
+                        SculptEvent::NativePointerPress {
+                            position: last_cursor.0.or(frame.origin.2),
+                            stroke_id: stroke_id_gen.next(),
+                        }
+                    } else {
+                        SculptEvent::NativePointerRelease
+                    })
+                }
+                WindowEvent::WindowFocused(event) if !event.focused => {
+                    last_cursor.0 = None;
+                    Some(SculptEvent::NativePointerRelease)
+                }
+                _ => None,
+            };
+            frame.events.push(NativeSceneEvent {
+                raw: Some(event.clone()),
+                sculpt,
+            });
+        }
+        frame.events.push(NativeSceneEvent {
+            raw: None,
+            sculpt: Some(SculptEvent::NativeFrameEnd {
+                position: last_cursor.0,
+                left_down: mouse_button.pressed(MouseButton::Left),
+            }),
+        });
+        return;
+    }
     let prior_cursor = last_cursor.0;
     let mut cursor = prior_cursor;
     let mut has_cursor_event = false;
@@ -844,9 +1043,457 @@ fn ray_triangle_intersection(
     if t > EPSILON { Some((t, u, v)) } else { None }
 }
 
+fn native_sculpt_hit(
+    position: Vec2,
+    target: Option<Entity>,
+    cameras: &Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    mesh_query: &Query<(
+        &Mesh3d,
+        &GlobalTransform,
+        Option<&crate::project::ProjectSculptGeometry>,
+    )>,
+    meshes: &Assets<Mesh>,
+) -> Option<(Vec3, Vec3)> {
+    let (camera, transform) = cameras.single().ok()?;
+    let (handle, mesh_transform, _) = mesh_query.get(target?).ok()?;
+    let ray = camera.viewport_to_world(transform, position).ok()?;
+    ray_mesh_intersection_simple(&ray, meshes.get(&handle.0)?, mesh_transform)
+}
+
 /// Handle sculpt mode events
+fn flush_native_paint(world: &mut World) {
+    if world.contains_resource::<crate::PaintingResource>()
+        && world.contains_resource::<Messages<crate::PaintEvent>>()
+    {
+        crate::painting_system::process_paint_events(world);
+    }
+    #[cfg(feature = "mesh_painting")]
+    if world.contains_resource::<crate::MeshPaintingResource>()
+        && world.contains_resource::<Messages<crate::MeshPaintEvent>>()
+    {
+        crate::mesh_painting_system::process_mesh_paint_events(world);
+    }
+}
+
+fn dispatch_native_paint(
+    world: &mut World,
+    ownership: &mut NativePaintOwnership,
+    events: Vec<WindowEvent>,
+    focused: bool,
+    left_down: bool,
+    cursor: Option<Vec2>,
+    finish: bool,
+) {
+    use pentimento_ipc::PaintTarget;
+    let paint = world.resource::<crate::PaintMode>();
+    let canvas = world.resource::<crate::ActiveCanvasPlane>().entity;
+    let owns_canvas = ownership.canvas.is_some_and(|(entity, id)| {
+        canvas == Some(entity)
+            && paint
+                .current_stroke
+                .as_ref()
+                .is_some_and(|stroke| stroke.stroke_id == id)
+    });
+    let owns_sample =
+        ownership.sample.is_some() && ownership.sample == canvas && paint.sample_press_owned;
+    #[cfg(feature = "mesh_painting")]
+    let owns_direct = ownership.direct.is_some_and(|(entity, id)| {
+        world.resource::<crate::MeshPaintState>().active_mesh == Some(entity)
+            && world
+                .resource::<crate::MeshPaintState>()
+                .current_stroke
+                .as_ref()
+                .is_some_and(|stroke| stroke.stroke_id == id)
+    });
+    if !owns_canvas {
+        ownership.canvas = None;
+    }
+    if !owns_sample {
+        ownership.sample = None;
+    }
+    #[cfg(feature = "mesh_painting")]
+    if !owns_direct {
+        ownership.direct = None;
+    }
+    let canvas_admitted = owns_canvas
+        || owns_sample
+        || (!finish
+            && paint.active
+            && paint.target == PaintTarget::Canvas
+            && paint.current_stroke.is_none()
+            && world
+                .get_resource::<crate::PaintingResource>()
+                .is_some_and(|paint| !paint.has_active_stroke()));
+    #[cfg(feature = "mesh_painting")]
+    let direct_admitted = owns_direct
+        || (!finish
+            && paint.active
+            && paint.target == PaintTarget::DirectUv
+            && world
+                .resource::<crate::MeshPaintState>()
+                .current_stroke
+                .is_none()
+            && !world
+                .resource::<crate::MeshPaintingResource>()
+                .has_active_stroke());
+    world.insert_resource(crate::frontend_input::NativePointerSegment {
+        events,
+        focused,
+        left_down,
+        cursor,
+        finish,
+        sampled: ownership.canvas_sampled,
+        reset_direct_contact: ownership.reset_direct_contact,
+    });
+    if canvas_admitted {
+        crate::paint_mode::handle_paint_input(world);
+        ownership.canvas_sampled = world
+            .resource::<crate::frontend_input::NativePointerSegment>()
+            .sampled;
+        let paint = world.resource::<crate::PaintMode>();
+        ownership.canvas = canvas.and_then(|entity| {
+            paint
+                .current_stroke
+                .as_ref()
+                .map(|stroke| (entity, stroke.stroke_id))
+        });
+        ownership.sample = paint.sample_press_owned.then_some(canvas).flatten();
+    }
+    #[cfg(feature = "mesh_painting")]
+    if direct_admitted {
+        crate::mesh_paint_mode::handle_mesh_paint_input(world);
+        ownership.reset_direct_contact = false;
+        let paint = world.resource::<crate::MeshPaintState>();
+        ownership.direct = paint.active_mesh.and_then(|entity| {
+            paint
+                .current_stroke
+                .as_ref()
+                .map(|stroke| (entity, stroke.stroke_id))
+        });
+    }
+    world.remove_resource::<crate::frontend_input::NativePointerSegment>();
+    // One cached reader per public queue is shared with its scheduled wrapper.
+    // Earlier native strokes must commit before any following history/mode intent.
+    flush_native_paint(world);
+}
+
+fn native_has_public_paint_stroke(world: &World, ownership: &NativePaintOwnership) -> bool {
+    let native_canvas = ownership
+        .canvas
+        .filter(|(entity, id)| {
+            world.resource::<crate::ActiveCanvasPlane>().entity == Some(*entity)
+                && world
+                    .resource::<crate::PaintMode>()
+                    .current_stroke
+                    .as_ref()
+                    .is_some_and(|stroke| stroke.stroke_id == *id)
+        })
+        .and_then(|(entity, _)| {
+            world
+                .get::<crate::CanvasPlane>(entity)
+                .map(|plane| plane.plane_id)
+        });
+    if world
+        .get_resource::<crate::PaintingResource>()
+        .is_some_and(|paint| paint.has_unowned_active_stroke(native_canvas))
+    {
+        return true;
+    }
+    #[cfg(feature = "mesh_painting")]
+    if world
+        .get_resource::<crate::MeshPaintingResource>()
+        .is_some_and(|paint| paint.has_active_stroke())
+    {
+        return !ownership.direct.is_some_and(|(entity, id)| {
+            world.resource::<crate::MeshPaintState>().active_mesh == Some(entity)
+                && world
+                    .resource::<crate::MeshPaintState>()
+                    .current_stroke
+                    .as_ref()
+                    .is_some_and(|stroke| stroke.stroke_id == id)
+        });
+    }
+    false
+}
+
+fn detach_public_paint_ownership(
+    world: &mut World,
+    ownership: &mut NativePaintOwnership,
+    cursor: &mut NativePaintPublicCursor,
+) {
+    if let Some(messages) = world.get_resource::<Messages<crate::PaintEvent>>() {
+        let detached = cursor.canvas.read(messages).any(|event| match event {
+            crate::PaintEvent::StrokeStart { plane_entity, .. } => ownership
+                .canvas
+                .is_some_and(|(entity, _)| entity == *plane_entity),
+            crate::PaintEvent::StrokeEnd | crate::PaintEvent::StrokeCancel => {
+                ownership.canvas.is_some_and(|(entity, _)| {
+                    world.resource::<crate::ActiveCanvasPlane>().entity == Some(entity)
+                })
+            }
+            _ => false,
+        });
+        // Finish reading even after any() finds a takeover, preserving provenance.
+        cursor.canvas.read(messages).for_each(drop);
+        if detached {
+            if let Some((_, id)) = ownership.canvas.take() {
+                let mut paint = world.resource_mut::<crate::PaintMode>();
+                if paint
+                    .current_stroke
+                    .as_ref()
+                    .is_some_and(|stroke| stroke.stroke_id == id)
+                {
+                    paint.current_stroke = None;
+                }
+            }
+        }
+    }
+    #[cfg(feature = "mesh_painting")]
+    if let Some(messages) = world.get_resource::<Messages<crate::MeshPaintEvent>>() {
+        let detached = cursor.direct.read(messages).any(|event| {
+            matches!(
+                event,
+                crate::MeshPaintEvent::StrokeEnd | crate::MeshPaintEvent::StrokeCancel
+            )
+        });
+        cursor.direct.read(messages).for_each(drop);
+        if detached {
+            if let Some((entity, id)) = ownership.direct.take() {
+                ownership.reset_direct_contact = true;
+                let mut paint = world.resource_mut::<crate::MeshPaintState>();
+                if paint.active_mesh == Some(entity)
+                    && paint
+                        .current_stroke
+                        .as_ref()
+                        .is_some_and(|stroke| stroke.stroke_id == id)
+                {
+                    paint.current_stroke = None;
+                    paint.active_mesh = None;
+                }
+            }
+        }
+    }
+}
+
 fn handle_sculpt_events(
-    mut events: MessageReader<SculptEvent>,
+    world: &mut World,
+    mut reader: Local<bevy::ecs::message::MessageCursor<SculptEvent>>,
+    mut ownership: Local<NativePaintOwnership>,
+    mut paint_cursor: Local<NativePaintPublicCursor>,
+) {
+    let public = reader
+        .read(world.resource::<Messages<SculptEvent>>())
+        .cloned()
+        .collect::<Vec<_>>();
+    let generation = crate::project_generation(world);
+    let (origin, mut native) = world.get_resource_mut::<NativeSculptFrame>().map_or_else(
+        || ((false, false, None), Vec::new()),
+        |mut frame| {
+            if frame.generation == generation {
+                (frame.origin, std::mem::take(&mut frame.events))
+            } else {
+                frame.events.clear();
+                ((false, false, None), Vec::new())
+            }
+        },
+    );
+    detach_public_paint_ownership(world, &mut ownership, &mut paint_cursor);
+    // Public paint/sculpt commands remain owned by their original processors.
+    // Settle them before admitting a native press; never steal a public stroke.
+    flush_native_paint(world);
+    for event in public {
+        world
+            .run_system_cached_with(apply_sculpt_event, event)
+            .expect("Sculpt event owner resources available");
+        flush_native_paint(world);
+    }
+    if ownership.generation != generation {
+        *ownership = NativePaintOwnership {
+            generation,
+            ..default()
+        };
+    }
+    let (mut focused, mut left_down, mut cursor) = origin;
+    for item in &native {
+        if let Some(raw) = &item.raw {
+            match raw {
+                WindowEvent::CursorMoved(event) => cursor = Some(event.position),
+                WindowEvent::MouseButtonInput(event) if event.button == MouseButton::Left => {
+                    left_down = event.state.is_pressed()
+                }
+                WindowEvent::WindowFocused(event) => {
+                    focused = event.focused;
+                    if !focused {
+                        cursor = None;
+                        left_down = false;
+                    }
+                }
+                _ => {}
+            }
+            if world.resource::<EditModeState>().mode != EditMode::Sculpt {
+                dispatch_native_paint(
+                    world,
+                    &mut ownership,
+                    vec![raw.clone()],
+                    focused,
+                    left_down,
+                    cursor,
+                    false,
+                );
+            }
+        }
+        let Some(event) = item.sculpt.as_ref() else {
+            continue;
+        };
+        if matches!(event, SculptEvent::NativeFrameBegin { .. }) {
+            ownership.canvas_sampled = false;
+        }
+        if let SculptEvent::NativeFrameEnd {
+            left_down: final_down,
+            ..
+        } = event
+        {
+            left_down &= final_down;
+            // This reconciliation only touches strokes claimed by native admission.
+            dispatch_native_paint(
+                world,
+                &mut ownership,
+                Vec::new(),
+                focused,
+                left_down,
+                cursor,
+                true,
+            );
+        }
+        if matches!(
+            event,
+            SculptEvent::KeyboardPaintToggle | SculptEvent::KeyboardToggle { .. }
+        ) && world.resource::<EditModeState>().mode != EditMode::Sculpt
+            && native_has_public_paint_stroke(world, &ownership)
+        {
+            world
+                .resource_mut::<crate::OutboundUiMessages>()
+                .send(BevyToUi::Error {
+                    code: "native_mode_change_rejected".into(),
+                    message:
+                        "Finish or cancel the programmatic paint stroke before changing modes."
+                            .into(),
+                });
+            continue;
+        }
+        if matches!(event, SculptEvent::KeyboardPaintToggle) {
+            if !matches!(
+                world.resource::<EditModeState>().mode,
+                EditMode::Sculpt | EditMode::MeshEdit
+            ) {
+                let active = !world.resource::<crate::PaintMode>().active;
+                world.resource_mut::<crate::PaintMode>().active = active;
+                world
+                    .resource_mut::<crate::OutboundUiMessages>()
+                    .send(BevyToUi::EditModeChanged {
+                        mode: if active {
+                            EditMode::Paint
+                        } else {
+                            EditMode::None
+                        },
+                    });
+                if !active {
+                    if ownership.canvas.is_some() {
+                        world.resource_mut::<crate::PaintMode>().current_stroke = None;
+                        world.write_message(crate::PaintEvent::StrokeCancel);
+                    }
+                    world.resource_mut::<crate::PaintMode>().sample_color = false;
+                    dispatch_native_paint(
+                        world,
+                        &mut ownership,
+                        Vec::new(),
+                        focused,
+                        left_down,
+                        cursor,
+                        false,
+                    );
+                }
+            }
+            continue;
+        }
+        if matches!(event, SculptEvent::KeyboardUndo | SculptEvent::KeyboardRedo)
+            && world.resource::<EditModeState>().mode != EditMode::Sculpt
+        {
+            if world.resource::<crate::PaintMode>().active {
+                let redo = matches!(event, SculptEvent::KeyboardRedo);
+                match world.resource::<crate::PaintMode>().target {
+                    pentimento_ipc::PaintTarget::Canvas => {
+                        if let Some(id) = world
+                            .resource::<crate::ActiveCanvasPlane>()
+                            .entity
+                            .and_then(|entity| world.get::<crate::CanvasPlane>(entity))
+                            .map(|canvas| canvas.plane_id)
+                        {
+                            if let Some(mut paint) =
+                                world.get_resource_mut::<crate::PaintingResource>()
+                            {
+                                if redo {
+                                    paint.redo(id);
+                                } else {
+                                    paint.undo(id);
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(feature = "mesh_painting")]
+                    pentimento_ipc::PaintTarget::DirectUv => {
+                        if let Some(entity) = world.resource::<crate::PaintMode>().direct_target {
+                            if redo {
+                                crate::redo_mesh_paint(world, entity);
+                            } else {
+                                crate::undo_mesh_paint(world, entity);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        let was_sculpt = world.resource::<EditModeState>().mode == EditMode::Sculpt;
+        world
+            .run_system_cached_with(apply_sculpt_event, event.clone())
+            .expect("Sculpt event owner resources available");
+        if !was_sculpt && world.resource::<EditModeState>().mode == EditMode::Sculpt {
+            // A successful Enter closes an interrupted native paint gesture through
+            // its existing cancellation route. Rejected Enter preserves that owner.
+            dispatch_native_paint(
+                world,
+                &mut ownership,
+                Vec::new(),
+                focused,
+                left_down,
+                cursor,
+                false,
+            );
+            world
+                .resource_mut::<crate::ActiveCanvasPlane>()
+                .camera_locked = false;
+        }
+        flush_native_paint(world);
+    }
+    // Everything appended during this exclusive dispatcher is its own output.
+    // Advance the observer so native Starts cannot masquerade as public next frame.
+    if let Some(messages) = world.get_resource::<Messages<crate::PaintEvent>>() {
+        paint_cursor.canvas.read(messages).for_each(drop);
+    }
+    #[cfg(feature = "mesh_painting")]
+    if let Some(messages) = world.get_resource::<Messages<crate::MeshPaintEvent>>() {
+        paint_cursor.direct.read(messages).for_each(drop);
+    }
+    native.clear();
+    if let Some(mut frame) = world.get_resource_mut::<NativeSculptFrame>() {
+        frame.events = native;
+    }
+}
+
+fn apply_sculpt_event(
+    In(event): In<SculptEvent>,
     mut edit_mode: ResMut<EditModeState>,
     mut sculpt_state: ResMut<SculptState>,
     mut sculpting_data: ResMut<SculptingData>,
@@ -864,8 +1511,242 @@ fn handle_sculpt_events(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
     time: Res<Time>,
+    native_params: (
+        Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+        Local<(u64, Option<u64>)>,
+        Local<bool>,
+    ),
 ) {
-    for event in events.read() {
+    let (native_camera, mut native_stroke, mut native_sampled) = native_params;
+    for event in std::iter::once(&event) {
+        let resolved;
+        let event = match event {
+            SculptEvent::NativeFrameBegin { generation } => {
+                *native_sampled = false;
+                if native_stroke.0 != *generation {
+                    *native_stroke = (*generation, None);
+                }
+                continue;
+            }
+            SculptEvent::NativePointerPress {
+                position,
+                stroke_id,
+            } => {
+                if !sculpt_state.active {
+                    continue;
+                }
+                if sculpt_state.adjust_mode != BrushAdjustMode::None {
+                    sculpt_state.adjust_mode = BrushAdjustMode::None;
+                    sculpt_state.adjust_start_cursor = None;
+                    sculpt_state.suppress_left_until_release = true;
+                    continue;
+                }
+                if sculpt_state.suppress_left_until_release
+                    || sculpt_state.current_stroke_id.is_some()
+                {
+                    continue;
+                }
+                let Some((world_pos, normal)) = position.and_then(|position| {
+                    native_sculpt_hit(
+                        position,
+                        sculpt_state.target_entity,
+                        &native_camera,
+                        &mesh_query,
+                        &meshes,
+                    )
+                }) else {
+                    continue;
+                };
+                native_stroke.1 = Some(*stroke_id);
+                resolved = SculptEvent::StrokeStart {
+                    world_pos,
+                    normal,
+                    stroke_id: *stroke_id,
+                };
+                *native_sampled = true;
+                &resolved
+            }
+            SculptEvent::NativePointerMove { position } => {
+                if !sculpt_state.active || sculpt_state.suppress_left_until_release {
+                    continue;
+                }
+                if sculpt_state.adjust_mode != BrushAdjustMode::None {
+                    if let Some(start) = sculpt_state.adjust_start_cursor {
+                        let delta_x = position.x - start.x;
+                        if sculpt_state.adjust_mode == BrushAdjustMode::Radius {
+                            sculpt_state.brush_radius = (sculpt_state.adjust_start_value
+                                * (delta_x / 200.).exp2())
+                            .max(0.01)
+                            .min(10.);
+                            if let Some(pipeline) = &mut sculpting_data.pipeline {
+                                let mut preset = pipeline.brush_preset().clone();
+                                preset.radius = sculpt_state.brush_radius;
+                                pipeline.set_brush_preset(preset);
+                            }
+                        } else {
+                            sculpt_state.brush_strength =
+                                (sculpt_state.adjust_start_value + delta_x / 200.).clamp(0., 1.);
+                            if let Some(pipeline) = &mut sculpting_data.pipeline {
+                                let mut preset = pipeline.brush_preset().clone();
+                                preset.strength = sculpt_state.brush_strength;
+                                pipeline.set_brush_preset(preset);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if sculpt_state.current_stroke_id.is_none()
+                    || native_stroke.1 != sculpt_state.current_stroke_id
+                {
+                    continue;
+                }
+                let Some((world_pos, normal)) = native_sculpt_hit(
+                    *position,
+                    sculpt_state.target_entity,
+                    &native_camera,
+                    &mesh_query,
+                    &meshes,
+                ) else {
+                    continue;
+                };
+                resolved = SculptEvent::StrokeMove {
+                    world_pos,
+                    normal,
+                    pressure: 1.,
+                };
+                *native_sampled = true;
+                &resolved
+            }
+            SculptEvent::NativePointerRelease => {
+                sculpt_state.suppress_left_until_release = false;
+                let owned = native_stroke.1.take();
+                if owned.is_none() || owned != sculpt_state.current_stroke_id {
+                    continue;
+                }
+                resolved = SculptEvent::StrokeEnd;
+                &resolved
+            }
+            SculptEvent::NativeFrameEnd {
+                position,
+                left_down,
+            } => {
+                let sampled = *native_sampled;
+                *native_sampled = false;
+                if !left_down {
+                    sculpt_state.suppress_left_until_release = false;
+                }
+                if native_stroke.1 != sculpt_state.current_stroke_id {
+                    native_stroke.1 = None;
+                }
+                if native_stroke.1.is_none()
+                    || !sculpt_state.active
+                    || sculpt_state.suppress_left_until_release
+                    || sculpt_state.adjust_mode != BrushAdjustMode::None
+                    || sculpt_state.current_stroke_id.is_none()
+                {
+                    continue;
+                }
+                if !left_down {
+                    resolved = SculptEvent::StrokeEnd;
+                } else if !sampled {
+                    let Some((world_pos, normal)) = position.and_then(|position| {
+                        native_sculpt_hit(
+                            position,
+                            sculpt_state.target_entity,
+                            &native_camera,
+                            &mesh_query,
+                            &meshes,
+                        )
+                    }) else {
+                        continue;
+                    };
+                    resolved = SculptEvent::StrokeMove {
+                        world_pos,
+                        normal,
+                        pressure: 1.,
+                    };
+                } else {
+                    continue;
+                }
+                &resolved
+            }
+
+            SculptEvent::KeyboardAdjustStart { strength, cursor } => {
+                if sculpt_state.active && sculpt_state.adjust_mode == BrushAdjustMode::None {
+                    sculpt_state.adjust_mode = if *strength {
+                        BrushAdjustMode::Strength
+                    } else {
+                        BrushAdjustMode::Radius
+                    };
+                    sculpt_state.adjust_start_cursor = *cursor;
+                    sculpt_state.adjust_start_value = if *strength {
+                        sculpt_state.brush_strength
+                    } else {
+                        sculpt_state.brush_radius
+                    };
+                    if sculpt_state.current_stroke_id.is_some() {
+                        resolved = SculptEvent::StrokeEnd;
+                        &resolved
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+            SculptEvent::KeyboardAdjustConfirm => {
+                if sculpt_state.active && sculpt_state.adjust_mode != BrushAdjustMode::None {
+                    sculpt_state.adjust_mode = BrushAdjustMode::None;
+                    sculpt_state.adjust_start_cursor = None;
+                }
+                continue;
+            }
+            SculptEvent::KeyboardToggle { entity } => {
+                resolved = if edit_mode.mode == EditMode::Sculpt {
+                    SculptEvent::Exit
+                } else if let Some(entity) = entity {
+                    SculptEvent::Enter { entity: *entity }
+                } else {
+                    continue;
+                };
+                &resolved
+            }
+            SculptEvent::KeyboardCancel | SculptEvent::KeyboardUndo | SculptEvent::KeyboardRedo => {
+                if edit_mode.mode != EditMode::Sculpt {
+                    continue;
+                }
+                resolved = match event {
+                    SculptEvent::KeyboardCancel => {
+                        match sculpt_state.adjust_mode {
+                            BrushAdjustMode::Radius => {
+                                sculpt_state.brush_radius = sculpt_state.adjust_start_value;
+                                if let Some(pipeline) = &mut sculpting_data.pipeline {
+                                    let mut preset = pipeline.brush_preset().clone();
+                                    preset.radius = sculpt_state.brush_radius;
+                                    pipeline.set_brush_preset(preset);
+                                }
+                            }
+                            BrushAdjustMode::Strength => {
+                                sculpt_state.brush_strength = sculpt_state.adjust_start_value;
+                                if let Some(pipeline) = &mut sculpting_data.pipeline {
+                                    let mut preset = pipeline.brush_preset().clone();
+                                    preset.strength = sculpt_state.brush_strength;
+                                    pipeline.set_brush_preset(preset);
+                                }
+                            }
+                            BrushAdjustMode::None => {}
+                        }
+                        sculpt_state.adjust_mode = BrushAdjustMode::None;
+                        sculpt_state.adjust_start_cursor = None;
+                        SculptEvent::StrokeCancel
+                    }
+                    SculptEvent::KeyboardUndo => SculptEvent::Undo,
+                    _ => SculptEvent::Redo,
+                };
+                &resolved
+            }
+            _ => event,
+        };
         match event {
             SculptEvent::Enter { entity } => {
                 // Validate and prepare the entire target before changing either
@@ -1298,6 +2179,20 @@ fn handle_sculpt_events(
 
                 sculpt_state.last_world_pos = None;
                 sculpt_state.suppress_left_until_release = true;
+            }
+            SculptEvent::NativeFrameBegin { .. }
+            | SculptEvent::NativePointerPress { .. }
+            | SculptEvent::NativePointerMove { .. }
+            | SculptEvent::NativePointerRelease
+            | SculptEvent::NativeFrameEnd { .. }
+            | SculptEvent::KeyboardCancel
+            | SculptEvent::KeyboardUndo
+            | SculptEvent::KeyboardRedo
+            | SculptEvent::KeyboardToggle { .. }
+            | SculptEvent::KeyboardAdjustStart { .. }
+            | SculptEvent::KeyboardAdjustConfirm
+            | SculptEvent::KeyboardPaintToggle => {
+                unreachable!("keyboard intents are resolved before dispatch")
             }
             SculptEvent::Undo | SculptEvent::Redo => {
                 if !sculpt_state.active {

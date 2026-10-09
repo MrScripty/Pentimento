@@ -64,6 +64,7 @@ pub fn handle_paint_undo_hotkey(
     input_blocks: Res<FrontendInputBlockState>,
     config: Option<Res<crate::config::PentimentoConfig>>,
     admitted: Option<Res<EguiPaintHistory>>,
+    scene_history_owner: Option<Res<pentimento_scene::NativeSceneHistoryOwner>>,
     mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     active_canvas: Res<pentimento_scene::ActiveCanvasPlane>,
@@ -84,6 +85,13 @@ pub fn handle_paint_undo_hotkey(
         return;
     }
 
+    if config
+        .as_ref()
+        .is_some_and(|c| c.composite_mode == crate::config::CompositeMode::Egui)
+        && scene_history_owner.is_some()
+    {
+        return;
+    }
     let actions = if config
         .as_ref()
         .is_some_and(|c| c.composite_mode == crate::config::CompositeMode::Egui)

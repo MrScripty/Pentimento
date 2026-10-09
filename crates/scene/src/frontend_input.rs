@@ -41,6 +41,72 @@ impl FrontendScenePointerInput {
     }
 }
 
+/// Native frontend's admitted keys for one frame, with modifiers at each event.
+/// Published egui frames are authoritative even when empty. Other frontends
+/// retain their existing raw-input route. Document replacement invalidates the
+/// frame. Cursor origins travel with keys so later movement cannot rewrite F.
+#[derive(Resource, Default)]
+pub struct FrontendSceneKeyboardInput {
+    generation: u64,
+    enabled: bool,
+    events: Vec<(pentimento_ipc::KeyboardEvent, Option<Vec2>)>,
+    pointer_origin: (bool, bool, Option<Vec2>),
+}
+impl FrontendSceneKeyboardInput {
+    pub fn begin_frame(&mut self, generation: u64, enabled: bool) {
+        self.generation = generation;
+        self.enabled = enabled;
+        self.events.clear();
+    }
+    /// The native producer supplies only admitted, nonrepeat events.
+    pub fn push(&mut self, event: pentimento_ipc::KeyboardEvent, cursor: Option<Vec2>) {
+        self.events.push((event, cursor));
+    }
+    pub fn set_pointer_origin(&mut self, focused: bool, left_down: bool, cursor: Option<Vec2>) {
+        self.pointer_origin = (focused, left_down, cursor);
+    }
+    pub(crate) fn pointer_origin(&self) -> (bool, bool, Option<Vec2>) {
+        self.pointer_origin
+    }
+    pub fn events(
+        &self,
+        generation: u64,
+    ) -> Option<&[(pentimento_ipc::KeyboardEvent, Option<Vec2>)]> {
+        self.enabled.then(|| {
+            if self.generation == generation {
+                self.events.as_slice()
+            } else {
+                &[]
+            }
+        })
+    }
+}
+
+/// Scene's native event dispatcher owns history when Sculpt is compiled in.
+/// Prevents a key spanning a mode transition from reaching two brush owners.
+#[derive(Resource, Default)]
+pub struct NativeSceneHistoryOwner;
+
+/// Private override used only while dispatching one admitted native segment.
+/// Never rewrites the public input frame, Window or global ButtonInput state.
+#[derive(Resource)]
+pub(crate) struct NativePointerSegment {
+    pub events: Vec<bevy::window::WindowEvent>,
+    pub focused: bool,
+    pub left_down: bool,
+    pub cursor: Option<Vec2>,
+    pub finish: bool,
+    pub sampled: bool,
+    pub reset_direct_contact: bool,
+}
+
+pub(crate) fn native_scene_managed(world: &World) -> bool {
+    world.contains_resource::<NativeSceneHistoryOwner>()
+        && world
+            .get_resource::<FrontendSceneKeyboardInput>()
+            .is_some_and(|input| input.events(crate::project_generation(world)).is_some())
+}
+
 /// Generic input blocking flags owned by the active frontend integration.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct FrontendInputBlockState {
