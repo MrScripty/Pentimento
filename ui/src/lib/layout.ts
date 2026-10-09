@@ -12,7 +12,7 @@ export function setupInputLayout(root: HTMLElement): () => void {
         frame = 0;
         if (fallback !== null) clearTimeout(fallback);
         fallback = null;
-        const regions = [...root.querySelectorAll<HTMLElement>('.toolbar, .side-panel, .brush-panel, .add-menu, .add-menu-backdrop, .dropdown, .global-error')].map((element, index) => {
+        const regions = [...root.querySelectorAll<HTMLElement>('.toolbar, .side-panel, .brush-panel, .add-menu, .add-menu-backdrop, .dropdown, .global-error, .project-backdrop, .global-project-notice')].map((element, index) => {
             const rect = element.getBoundingClientRect();
             return { id: element.dataset.uiRegion ?? `ui-${index}`, x: rect.x, y: rect.y, width: rect.width, height: rect.height, z_index: 150, accepts_keyboard: true };
         }).filter(region => region.width > 0 && region.height > 0);

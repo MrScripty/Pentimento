@@ -168,6 +168,25 @@ test('Ctrl+Tab emits one trigger tap and retains Ctrl through backend acknowledg
     assert.deepEqual(calls, ['keydown:ctrl', 'keydown:Tab', 'keyup:Tab', 'acknowledged', 'keyup:ctrl']);
 });
 
+test('Ctrl+Shift+Z taps once and releases all owned modifiers on acknowledgement or failure', async () => {
+    for (const fail of [false, true]) {
+        const calls: string[] = [];
+        const receiptFailure = new Error('receipt failed');
+        const operation = tapNativeShortcut(['ctrl', 'shift'], 'z', () => !fail, 'redo', {
+            send: (action: string, key: string) => calls.push(`${action}:${key}`),
+            pause: async () => {},
+            wait: async () => {
+                assert.deepEqual(calls, ['keydown:ctrl', 'keydown:shift', 'keydown:z', 'keyup:z']);
+                if (fail) throw receiptFailure;
+            },
+            releaseFailed: () => assert.fail('unexpected release failure'),
+        });
+        if (fail) await assert.rejects(operation, error => error === receiptFailure);
+        else await operation;
+        assert.deepEqual(calls, ['keydown:ctrl', 'keydown:shift', 'keydown:z', 'keyup:z', 'keyup:shift', 'keyup:ctrl']);
+    }
+});
+
 test('every shortcut failure path attempts owned key release without hiding the original error', async () => {
     for (const failure of ['modifier-down', 'trigger-down', 'trigger-up', 'receipt', 'modifier-up', 'receipt-and-modifier-up']) {
         const calls = [];

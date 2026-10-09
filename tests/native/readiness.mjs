@@ -109,11 +109,17 @@ export function assertNativeClickBounds(rect, width, height) {
 // leave Tab briefly unmodified. Both can change browser keyboard ownership.
 export async function tapNativeShortcut(modifier, trigger, observed, description, { send, wait, pause, releaseFailed }) {
     assert.equal(typeof observed, 'function', 'A native shortcut needs a bounded backend receipt');
+    const modifiers = Array.isArray(modifier) ? modifier : [modifier];
+    assert.ok(modifiers.length > 0 && modifiers.every(key => typeof key === 'string' && key.length > 0));
+    const ownedModifiers = [];
     let triggerNeedsRelease = false;
     let failed = false;
     let failure;
     try {
-        send('keydown', modifier);
+        for (const key of modifiers) {
+            ownedModifiers.push(key);
+            send('keydown', key);
+        }
         triggerNeedsRelease = true;
         send('keydown', trigger);
         send('keyup', trigger);
@@ -128,7 +134,9 @@ export async function tapNativeShortcut(modifier, trigger, observed, description
         if (triggerNeedsRelease) {
             try { send('keyup', trigger); } catch (error) { releaseErrors.push(error); }
         }
-        try { send('keyup', modifier); } catch (error) { releaseErrors.push(error); }
+        for (const key of ownedModifiers.reverse()) {
+            try { send('keyup', key); } catch (error) { releaseErrors.push(error); }
+        }
         for (const error of releaseErrors) {
             if (failed) releaseFailed(error);
             else { failed = true; failure = error; }

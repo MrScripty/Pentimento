@@ -148,6 +148,11 @@ impl PaintingPipeline {
             }
         }
 
+        // A no-op preserves Redo. Retain only tiles whose pixels actually changed.
+        let layer = self.current_layer_id.and_then(|id| self.layers.layer(id));
+        self.pending_undo_captures.retain(|coord, before| {
+            layer.is_some_and(|layer| layer.surface.get_tile_data(*coord) != *before)
+        });
         // Finalize undo entry if we captured any tiles
         if !self.pending_undo_captures.is_empty() {
             let stroke_id = self.current_stroke_id.unwrap_or(0);
@@ -159,6 +164,7 @@ impl PaintingPipeline {
                 layer_id,
                 tiles: std::mem::take(&mut self.pending_undo_captures),
             };
+            self.redo_stack.clear();
             self.undo_stack.push(entry);
 
             // Limit undo stack size

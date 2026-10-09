@@ -12,6 +12,7 @@
     });
 
     let errorMessage = $state('');
+    let projectNotice=$state('');
 
     // Edit mode state
     let editMode = $state<'None' | 'Paint' | 'MeshEdit' | 'Sculpt'>('None');
@@ -49,6 +50,10 @@
                 case 'Error':
                     errorMessage = msg.data.message;
                     break;
+                case 'ProjectOperationFinished':
+                    projectNotice=msg.data.success?msg.data.message:'';
+                    if(msg.data.success)errorMessage='';
+                    break;
                 case 'EditModeChanged':
                     editMode = msg.data.mode;
                     break;
@@ -62,7 +67,7 @@
 <svelte:window onkeydown={handleAddMenuKeydown} onmousemove={handleMousemove} />
 
 <div class="app">
-    <Toolbar {renderStats} />
+    <Toolbar {renderStats} mode={editMode} />
     <div hidden={editMode === 'Paint' || editMode === 'Sculpt'}><SidePanel /></div>
     <AddObjectMenu
         show={showAddMenu}
@@ -70,6 +75,7 @@
         onClose={() => (showAddMenu = false)}
     />
     <BrushPanels mode={editMode} />
+    {#if projectNotice}<div class="global-project-notice panel interactive" data-ui-region="project-notice" role="status"><span>{projectNotice}</span><button type="button" aria-label="Dismiss project notice" onclick={()=>projectNotice=''}>Dismiss</button></div>{/if}
     {#if errorMessage}
         <div class="global-error panel interactive" data-ui-region="global-error" role="alert">
             <span>{errorMessage}</span>
@@ -79,6 +85,7 @@
 </div>
 
 <style>
+    .global-project-notice{position:fixed;bottom:18px;left:18px;z-index:290;display:flex;align-items:center;gap:16px;max-width:min(600px,calc(100vw - 36px));padding:12px 16px;background:#242a33;border:1px solid #6d849c;border-radius:6px;color:#e0eaf5;font:13px/1.5 system-ui,sans-serif}.global-project-notice button{padding:5px 8px;background:#334154;border:1px solid #6d849c;border-radius:4px;color:inherit}
     .global-error { position: fixed; bottom: 18px; left: 18px; z-index: 300; display: flex; align-items: center; gap: 16px; max-width: min(580px, calc(100vw - 36px)); padding: 14px 16px; border: 1px solid #bd8767; border-radius: 8px; background: #2f2423; color: #ffe1c7; font: 13px/1.5 system-ui, sans-serif; }
     .global-error button { flex-shrink: 0; color: inherit; background: #48312b; border: 1px solid #bd8767; border-radius: 4px; padding: 5px 8px; cursor: pointer; }
     .global-error button:focus-visible { outline: 2px solid #9abaff; outline-offset: 2px; }

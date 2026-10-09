@@ -26,6 +26,7 @@ pub mod raycast;
 pub mod surface;
 pub mod tiles;
 pub mod types;
+pub mod uv_layers;
 pub mod validation;
 
 pub use brush::*;

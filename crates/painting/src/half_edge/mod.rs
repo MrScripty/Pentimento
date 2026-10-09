@@ -5,6 +5,7 @@
 
 mod construction;
 mod modification;
+mod project;
 mod topology;
 mod types;
 mod validation;
@@ -12,6 +13,7 @@ mod validation;
 use std::collections::HashMap;
 
 pub use modification::CompactionMap;
+pub use project::HalfEdgeDocument;
 pub use types::{Face, FaceId, HalfEdge, HalfEdgeError, HalfEdgeId, Vertex, VertexId};
 pub use validation::ManifoldError;
 

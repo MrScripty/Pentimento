@@ -56,6 +56,8 @@ pub struct PaintingPipeline {
     pub(crate) captured_tiles: HashSet<TileCoord>,
     /// Undo stack (most recent at end)
     pub(crate) undo_stack: Vec<UndoEntry>,
+    /// Undone strokes, with tile snapshots of their committed result.
+    pub(crate) redo_stack: Vec<UndoEntry>,
     /// Maximum undo levels
     pub(crate) max_undo_levels: usize,
 }
@@ -76,6 +78,7 @@ impl PaintingPipeline {
             pending_undo_captures: HashMap::new(),
             captured_tiles: HashSet::new(),
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             max_undo_levels: 20,
         }
     }
@@ -129,6 +132,96 @@ impl PaintingPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redo_restores_layered_strokes_and_cancel_preserves_cursor() {
+        let mut p = PaintingPipeline::new(160, 130);
+        p.set_color([1., 0., 1., 1.]);
+        let original = {
+            p.take_dirty_tiles();
+            p.surface_as_bytes().to_vec()
+        };
+        p.begin_stroke(7, 1, 0);
+        p.stroke_to(64., 64., 1.);
+        p.end_stroke();
+        p.take_dirty_tiles();
+        let first = p.surface_as_bytes().to_vec();
+        p.begin_stroke(7, 2, 0);
+        p.stroke_to(69., 64., 1.);
+        p.end_stroke();
+        p.take_dirty_tiles();
+        let second = p.surface_as_bytes().to_vec();
+        let packets = p.log().total_packet_count();
+        assert!(p.undo());
+        p.take_dirty_tiles();
+        assert_eq!(p.surface_as_bytes(), first);
+        p.begin_stroke(7, 3, 0);
+        p.stroke_to(100., 90., 1.);
+        assert!(!p.redo());
+        assert!(!p.undo());
+        assert!(!p.can_redo());
+        p.cancel_stroke();
+        p.take_dirty_tiles();
+        assert_eq!(p.surface_as_bytes(), first);
+        assert!(p.redo());
+        p.take_dirty_tiles();
+        assert_eq!(p.surface_as_bytes(), second);
+        assert_eq!(
+            p.log().total_packet_count(),
+            packets,
+            "history must not emit replay packets"
+        );
+        assert!(p.undo());
+        assert!(p.undo());
+        p.take_dirty_tiles();
+        assert_eq!(p.surface_as_bytes(), original);
+        assert!(p.redo());
+        assert!(p.redo());
+        p.take_dirty_tiles();
+        assert_eq!(p.surface_as_bytes(), second);
+    }
+
+    #[test]
+    fn no_op_preserves_redo_and_new_changed_stroke_clears_it() {
+        let mut p = PaintingPipeline::new(128, 128);
+        p.begin_stroke(7, 1, 0);
+        p.stroke_to(50., 50., 1.);
+        p.end_stroke();
+        assert!(p.undo());
+        let mut zero = p.brush_preset().clone();
+        zero.opacity = 0.;
+        p.set_brush(zero);
+        p.begin_stroke(7, 2, 0);
+        p.stroke_to(60., 60., 1.);
+        p.end_stroke();
+        assert!(p.can_redo());
+        assert_eq!(p.undo_count(), 0);
+        let mut preset = p.brush_preset().clone();
+        preset.opacity = 1.;
+        p.set_brush(preset);
+        p.begin_stroke(7, 3, 0);
+        p.stroke_to(70., 70., 1.);
+        p.end_stroke();
+        assert!(!p.can_redo());
+        assert_eq!(p.undo_count(), 1);
+    }
+
+    #[test]
+    fn history_retains_owner_and_refuses_removed_layer_without_popping_cursor() {
+        let mut p = PaintingPipeline::new(130, 130);
+        let owner = p.layers.add_layer("owner".into());
+        p.layers.set_active(owner);
+        p.begin_stroke(7, 1, 0);
+        p.stroke_to(129., 129., 1.);
+        p.end_stroke();
+        let other = p.layers.add_layer("other".into());
+        p.layers.set_active(other);
+        assert!(p.undo());
+        assert!(p.redo());
+        assert!(p.layers.remove_layer(owner));
+        assert!(!p.undo());
+        assert_eq!(p.undo_count(), 1);
+    }
 
     #[test]
     fn test_pipeline_creation() {
