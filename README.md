@@ -83,6 +83,9 @@ Node.js 22+ is required for the Svelte and Electron tooling.
 For the focused integration gate and required rendered CEF acceptance, see
 [paint/sculpt qualification](docs/paint-sculpt-qualification.md).
 
+Local File Save/Open and the bounded, lossless editable document subset are
+described in [project format v1](docs/project-format-v1.md).
+
 ## Project Structure
 
 ```text

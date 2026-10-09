@@ -103,6 +103,29 @@ fn valid_sculpt(p: &SculptEntry) -> bool {
             || p.autosmooth_override
                 .is_none_or(|n| n == p.settings.autosmooth))
 }
+pub(crate) fn valid_project_brushes(
+    brush: &painting::BrushPreset,
+    color: [f32; 4],
+    blend: pentimento_ipc::BlendMode,
+    sculpt: Option<(&pentimento_ipc::SculptBrushSettings, Option<f32>)>,
+) -> bool {
+    let paint = PaintEntry {
+        id: 1,
+        name: "Project".into(),
+        brush: brush.clone(),
+        color,
+        blend,
+    };
+    valid_paint(&paint)
+        && sculpt.is_none_or(|(settings, autosmooth_override)| {
+            valid_sculpt(&SculptEntry {
+                id: 1,
+                name: "Project".into(),
+                settings: settings.clone(),
+                autosmooth_override,
+            })
+        })
+}
 impl Document {
     fn validate(&self) -> Result<(), String> {
         if self.version != 1
@@ -281,6 +304,14 @@ pub(crate) fn active(world: &World) -> bool {
         || world
             .get_resource::<PaintingResource>()
             .is_some_and(PaintingResource::has_active_stroke);
+    #[cfg(feature = "mesh_painting")]
+    let active = active
+        || world
+            .get_resource::<crate::MeshPaintState>()
+            .is_some_and(|s| s.current_stroke.is_some())
+        || world
+            .get_resource::<crate::MeshPaintingResource>()
+            .is_some_and(|s| s.has_active_stroke());
     #[cfg(feature = "sculpting")]
     {
         return active
@@ -297,21 +328,25 @@ pub(crate) fn active(world: &World) -> bool {
 }
 pub(crate) fn message(world: &World) -> Option<BevyToUi> {
     let catalog = world.get_resource::<Catalog>()?;
-    let selected_paint = world
-        .get_resource::<PaintingResource>()
-        .and_then(|current| {
-            catalog
-                .document
-                .paint
-                .iter()
-                .find(|p| {
-                    Some(p.id) == catalog.selected_paint
-                        && p.brush == current.brush_preset
-                        && p.color == current.brush_color
-                        && p.blend == crate::brush_ui::paint_snapshot(current).blend_mode
-                })
-                .map(|p| p.id)
-        });
+    let selected_paint = crate::direct_uv_tool::brush(world).and_then(|current| {
+        catalog
+            .document
+            .paint
+            .iter()
+            .find(|p| {
+                Some(p.id) == catalog.selected_paint
+                    && p.brush == current.brush_preset
+                    && p.color == current.brush_color
+                    && p.blend
+                        == crate::brush_ui::paint_settings(
+                            &current.brush_preset,
+                            current.brush_color,
+                            current.blend_mode,
+                        )
+                        .blend_mode
+            })
+            .map(|p| p.id)
+    });
     #[cfg(feature = "sculpting")]
     let selected_sculpt = world.get_resource::<crate::SculptState>().and_then(|s| {
         catalog
@@ -365,6 +400,15 @@ pub(crate) fn reject(world: &mut World, error: impl Into<String>) {
         });
     }
 }
+pub(crate) fn clear_paint_selection(world: &mut World) {
+    if let Some(mut catalog) = world.get_resource_mut::<Catalog>() {
+        catalog.selected_paint = None;
+    }
+}
+#[cfg(test)]
+pub(crate) fn owned_test_catalog(world: &mut World, path: PathBuf) {
+    world.insert_resource(Catalog::load(Some(path)));
+}
 fn save(world: &mut World, name: &str, sculpt: bool) -> Result<(), String> {
     let name = name.trim();
     if !valid_name(name) {
@@ -410,9 +454,7 @@ fn save(world: &mut World, name: &str, sculpt: bool) -> Result<(), String> {
         #[cfg(not(feature = "sculpting"))]
         return Err("Sculpt brushes are unavailable in this build.".into());
     } else {
-        let paint = world
-            .get_resource::<PaintingResource>()
-            .ok_or("Paint brushes are unavailable.")?;
+        let paint = crate::direct_uv_tool::brush(world).ok_or("Paint brushes are unavailable.")?;
         let existing = document.paint.iter().position(|p| p.name == name);
         let id = if let Some(index) = existing {
             document.paint[index].id
@@ -437,7 +479,12 @@ fn save(world: &mut World, name: &str, sculpt: bool) -> Result<(), String> {
             name: name.into(),
             brush: paint.brush_preset.clone(),
             color: paint.brush_color,
-            blend: crate::brush_ui::paint_snapshot(paint).blend_mode,
+            blend: crate::brush_ui::paint_settings(
+                &paint.brush_preset,
+                paint.brush_color,
+                paint.blend_mode,
+            )
+            .blend_mode,
         };
         selected_id = id;
         if let Some(index) = existing {
@@ -488,13 +535,12 @@ fn select(world: &mut World, id: u32, sculpt: bool) -> Result<(), String> {
             .find(|p| p.id == id)
             .cloned()
             .ok_or("That saved paint brush is unavailable.")?;
-        let mut paint = world
-            .get_resource_mut::<PaintingResource>()
-            .ok_or("Paint brushes are unavailable.")?;
+        let mut paint =
+            crate::direct_uv_tool::brush(world).ok_or("Paint brushes are unavailable.")?;
         paint.set_brush_preset(entry.brush);
         paint.set_brush_color(entry.color);
         paint.set_blend_mode_ipc(entry.blend);
-        drop(paint);
+        crate::direct_uv_tool::set_brush(world, paint)?;
         // A recalled brush is ready to paint; retain consumed-press ownership.
         if let Some(mut mode) = world.get_resource_mut::<crate::PaintMode>() {
             mode.sample_color = false;

@@ -113,6 +113,9 @@ fn native_batch(app: &mut App, events: &[WindowEvent]) {
             WindowEvent::MouseWheel(event) => {
                 app.world_mut().write_message(event);
             }
+            WindowEvent::TouchInput(event) => {
+                app.world_mut().write_message(event);
+            }
             WindowEvent::KeyboardInput(event) => {
                 app.world_mut().write_message(event);
             }
@@ -1223,4 +1226,132 @@ fn native_paint_stationary_stroke_closes_when_new_ui_layout_covers_cursor() {
         &[button(window, bevy::input::mouse::MouseButton::Left, false)],
     );
     assert_native_paint_complete(&app, 1);
+}
+
+#[test]
+fn project_dialog_layout_routes_native_clicks_to_ui_without_canvas_stroke() {
+    let (mut app, window) = native_paint_fixture();
+    let before = native_paint_pixels(&app);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions: vec![LayoutRegion {
+                id: "project-dialog".into(),
+                x: 0.,
+                y: 0.,
+                width: 800.,
+                height: 600.,
+                z_index: 150,
+                accepts_keyboard: true
+            }]
+        })
+    ));
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 350., 310.),
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+            moved(window, 410., 330.),
+            button(window, bevy::input::mouse::MouseButton::Left, false),
+        ],
+    );
+    assert_native_paint_complete(&app, 0);
+    assert_eq!(
+        native_paint_pixels(&app),
+        before,
+        "file dialog pointer events cannot paint through into the canvas"
+    );
+}
+
+#[test]
+fn open_resets_old_document_hover_before_native_stationary_press() {
+    use bevy::pbr::MeshMaterial3d;
+    use pentimento_ipc::ProjectCommand;
+    let (mut control, window) = native_paint_fixture();
+    native_batch(
+        &mut control,
+        &[
+            moved(window, 450., 330.),
+            button(window, MouseButton::Left, true),
+            button(window, MouseButton::Left, false),
+        ],
+    );
+    let expected = native_paint_pixels(&control);
+    assert_native_paint_complete(&control, 1);
+
+    let (mut app, window) = native_paint_fixture();
+    app.init_resource::<Assets<Mesh>>();
+    let plane = app
+        .world()
+        .resource::<pentimento_scene::ActiveCanvasPlane>()
+        .entity
+        .unwrap();
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(4., 4.));
+    app.world_mut()
+        .entity_mut(plane)
+        .insert((Mesh3d(mesh), Transform::default()));
+    // The production canvas setup already supplied its actual display material.
+    assert!(
+        app.world()
+            .get::<MeshMaterial3d<StandardMaterial>>(plane)
+            .is_some()
+    );
+    native_batch(&mut app, &[moved(window, 300., 300.)]);
+    let directory =
+        std::env::temp_dir().join(format!("pentimento-open-hover-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory
+        .join("owned.pentimento.json")
+        .to_string_lossy()
+        .into_owned();
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::ProjectCommand(ProjectCommand::Save { path: path.clone() })
+    ));
+    assert!(std::path::Path::new(&path).is_file());
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo {
+            regions: vec![LayoutRegion {
+                id: "project-dialog".into(),
+                x: 0.,
+                y: 0.,
+                width: 800.,
+                height: 600.,
+                z_index: 150,
+                accepts_keyboard: true,
+            }]
+        })
+    ));
+    native_batch(&mut app, &[moved(window, 450., 330.)]);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::ProjectCommand(ProjectCommand::Open { path })
+    ));
+    assert_eq!(pentimento_scene::project_generation(app.world()), 1);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::LayoutUpdate(pentimento_ipc::LayoutInfo { regions: vec![] })
+    ));
+    // Re-enter the paint mode used by this production native-input fixture.
+    app.world_mut()
+        .resource_mut::<pentimento_scene::PaintMode>()
+        .active = true;
+    native_batch(
+        &mut app,
+        &[
+            button(window, MouseButton::Left, true),
+            button(window, MouseButton::Left, false),
+        ],
+    );
+    assert_native_paint_complete(&app, 1);
+    assert_eq!(
+        native_paint_pixels(&app),
+        expected,
+        "the new document must use current Window cursor B rather than old document hover A"
+    );
+    std::fs::remove_dir_all(directory).unwrap();
 }

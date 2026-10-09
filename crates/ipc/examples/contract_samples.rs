@@ -2,9 +2,10 @@ use pentimento_ipc::{
     AddObjectRequest, AddPaintCanvasRequest, AmbientOcclusionSettings, AppSettings, BevyToUi,
     BlendMode, ColorSampleSource, DiffusionRequest, EditMode, GizmoCommand, GizmoMode,
     KeyboardEvent, LayerInfo, LightingSettings, MeshEditCommand, MeshEditTool, MeshSelectionMode,
-    Modifiers, PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PrimitiveType, SceneInfo,
-    SceneObject, SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool, Transform3D,
-    UiToBevy,
+    Modifiers, PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PaintTarget,
+    PaintTargetState, PrimitiveType, SceneInfo, SceneObject, SculptBrushSettings, SculptCommand,
+    SculptFalloff, SculptTool, Transform3D, UiToBevy, UvLayerCommand, UvLayerInfo, UvLayerState,
+    UvReceiverInfo,
 };
 use serde::Serialize;
 
@@ -37,6 +38,18 @@ fn main() {
             },
         ],
         bevy_to_ui: vec![
+            BevyToUi::ProjectStateChanged {
+                path: Some("/tmp/example.pentimento.json".into()),
+                available: true,
+                active: false,
+                blocked: false,
+                notice: Some("Saved".into()),
+            },
+            BevyToUi::ProjectOperationFinished {
+                operation: "Save".into(),
+                success: true,
+                message: "Saved".into(),
+            },
             BevyToUi::Initialize {
                 scene_info: SceneInfo {
                     objects: vec![SceneObject {
@@ -106,6 +119,40 @@ fn main() {
                 can_undo: true,
                 can_redo: false,
                 source_visible: true,
+                target: PaintTargetState {
+                    mode: PaintTarget::DirectUv,
+                    direct_available: true,
+                    target_name: Some("Sphere".into()),
+                    active: false,
+                    notice: None,
+                    retained_bytes: 4096,
+                    pending_bytes: 0,
+                    limit_bytes: 67108864,
+                    evicted_strokes: 0,
+                    uv_layers: Some(UvLayerState {
+                        receivers: vec![UvReceiverInfo {
+                            mesh_id: 12,
+                            name: "Sphere".into(),
+                            layered: true,
+                        }],
+                        receiver: Some(12),
+                        enabled: true,
+                        layers: vec![UvLayerInfo {
+                            id: 3,
+                            name: "Detail".into(),
+                            visible: true,
+                            opacity: 0.5,
+                            locked: false,
+                            is_active: true,
+                        }],
+                        can_undo: true,
+                        can_redo: false,
+                        active: false,
+                        projection_preview: false,
+                        conflicted: false,
+                        notice: None,
+                    }),
+                },
             },
             BevyToUi::SculptBrushStateChanged {
                 settings: Some(SculptBrushSettings {
@@ -145,6 +192,39 @@ fn main() {
             BevyToUi::CloseMenus,
         ],
         ui_to_bevy: vec![
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::SelectReceiver { mesh_id: 12 },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::Enable,
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::Create {
+                    name: "Detail".into(),
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::Select { layer_id: 3 },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::Reorder {
+                    layer_id: 3,
+                    new_index: 0,
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::Undo,
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::Redo,
+            }),
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::GetState),
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Save {
+                path: "/tmp/example.pentimento.json".into(),
+            }),
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Open {
+                path: "/tmp/example.pentimento.json".into(),
+            }),
             UiToBevy::SculptCommand(SculptCommand::Undo),
             UiToBevy::SculptCommand(SculptCommand::Redo),
             UiToBevy::PaintCommand(PaintCommand::SaveBrushPreset {
@@ -178,6 +258,14 @@ fn main() {
             UiToBevy::PaintCommand(PaintCommand::SetColorSampleSource {
                 source: ColorSampleSource::ActiveLayer,
             }),
+            UiToBevy::PaintCommand(PaintCommand::SetTarget {
+                target: PaintTarget::DirectUv,
+            }),
+            UiToBevy::PaintCommand(PaintCommand::SetTarget {
+                target: PaintTarget::Canvas,
+            }),
+            UiToBevy::PaintCommand(PaintCommand::CancelStroke),
+            UiToBevy::PaintCommand(PaintCommand::CancelUvProjection),
             UiToBevy::PaintCommand(PaintCommand::Undo),
             UiToBevy::PaintCommand(PaintCommand::Redo),
             UiToBevy::PaintCommand(PaintCommand::SetSourceVisible { visible: false }),

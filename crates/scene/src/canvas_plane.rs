@@ -79,6 +79,12 @@ pub struct CanvasPlaneIdGenerator {
 }
 
 impl CanvasPlaneIdGenerator {
+    pub(crate) fn document_next_id(&self) -> u32 {
+        self.next_id
+    }
+    pub(crate) fn from_document(next_id: u32) -> Self {
+        Self { next_id }
+    }
     /// Generate the next unique plane ID
     pub fn next(&mut self) -> u32 {
         let id = self.next_id;
@@ -132,7 +138,7 @@ impl Plugin for CanvasPlanePlugin {
 }
 
 /// Handle canvas plane events (create, select, deselect, toggle camera lock)
-fn handle_canvas_plane_events(
+pub(crate) fn handle_canvas_plane_events(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -147,6 +153,14 @@ fn handle_canvas_plane_events(
     mut outbound: ResMut<OutboundUiMessages>,
 ) {
     for event in events.read() {
+        if paint_mode.target == pentimento_ipc::PaintTarget::DirectUv {
+            outbound.send(BevyToUi::Error {
+                code: "direct_uv_owns_view".into(),
+                message: "Choose Canvas projection before changing its source canvas or view."
+                    .into(),
+            });
+            continue;
+        }
         // Do not create a second active brush owner or replace the sculpt UI.
         // The user must explicitly commit/leave sculpt before entering paint.
         if edit_mode.mode == EditMode::Sculpt
@@ -294,6 +308,11 @@ fn handle_canvas_plane_events(
 
                 // Enable paint mode and notify UI
                 paint_mode.active = true;
+                paint_mode.target = pentimento_ipc::PaintTarget::Canvas;
+                paint_mode.direct_source_entity = None;
+                paint_mode.direct_source_visibility = None;
+                paint_mode.direct_camera_locked = None;
+                paint_mode.target_notice = None;
                 outbound.send(BevyToUi::EditModeChanged {
                     mode: EditMode::Paint,
                 });
@@ -326,6 +345,9 @@ fn handle_canvas_plane_events(
                 info!("Deselected canvas plane");
             }
             CanvasPlaneEvent::ToggleCameraLock => {
+                if paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv {
+                    continue;
+                }
                 if let Some(plane_entity) = active_plane.entity {
                     let was_locked = active_plane.camera_locked;
                     active_plane.camera_locked = !was_locked;
@@ -439,11 +461,16 @@ fn update_canvas_materials(
 /// deselected, clear ActiveCanvasPlane.
 #[cfg(feature = "selection")]
 fn sync_active_plane_with_selection(
+    paint_mode: Res<PaintMode>,
     mut active_plane: ResMut<ActiveCanvasPlane>,
     added_selected: Query<Entity, (With<CanvasPlane>, Added<Selected>)>,
     mut removed_selected: RemovedComponents<Selected>,
     canvas_query: Query<Entity, With<CanvasPlane>>,
 ) {
+    if paint_mode.target == pentimento_ipc::PaintTarget::DirectUv {
+        for _ in removed_selected.read() {}
+        return;
+    }
     // When a canvas plane is selected, make it the active plane
     for entity in added_selected.iter() {
         active_plane.entity = Some(entity);

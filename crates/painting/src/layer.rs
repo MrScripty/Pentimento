@@ -6,6 +6,88 @@
 
 use crate::constants::DEFAULT_TILE_SIZE;
 use crate::tiles::TiledSurface;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerDocument {
+    pub id: u32,
+    pub name: String,
+    pub visible: bool,
+    pub opacity: f32,
+    pub pixels: Vec<[f32; 4]>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerStackDocument {
+    pub width: u32,
+    pub height: u32,
+    pub active_layer_id: u32,
+    pub next_id: u32,
+    pub layers: Vec<LayerDocument>,
+}
+impl LayerStackDocument {
+    pub fn validate(&self) -> Result<(), String> {
+        let count = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .ok_or("Layer dimensions overflow")?;
+        if self.width == 0
+            || self.height == 0
+            || self.width > 1048
+            || self.height > 1048
+            || self.layers.is_empty()
+            || self.layers.len() > 64
+            || self.next_id == u32::MAX
+        {
+            return Err("Invalid or over-limit project layer dimensions/count/counter".into());
+        }
+        let mut ids = std::collections::HashSet::new();
+        for layer in &self.layers {
+            if !ids.insert(layer.id)
+                || layer.id >= self.next_id
+                || layer.name.len() > 256
+                || layer.pixels.len() != count
+                || !layer.opacity.is_finite()
+                || !(0.0..=1.0).contains(&layer.opacity)
+                || layer
+                    .pixels
+                    .iter()
+                    .flatten()
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            {
+                return Err("Invalid project layer IDs, pixels or metadata".into());
+            }
+        }
+        if !ids.contains(&self.active_layer_id) {
+            return Err("Missing active project layer".into());
+        }
+        Ok(())
+    }
+    pub fn restore(self) -> Result<LayerStack, String> {
+        self.validate()?;
+        let mut stack = LayerStack {
+            layers: Vec::new(),
+            active_layer_id: self.active_layer_id,
+            next_id: self.next_id,
+            composite: TiledSurface::with_default_tile_size(self.width, self.height),
+            width: self.width,
+            height: self.height,
+        };
+        for layer in self.layers {
+            let mut restored = Layer::new(layer.id, layer.name, self.width, self.height);
+            restored.visible = layer.visible;
+            restored.opacity = layer.opacity;
+            restored
+                .surface
+                .surface_mut()
+                .pixels_mut()
+                .copy_from_slice(&layer.pixels);
+            stack.layers.push(restored);
+        }
+        stack.composite();
+        Ok(stack)
+    }
+}
 
 fn composite_pixel(dst: &mut [f32; 4], src: [f32; 4], opacity: f32) {
     let src_a = src[3] * opacity;
@@ -64,6 +146,37 @@ pub struct LayerStack {
 }
 
 impl LayerStack {
+    /// Compose editable pixels without changing the cached surface or dirty tiles.
+    pub fn document_composite_pixels(&self) -> Vec<[f32; 4]> {
+        let mut pixels = vec![[0.0; 4]; self.width as usize * self.height as usize];
+        for layer in &self.layers {
+            if layer.visible && layer.opacity > 0.0 {
+                for (dst, src) in pixels.iter_mut().zip(layer.surface.surface().pixels()) {
+                    composite_pixel(dst, *src, layer.opacity);
+                }
+            }
+        }
+        pixels
+    }
+    pub fn document(&self) -> LayerStackDocument {
+        LayerStackDocument {
+            width: self.width,
+            height: self.height,
+            active_layer_id: self.active_layer_id,
+            next_id: self.next_id,
+            layers: self
+                .layers
+                .iter()
+                .map(|l| LayerDocument {
+                    id: l.id,
+                    name: l.name.clone(),
+                    visible: l.visible,
+                    opacity: l.opacity,
+                    pixels: l.surface.surface().pixels().to_vec(),
+                })
+                .collect(),
+        }
+    }
     /// Create a new layer stack with one default "Background" layer
     pub fn new(width: u32, height: u32) -> Self {
         let background = Layer::new(0, "Background".to_string(), width, height);

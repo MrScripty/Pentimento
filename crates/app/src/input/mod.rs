@@ -29,6 +29,8 @@ use bevy::prelude::*;
 use std::time::Instant;
 
 mod backend;
+#[cfg(all(test, feature = "mesh_painting", feature = "egui"))]
+mod direct_uv_native_tests;
 mod hotkeys;
 mod keyboard;
 mod mouse;

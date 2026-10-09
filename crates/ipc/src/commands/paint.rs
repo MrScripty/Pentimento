@@ -18,9 +18,41 @@ pub enum BlendMode {
     Erase = 1,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PaintTarget {
+    #[default]
+    Canvas,
+    DirectUv,
+}
+
+/// Authoritative target/transaction status for the existing paint controls.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaintTargetState {
+    pub mode: PaintTarget,
+    pub direct_available: bool,
+    pub target_name: Option<String>,
+    pub active: bool,
+    pub notice: Option<String>,
+    pub retained_bytes: usize,
+    pub pending_bytes: usize,
+    pub limit_bytes: usize,
+    pub evicted_strokes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_layers: Option<UvLayerState>,
+}
+
 /// Commands for controlling the painting system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PaintCommand {
+    UvLayers {
+        command: UvLayerCommand,
+    },
+    SetTarget {
+        target: PaintTarget,
+    },
+    CancelStroke,
+    /// Discard a staged UV projection preview; source Canvas edits remain.
+    CancelUvProjection,
     SetColorSampling {
         enabled: bool,
     },
@@ -153,4 +185,51 @@ pub struct PaintBrushSettings {
 pub struct PaintBrushPresetInfo {
     pub id: u32,
     pub name: String,
+}
+
+/// UV target commands are separate from source Canvas layer commands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UvLayerCommand {
+    SelectReceiver { mesh_id: u32 },
+    Enable,
+    Create { name: String },
+    Duplicate { layer_id: u32 },
+    Delete { layer_id: u32 },
+    Select { layer_id: u32 },
+    Rename { layer_id: u32, name: String },
+    Reorder { layer_id: u32, new_index: usize },
+    Visible { layer_id: u32, visible: bool },
+    Opacity { layer_id: u32, opacity: f32 },
+    Lock { layer_id: u32, locked: bool },
+    Undo,
+    Redo,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UvLayerInfo {
+    pub id: u32,
+    pub name: String,
+    pub visible: bool,
+    pub opacity: f32,
+    pub locked: bool,
+    pub is_active: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UvReceiverInfo {
+    pub mesh_id: u32,
+    pub name: String,
+    pub layered: bool,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct UvLayerState {
+    pub receivers: Vec<UvReceiverInfo>,
+    pub receiver: Option<u32>,
+    pub enabled: bool,
+    pub layers: Vec<UvLayerInfo>,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub active: bool,
+    #[serde(default)]
+    pub projection_preview: bool,
+    pub conflicted: bool,
+    pub notice: Option<String>,
 }
