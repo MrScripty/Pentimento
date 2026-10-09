@@ -13,6 +13,8 @@ pub struct NativeUiState {
     pub selected_edge_count: usize,
     pub selected_face_count: usize,
     pub depth_view_enabled: bool,
+    pub depth_view_available: bool,
+    pub depth_view_reason: Option<String>,
     pub layers: Vec<LayerInfo>,
 }
 
@@ -29,6 +31,8 @@ impl Default for NativeUiState {
             selected_edge_count: 0,
             selected_face_count: 0,
             depth_view_enabled: false,
+            depth_view_available: false,
+            depth_view_reason: Some("Checking depth view availability…".into()),
             layers: Vec::new(),
         }
     }
@@ -37,6 +41,19 @@ impl Default for NativeUiState {
 /// Apply a backend-originated message to the shared native frontend snapshot.
 pub fn apply_native_ui_message(state: &mut NativeUiState, message: &BevyToUi) {
     match message {
+        BevyToUi::DepthViewState {
+            available,
+            enabled,
+            reason,
+        } => {
+            state.depth_view_available = *available;
+            state.depth_view_enabled = *available && *enabled;
+            state.depth_view_reason = reason.clone();
+        }
+        BevyToUi::DepthViewRejected { reason } => {
+            state.depth_view_reason = Some(reason.clone());
+        }
+
         BevyToUi::ShowAddObjectMenu { show, position } => {
             state.show_add_menu = *show;
             if let Some([x, y]) = position {
@@ -71,5 +88,36 @@ pub fn apply_native_ui_message(state: &mut NativeUiState, message: &BevyToUi) {
             state.layers = layers.clone();
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+
+    #[test]
+    fn depth_is_unavailable_until_authoritative_state_and_rejects_stale_enabled() {
+        let mut state = NativeUiState::default();
+        assert!(!state.depth_view_available);
+        apply_native_ui_message(
+            &mut state,
+            &BevyToUi::DepthViewState {
+                available: true,
+                enabled: true,
+                reason: None,
+            },
+        );
+        assert!(state.depth_view_enabled);
+        apply_native_ui_message(
+            &mut state,
+            &BevyToUi::DepthViewState {
+                available: false,
+                enabled: true,
+                reason: Some("GL unsupported".into()),
+            },
+        );
+        assert!(!state.depth_view_enabled);
+        assert!(!state.depth_view_available);
+        assert_eq!(state.depth_view_reason.as_deref(), Some("GL unsupported"));
     }
 }

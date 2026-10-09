@@ -190,13 +190,14 @@ install_root_node_modules() {
 }
 
 check_electron_node_modules() {
-    [[ -x "${PROJECT_ROOT}/src-electron/node_modules/.bin/electron" ]]
+    node "${PROJECT_ROOT}/src-electron/check-install.cjs"
 }
 
 install_electron_node_modules() {
     (
-        cd "${PROJECT_ROOT}/src-electron"
-        npm ci
+        cd "${PROJECT_ROOT}/src-electron" &&
+        npm ci &&
+        ./node_modules/.bin/install-electron
     )
 }
 
@@ -484,6 +485,44 @@ run_verification_suite() {
         cargo test --locked -p sculpting --lib
         npm run verify
         build_ui
+        # Discover every format regression with selection enabled (outline is feature-gated).
+        # Exact names and a count guard prevent a green zero-test filtered run.
+        format_tests=(
+            depth_view::target_format_tests::destination_format_is_the_specialization_key
+            depth_view::target_format_tests::mixed_views_and_format_changes_cannot_reuse_another_views_choice
+            outline::edge_detection::target_format_tests::destination_format_is_the_specialization_key
+            outline::edge_detection::target_format_tests::mixed_views_and_format_changes_cannot_reuse_another_views_choice
+        )
+        format_test_listing="$(cargo test --locked -p pentimento-scene --lib --features selection target_format_tests -- --list)"
+        printf '%s\n' "$format_test_listing"
+        if [[ "$(grep -c 'target_format_tests::.*: test$' <<< "$format_test_listing")" -ne "${#format_tests[@]}" ]]; then
+            echo "Expected all four post-process format tests to be discovered" >&2
+            exit 1
+        fi
+        for format_test in "${format_tests[@]}"; do
+            if ! grep -Fxq "${format_test}: test" <<< "$format_test_listing"; then
+                echo "Missing required post-process format test: $format_test" >&2
+                exit 1
+            fi
+        done
+        for format_test in "${format_tests[@]}"; do
+            if format_test_output="$(cargo test --locked -p pentimento-scene --lib --features selection "$format_test" -- --exact 2>&1)"; then
+                printf '%s\n' "$format_test_output"
+            else
+                format_test_status=$?
+                printf '%s\n' "$format_test_output" >&2
+                exit "$format_test_status"
+            fi
+            if ! grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' <<< "$format_test_output"; then
+                echo "Required format test did not execute and pass: $format_test" >&2
+                exit 1
+            fi
+        done
+        # Keep the complete scene/depth suite after the explicit format gate.
+        cargo test --locked -p pentimento-scene --lib --features selection
+        cargo test --locked -p pentimento-frontend-core --lib
+        cargo test --locked -p pentimento-dioxus-ui --lib
+        cargo test --locked -p pentimento-egui-ui --lib
         cargo check --locked -p pentimento --features egui
         cargo check --locked -p pentimento --features dioxus
         cargo check --locked -p pentimento --features cef
