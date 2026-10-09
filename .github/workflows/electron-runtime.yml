@@ -56,9 +56,11 @@ jobs:
         run: env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py environment "$PENTIMENTO_CI_ELECTRON" tests/electron/runtime-smoke.cjs --preflight
       - name: Build genuine production UI and Bevy WASM
         run: ./launcher.sh --build --frontend electron
+      # Explicit software WebGL opt-in for trusted local CI content only.
+      # The ordinary sandbox preflight above uses no graphics overrides.
       - name: Qualify production rendering and shutdown
         run: |
-          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py production "$PENTIMENTO_CI_ELECTRON" tests/electron/runtime-smoke.cjs
+          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py production "$PENTIMENTO_CI_ELECTRON" --use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader tests/electron/runtime-smoke.cjs
           sha256sum --check "$RUNNER_TEMP/electron-locks.sha256"
       - name: Preserve runtime qualification evidence
         if: always()
