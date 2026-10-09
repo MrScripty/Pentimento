@@ -19,6 +19,13 @@ Use the root launcher for install, build, run, and verification:
 ./launcher.sh --test
 ```
 
+The root `package-lock.json` and `src-electron/package-lock.json` are tracked
+inputs to reproducible npm installs. Routine bootstrap uses
+`./launcher.sh --install`, which runs `npm ci` without regenerating either
+lockfile. Deliberate dependency updates must regenerate and review the affected
+lockfile alongside its manifest using the Node.js 22/npm 10 CI toolchain. Do not
+delete or regenerate lockfiles to work around a failed install.
+
 ## Frontend Paths
 
 | Frontend | Ownership Model | Status |

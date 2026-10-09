@@ -5,6 +5,8 @@ Cargo.lock
 # Node
 node_modules/
 package-lock.json
+!/package-lock.json
+!/src-electron/package-lock.json
 
 # Build output
 dist/
