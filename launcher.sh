@@ -208,12 +208,21 @@ install_wasm_target() {
     rustup target add wasm32-unknown-unknown
 }
 
+wasm_bindgen_version() {
+    local package_id
+    package_id="$(cd "$PROJECT_ROOT" && cargo pkgid -p wasm-bindgen)" || return 1
+    printf '%s\n' "${package_id##*@}"
+}
+
 check_wasm_bindgen() {
-    command -v wasm-bindgen >/dev/null 2>&1
+    command -v wasm-bindgen >/dev/null 2>&1 &&
+        [[ "$(wasm-bindgen --version)" == "wasm-bindgen $(wasm_bindgen_version)" ]]
 }
 
 install_wasm_bindgen() {
-    cargo install wasm-bindgen-cli
+    local version
+    version="$(wasm_bindgen_version)" || return 1
+    cargo install wasm-bindgen-cli --version "=$version" --locked
 }
 
 check_timeout() {

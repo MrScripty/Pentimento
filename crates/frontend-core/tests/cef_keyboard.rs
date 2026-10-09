@@ -1,4 +1,4 @@
-use pentimento_frontend_core::cef_keyboard::{KeyEventKind, encode_keyboard};
+use pentimento_frontend_core::cef_keyboard::{encode_keyboard, KeyEventKind};
 use pentimento_ipc::{KeyboardEvent, Modifiers};
 
 fn input(code: &str, key: &str, text: Option<&str>) -> KeyboardEvent {

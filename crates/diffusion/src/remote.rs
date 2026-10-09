@@ -3,8 +3,8 @@
 use crate::{DiffusionBackend, DiffusionError, ProgressCallback};
 use futures_util::{SinkExt, StreamExt};
 use pentimento_ipc::DiffusionRequest;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 /// Remote diffusion client that connects to a WebSocket server
