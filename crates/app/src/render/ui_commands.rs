@@ -7,9 +7,9 @@ use pentimento_ipc::{
     UiToBevy,
 };
 use pentimento_scene::{
-    ActiveCanvasPlane, AddObjectEvent, CanvasPlane, CanvasPlaneEvent, DepthViewSettings,
-    GizmoState, MainCamera, MeshEditEvent, OrbitCamera, OutboundUiMessages, PaintingResource,
-    SceneAmbientOcclusion, SceneLighting,
+    ActiveCanvasPlane, AddObjectEvent, CanvasPlane, CanvasPlaneEvent, DepthViewCapability,
+    DepthViewSettings, GizmoState, MainCamera, MeshEditEvent, OrbitCamera, OutboundUiMessages,
+    PaintingResource, SceneAmbientOcclusion, SceneLighting,
 };
 #[cfg(feature = "selection")]
 use pentimento_scene::{Selectable, Selected, SelectionState};
@@ -55,9 +55,18 @@ pub(crate) fn dispatch_ui_commands(
                     ambient_occlusion.update(settings);
                 }
             }
-            UiToBevy::SetDepthView { enabled } => {
+            UiToBevy::GetDepthViewState | UiToBevy::SetDepthView { .. } => {
+                let capability = world
+                    .get_resource::<DepthViewCapability>()
+                    .cloned()
+                    .unwrap_or_default();
                 if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
-                    settings.enabled = enabled;
+                    if let UiToBevy::SetDepthView { enabled } = command {
+                        if let Some(rejection) = capability.set_enabled(&mut settings, enabled) {
+                            outbound_layer_messages.push(rejection);
+                        }
+                    }
+                    outbound_layer_messages.push(capability.state_message(&settings));
                 }
             }
             UiToBevy::PaintCommand(command) => {

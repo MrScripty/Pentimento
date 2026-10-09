@@ -1,5 +1,8 @@
 <script lang="ts">
+    import { onMount } from 'svelte';
     import { bridge } from '$lib/bridge';
+    import { connectDepthView, initialDepthViewState } from '$lib/depth-view';
+    import type { DepthViewController } from '$lib/depth-view';
 
     interface Props {
         renderStats: {
@@ -16,8 +19,20 @@
     // Track selected tool
     let selectedTool = $state<string>('select');
 
-    // Depth view toggle
-    let depthViewEnabled = $state(false);
+    // Only backend messages can change the displayed depth state.
+    let depthView = $state(initialDepthViewState());
+    let depthController: DepthViewController | null = null;
+    let depthViewReason = $derived(depthView.reason ?? (
+        depthView.available ? null : 'Depth view is unavailable.'
+    ));
+
+    onMount(() => {
+        depthController = connectDepthView(bridge, (state) => { depthView = state; });
+        return () => {
+            depthController?.dispose();
+            depthController = null;
+        };
+    });
     let toolbarElement: HTMLElement | null = null;
 
     function handleResetCamera() {
@@ -183,17 +198,19 @@
         <button
             type="button"
             class="tool-button"
-            class:selected={depthViewEnabled}
-            title="Depth View"
+            class:selected={depthView.enabled}
+            title={depthViewReason ?? 'Depth View'}
             aria-label="Toggle depth view"
-            aria-pressed={depthViewEnabled}
-            onclick={() => {
-                depthViewEnabled = !depthViewEnabled;
-                bridge.setDepthView(depthViewEnabled);
-            }}
+            aria-pressed={depthView.enabled}
+            aria-describedby="depth-view-status"
+            disabled={!depthView.available}
+            onclick={() => depthController?.toggle()}
         >
             <span class="icon">D</span>
         </button>
+        <span id="depth-view-status" class="depth-view-status" role="status" hidden={!depthViewReason} title={depthViewReason ?? undefined}>
+            {depthViewReason ?? ''}
+        </span>
         <button type="button" class="nav-button" onclick={handleResetCamera}>Reset Camera</button>
         <div class="stats">
             <span class="stat">{renderStats.fps.toFixed(0)} FPS</span>
@@ -203,6 +220,17 @@
 </header>
 
 <style>
+    .tool-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    .depth-view-status {
+        max-width: 220px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.7);
+    }
+
     .toolbar {
         position: fixed;
         top: 0;
