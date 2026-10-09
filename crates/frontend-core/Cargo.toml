@@ -7,3 +7,6 @@ edition = "2021"
 pentimento-ipc = { path = "../ipc" }
 thiserror = "2.0"
 image = { version = "0.25", default-features = false }
+
+[dev-dependencies]
+serde_json = { workspace = true }

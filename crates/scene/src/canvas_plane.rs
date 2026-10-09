@@ -79,6 +79,12 @@ pub struct CanvasPlaneIdGenerator {
 }
 
 impl CanvasPlaneIdGenerator {
+    pub(crate) fn document_next_id(&self) -> u32 {
+        self.next_id
+    }
+    pub(crate) fn from_document(next_id: u32) -> Self {
+        Self { next_id }
+    }
     /// Generate the next unique plane ID
     pub fn next(&mut self) -> u32 {
         let id = self.next_id;
@@ -132,7 +138,7 @@ impl Plugin for CanvasPlanePlugin {
 }
 
 /// Handle canvas plane events (create, select, deselect, toggle camera lock)
-fn handle_canvas_plane_events(
+pub(crate) fn handle_canvas_plane_events(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -143,9 +149,32 @@ fn handle_canvas_plane_events(
     camera_query: Query<&GlobalTransform, With<MainCamera>>,
     mut orbit_camera_query: Query<&mut OrbitCamera>,
     mut paint_mode: ResMut<PaintMode>,
+    edit_mode: Res<crate::edit_mode::EditModeState>,
     mut outbound: ResMut<OutboundUiMessages>,
 ) {
     for event in events.read() {
+        if paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv {
+            outbound.send(BevyToUi::Error {
+                code: "direct_uv_owns_view".into(),
+                message: "Choose Canvas projection before changing its source canvas or view."
+                    .into(),
+            });
+            continue;
+        }
+        // Do not create a second active brush owner or replace the sculpt UI.
+        // The user must explicitly commit/leave sculpt before entering paint.
+        if edit_mode.mode == EditMode::Sculpt
+            && matches!(
+                event,
+                CanvasPlaneEvent::CreateInFrontOfCamera { .. } | CanvasPlaneEvent::ToggleCameraLock
+            )
+        {
+            outbound.send(BevyToUi::Error {
+                code: "sculpt_session_active".into(),
+                message: "Exit sculpt mode with Ctrl+Tab before entering canvas paint mode.".into(),
+            });
+            continue;
+        }
         match event {
             CanvasPlaneEvent::Create {
                 position,
@@ -279,6 +308,11 @@ fn handle_canvas_plane_events(
 
                 // Enable paint mode and notify UI
                 paint_mode.active = true;
+                paint_mode.target = pentimento_ipc::PaintTarget::Canvas;
+                paint_mode.direct_source_entity = None;
+                paint_mode.direct_source_visibility = None;
+                paint_mode.direct_camera_locked = None;
+                paint_mode.target_notice = None;
                 outbound.send(BevyToUi::EditModeChanged {
                     mode: EditMode::Paint,
                 });
@@ -376,7 +410,11 @@ fn handle_camera_lock_input(
     // (mesh_edit_mode.rs handles Tab for entering/exiting mesh edit mode)
     if key_input.just_pressed(KeyCode::Tab)
         && active_plane.entity.is_some()
-        && edit_mode.mode != EditMode::MeshEdit
+        && !key_input.pressed(KeyCode::ControlLeft)
+        && !key_input.pressed(KeyCode::ControlRight)
+        && !key_input.pressed(KeyCode::ShiftLeft)
+        && !key_input.pressed(KeyCode::ShiftRight)
+        && !matches!(edit_mode.mode, EditMode::MeshEdit | EditMode::Sculpt)
     {
         events.write(CanvasPlaneEvent::ToggleCameraLock);
     }
@@ -420,11 +458,16 @@ fn update_canvas_materials(
 /// deselected, clear ActiveCanvasPlane.
 #[cfg(feature = "selection")]
 fn sync_active_plane_with_selection(
+    paint_mode: Res<PaintMode>,
     mut active_plane: ResMut<ActiveCanvasPlane>,
     added_selected: Query<Entity, (With<CanvasPlane>, Added<Selected>)>,
     mut removed_selected: RemovedComponents<Selected>,
     canvas_query: Query<Entity, With<CanvasPlane>>,
 ) {
+    if paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv {
+        for _ in removed_selected.read() {}
+        return;
+    }
     // When a canvas plane is selected, make it the active plane
     for entity in added_selected.iter() {
         active_plane.entity = Some(entity);
@@ -439,6 +482,172 @@ fn sync_active_plane_with_selection(
             active_plane.entity = None;
             active_plane.camera_locked = false;
             info!("Canvas plane deselected, cleared active plane");
+        }
+    }
+}
+
+#[cfg(test)]
+mod brush_mode_shortcut_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn queued_canvas_events_only_refuse_an_active_direct_uv_owner() {
+        for active in [false, true] {
+            for action in ["select", "deselect", "unlock"] {
+                let mut world = World::new();
+                world.init_resource::<Assets<Mesh>>();
+                world.init_resource::<Assets<StandardMaterial>>();
+                world.init_resource::<Messages<CanvasPlaneEvent>>();
+                world.init_resource::<CanvasPlaneIdGenerator>();
+                world.init_resource::<crate::EditModeState>();
+                world.init_resource::<OutboundUiMessages>();
+                let old = world.spawn(CanvasPlane::new(0, 8, 8, 1., 1.)).id();
+                let next = world.spawn(CanvasPlane::new(1, 8, 8, 1., 1.)).id();
+                world.insert_resource(PaintMode {
+                    active,
+                    target: pentimento_ipc::PaintTarget::DirectUv,
+                    ..default()
+                });
+                world.insert_resource(ActiveCanvasPlane {
+                    entity: Some(old),
+                    camera_locked: true,
+                });
+                world.write_message(match action {
+                    "select" => CanvasPlaneEvent::Select(next),
+                    "deselect" => CanvasPlaneEvent::Deselect,
+                    _ => CanvasPlaneEvent::ToggleCameraLock,
+                });
+                world.run_system_once(handle_canvas_plane_events).unwrap();
+                let plane = world.resource::<ActiveCanvasPlane>();
+                if active {
+                    assert_eq!(plane.entity, Some(old));
+                    assert!(plane.camera_locked);
+                    assert!(
+                        matches!(world.resource::<OutboundUiMessages>().messages.as_slice(), [BevyToUi::Error { code, .. }] if code == "direct_uv_owns_view")
+                    );
+                } else {
+                    assert_eq!(
+                        plane.entity,
+                        match action {
+                            "select" => Some(next),
+                            "deselect" => None,
+                            _ => Some(old),
+                        }
+                    );
+                    assert_eq!(plane.camera_locked, action == "select");
+                    assert!(!world.resource::<PaintMode>().active);
+                    assert!(!world.resource::<OutboundUiMessages>().messages.iter().any(|m| matches!(m, BevyToUi::Error { code, .. } if code == "direct_uv_owns_view")));
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "selection")]
+    #[test]
+    fn canvas_selection_sync_only_refuses_an_active_direct_uv_owner() {
+        for active in [false, true] {
+            let mut world = World::new();
+            let old = world.spawn(CanvasPlane::new(0, 8, 8, 1., 1.)).id();
+            let next = world
+                .spawn((CanvasPlane::new(1, 8, 8, 1., 1.), Selected))
+                .id();
+            world.insert_resource(PaintMode {
+                active,
+                target: pentimento_ipc::PaintTarget::DirectUv,
+                ..default()
+            });
+            world.insert_resource(ActiveCanvasPlane {
+                entity: Some(old),
+                camera_locked: true,
+            });
+            world
+                .run_system_once(sync_active_plane_with_selection)
+                .unwrap();
+            assert_eq!(
+                world.resource::<ActiveCanvasPlane>().entity,
+                Some(if active { old } else { next })
+            );
+            assert_eq!(world.resource::<ActiveCanvasPlane>().camera_locked, active);
+            world.clear_trackers();
+            world.entity_mut(next).remove::<Selected>();
+            world
+                .run_system_once(sync_active_plane_with_selection)
+                .unwrap();
+            assert_eq!(
+                world.resource::<ActiveCanvasPlane>().entity,
+                if active { Some(old) } else { None }
+            );
+        }
+    }
+
+    #[test]
+    fn canvas_paint_entry_does_not_replace_sculpt_owner() {
+        for event in [
+            CanvasPlaneEvent::CreateInFrontOfCamera {
+                width: 32,
+                height: 32,
+            },
+            CanvasPlaneEvent::ToggleCameraLock,
+        ] {
+            let mut world = World::new();
+            world.init_resource::<Assets<Mesh>>();
+            world.init_resource::<Assets<StandardMaterial>>();
+            world.init_resource::<Messages<CanvasPlaneEvent>>();
+            world.init_resource::<CanvasPlaneIdGenerator>();
+            world.init_resource::<PaintMode>();
+            world.init_resource::<OutboundUiMessages>();
+            let entity = world.spawn_empty().id();
+            world.insert_resource(ActiveCanvasPlane {
+                entity: Some(entity),
+                camera_locked: false,
+            });
+            world.insert_resource(crate::EditModeState {
+                mode: EditMode::Sculpt,
+                target_entity: Some(entity),
+            });
+            world.write_message(event);
+            world.run_system_once(handle_canvas_plane_events).unwrap();
+            assert!(!world.resource::<PaintMode>().active);
+            assert_eq!(world.resource::<ActiveCanvasPlane>().entity, Some(entity));
+            assert!(!world.resource::<ActiveCanvasPlane>().camera_locked);
+            assert_eq!(world.resource::<CanvasPlaneIdGenerator>().next_id, 0);
+            assert_eq!(
+                world.resource::<crate::EditModeState>().mode,
+                EditMode::Sculpt
+            );
+            assert_eq!(world.query::<&CanvasPlane>().iter(&world).count(), 0);
+            assert!(matches!(
+                world.resource::<OutboundUiMessages>().messages.as_slice(),
+                [BevyToUi::Error { code, .. }] if code == "sculpt_session_active"
+            ));
+        }
+    }
+
+    #[test]
+    fn modified_tab_does_not_also_toggle_canvas_lock() {
+        for modifier in [Some(KeyCode::ControlLeft), Some(KeyCode::ShiftLeft), None] {
+            let mut world = World::new();
+            world.init_resource::<ButtonInput<KeyCode>>();
+            world.init_resource::<Messages<CanvasPlaneEvent>>();
+            world.init_resource::<crate::EditModeState>();
+            world.init_resource::<FrontendInputBlockState>();
+            world.insert_resource(ActiveCanvasPlane {
+                entity: Some(Entity::PLACEHOLDER),
+                camera_locked: false,
+            });
+            world
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Tab);
+            if let Some(key) = modifier {
+                world.resource_mut::<ButtonInput<KeyCode>>().press(key);
+            }
+            world.run_system_once(handle_camera_lock_input).unwrap();
+            let events: Vec<_> = world
+                .resource_mut::<Messages<CanvasPlaneEvent>>()
+                .drain()
+                .collect();
+            assert_eq!(events.len(), usize::from(modifier.is_none()));
         }
     }
 }

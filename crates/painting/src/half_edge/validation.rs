@@ -1,306 +1,206 @@
-//! Validation methods for HalfEdgeMesh.
-//!
-//! Provides comprehensive mesh validation including:
-//! - Basic connectivity validation
-//! - Manifold property checking
-//! - Topology consistency verification
+//! Validation derives incidence from every live face, independently of ring walks.
+
+use std::collections::{HashMap, HashSet};
 
 use super::HalfEdgeMesh;
-use super::types::HalfEdgeError;
+use super::types::{FaceId, HalfEdgeError, HalfEdgeId, VertexId};
 
 impl HalfEdgeMesh {
-    /// Debug-only mesh connectivity check.
-    ///
-    /// Validates that:
-    /// 1. All vertices with outgoing_half_edge point to valid, non-orphaned half-edges
-    /// 2. All non-orphaned half-edges have consistent next/prev cycles
-    /// 3. All twin relationships are symmetric
-    ///
-    /// Orphaned half-edges (face = None) are skipped - they are expected after collapse operations.
-    #[cfg(debug_assertions)]
-    pub fn validate_connectivity(&self) -> Result<(), String> {
-        // Check all vertices with outgoing_half_edge point to valid half-edges
-        for v in &self.vertices {
-            if let Some(he_id) = v.outgoing_half_edge {
-                let he = self
-                    .half_edge(he_id)
-                    .ok_or_else(|| format!("Vertex {:?}: missing half-edge {:?}", v.id, he_id))?;
-                if he.origin != v.id {
-                    return Err(format!(
-                        "Vertex {:?}: outgoing edge {:?} has wrong origin {:?}",
-                        v.id, he_id, he.origin
-                    ));
-                }
-                if he.face.is_none() {
-                    return Err(format!(
-                        "Vertex {:?}: outgoing edge {:?} is orphaned (face = None)",
-                        v.id, he_id
-                    ));
-                }
+    /// Inspect all live face cycles without modifying the mesh. Tombstones left
+    /// by a collapse are admitted; malformed live geometry is never discarded.
+    pub(crate) fn live_face_cycles(&self) -> Result<Vec<(FaceId, Vec<HalfEdgeId>)>, HalfEdgeError> {
+        let invalid = |reason: &str| HalfEdgeError::InvalidTopology(reason.into());
+        let mut cycles = Vec::new();
+        let mut visited = HashSet::new();
+        let mut directed = HashSet::new();
+        let mut facets = HashSet::new();
+        for (i, face) in self.faces.iter().enumerate() {
+            if face.id != FaceId(i as u32) {
+                return Err(invalid("Face ID/index mismatch"));
             }
-        }
-
-        // Check all half-edges with faces have consistent cycles
-        for he in &self.half_edges {
-            if he.face.is_none() {
-                continue; // Skip orphaned half-edges
-            }
-
-            // next.prev should be self
-            if let Some(next) = self.half_edge(he.next) {
-                if next.prev != he.id {
-                    return Err(format!(
-                        "Half-edge {:?}: next.prev = {:?}, expected {:?}",
-                        he.id, next.prev, he.id
-                    ));
-                }
-            } else {
-                return Err(format!(
-                    "Half-edge {:?}: next {:?} doesn't exist",
-                    he.id, he.next
-                ));
-            }
-
-            // prev.next should be self
-            if let Some(prev) = self.half_edge(he.prev) {
-                if prev.next != he.id {
-                    return Err(format!(
-                        "Half-edge {:?}: prev.next = {:?}, expected {:?}",
-                        he.id, prev.next, he.id
-                    ));
-                }
-            } else {
-                return Err(format!(
-                    "Half-edge {:?}: prev {:?} doesn't exist",
-                    he.id, he.prev
-                ));
-            }
-
-            // twin.twin should be self (if twin exists)
-            if let Some(twin_id) = he.twin {
-                if let Some(twin) = self.half_edge(twin_id) {
-                    if twin.twin != Some(he.id) {
-                        return Err(format!(
-                            "Half-edge {:?}: twin.twin = {:?}, expected Some({:?})",
-                            he.id, twin.twin, he.id
-                        ));
-                    }
-                } else {
-                    return Err(format!(
-                        "Half-edge {:?}: twin {:?} doesn't exist",
-                        he.id, twin_id
-                    ));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// No-op in release builds.
-    #[cfg(not(debug_assertions))]
-    pub fn validate_connectivity(&self) -> Result<(), String> {
-        Ok(())
-    }
-
-    /// Validate the mesh topology.
-    ///
-    /// Skips orphaned half-edges (those with face = None) which are expected
-    /// after collapse operations.
-    pub fn validate(&self) -> Result<(), HalfEdgeError> {
-        // Check twin symmetry (only for non-orphaned half-edges)
-        for he in &self.half_edges {
-            // Skip orphaned half-edges
-            if he.face.is_none() {
+            let first = self
+                .half_edge(face.half_edge)
+                .ok_or_else(|| invalid("Invalid face start"))?;
+            if first.face.is_none() {
                 continue;
             }
-
-            if let Some(twin_id) = he.twin {
-                let twin = self
-                    .half_edge(twin_id)
-                    .ok_or(HalfEdgeError::InvalidTopology(
-                        "Invalid twin reference".into(),
-                    ))?;
-                if twin.twin != Some(he.id) {
-                    return Err(HalfEdgeError::InvalidTopology(
-                        "Twin symmetry violated".into(),
-                    ));
-                }
-            }
-        }
-
-        // Check next/prev cycle for each face
-        for face in &self.faces {
-            let start = face.half_edge;
-
-            // Check if the face's starting half-edge is orphaned (shouldn't happen)
-            if let Some(start_he) = self.half_edge(start) {
-                if start_he.face.is_none() {
-                    // This face was removed via collapse - skip it
-                    continue;
-                }
-            }
-
-            let mut current = start;
-            let mut count = 0;
-
+            let mut edges = Vec::new();
+            let mut vertices = HashSet::new();
+            let mut current = face.half_edge;
             loop {
-                let he = self
+                let edge = self
                     .half_edge(current)
-                    .ok_or(HalfEdgeError::InvalidTopology("Invalid half-edge".into()))?;
-
-                if he.face != Some(face.id) {
-                    return Err(HalfEdgeError::InvalidTopology(
-                        "Half-edge face mismatch".into(),
-                    ));
+                    .ok_or_else(|| invalid("Invalid face half-edge"))?;
+                if edge.id != current || edge.face != Some(face.id) || !visited.insert(current) {
+                    return Err(invalid("Inconsistent or repeated face half-edge"));
                 }
-
-                current = he.next;
-                count += 1;
-
-                if count > 1000 {
-                    return Err(HalfEdgeError::InvalidTopology(
-                        "Infinite loop in face".into(),
-                    ));
+                if self.vertex(edge.origin).is_none_or(|v| v.id != edge.origin)
+                    || !vertices.insert(edge.origin)
+                {
+                    return Err(invalid("Invalid or repeated face vertex"));
                 }
-
-                if current == start {
+                let next = self
+                    .half_edge(edge.next)
+                    .ok_or_else(|| invalid("Invalid next edge"))?;
+                let prev = self
+                    .half_edge(edge.prev)
+                    .ok_or_else(|| invalid("Invalid previous edge"))?;
+                if next.prev != current || prev.next != current {
+                    return Err(invalid("Broken next/previous cycle"));
+                }
+                if !directed.insert((edge.origin, next.origin)) {
+                    return Err(HalfEdgeError::NonManifoldEdge);
+                }
+                edges.push(current);
+                current = edge.next;
+                if current == face.half_edge {
                     break;
                 }
             }
+            if edges.len() < 3 {
+                return Err(invalid("Face has fewer than three vertices"));
+            }
+            // Editable faces are unique facets, not overlapping copies of the
+            // same facet with opposite winding. Such a two-cell surface has
+            // parallel link incidences and cannot be represented after a split.
+            let mut facet: Vec<_> = vertices.into_iter().collect();
+            facet.sort_by_key(|id| id.0);
+            if !facets.insert(facet) {
+                return Err(invalid(
+                    "Duplicate face vertices (including reversed winding)",
+                ));
+            }
+            cycles.push((face.id, edges));
+        }
+        for (i, edge) in self.half_edges.iter().enumerate() {
+            if edge.id != HalfEdgeId(i as u32) {
+                return Err(invalid("Half-edge ID/index mismatch"));
+            }
+            if edge.face.is_some() && !visited.contains(&edge.id) {
+                return Err(invalid("Live half-edge is not reachable from its face"));
+            }
+        }
+        Ok(cycles)
+    }
 
-            if count < 3 {
+    /// Validate live connectivity in every build, including outgoing references,
+    /// edge ownership, complete twin pairing and face next/previous cycles.
+    pub fn validate(&self) -> Result<(), HalfEdgeError> {
+        let cycles = self.live_face_cycles()?;
+        let mut owners = HashMap::new();
+        let mut incident = HashSet::new();
+        for (_, edges) in cycles {
+            for id in edges {
+                let edge = &self.half_edges[id.0 as usize];
+                owners.insert(
+                    (edge.origin, self.half_edges[edge.next.0 as usize].origin),
+                    id,
+                );
+                incident.insert(edge.origin);
+            }
+        }
+        if owners != self.edge_map {
+            return Err(HalfEdgeError::InvalidTopology(
+                "Edge map does not match live faces".into(),
+            ));
+        }
+        for (&(origin, dest), &id) in &owners {
+            if self.half_edges[id.0 as usize].twin != owners.get(&(dest, origin)).copied() {
                 return Err(HalfEdgeError::InvalidTopology(
-                    "Face has fewer than 3 edges".into(),
+                    "Twin pairing does not match live incidence".into(),
                 ));
             }
         }
-
+        for (i, vertex) in self.vertices.iter().enumerate() {
+            if vertex.id != VertexId(i as u32) {
+                return Err(HalfEdgeError::InvalidTopology(
+                    "Vertex ID/index mismatch".into(),
+                ));
+            }
+            let valid_outgoing = vertex
+                .outgoing_half_edge
+                .and_then(|id| self.half_edge(id))
+                .is_some_and(|edge| edge.origin == vertex.id && edge.face.is_some());
+            if incident.contains(&vertex.id) != valid_outgoing
+                || (!incident.contains(&vertex.id) && vertex.outgoing_half_edge.is_some())
+            {
+                return Err(HalfEdgeError::InvalidTopology(
+                    "Invalid outgoing half-edge".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
-    // =========================================================================
-    // Manifold Validation
-    // =========================================================================
+    pub fn validate_connectivity(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
+    }
 
-    /// Check if the mesh is manifold.
-    ///
-    /// A mesh is manifold if:
-    /// 1. Every edge is shared by exactly 1 or 2 faces (boundary or interior)
-    /// 2. Every vertex has a single continuous ring of faces around it
-    /// 3. No self-intersections (not checked here - would require spatial queries)
-    ///
-    /// Returns a detailed error if the mesh is not manifold.
+    /// A manifold vertex has one connected link: a cycle in the interior or a
+    /// path on the boundary. Self-intersection is a separate geometric property.
     pub fn check_manifold(&self) -> Result<(), ManifoldError> {
-        // Check 1: Every edge has at most 2 adjacent faces
-        for he in &self.half_edges {
-            if he.face.is_none() {
-                continue; // Skip orphaned half-edges
-            }
-
-            // If twin exists, it should point back to us
-            if let Some(twin_id) = he.twin {
-                if let Some(twin) = self.half_edge(twin_id) {
-                    if twin.twin != Some(he.id) {
-                        return Err(ManifoldError::NonManifoldEdge {
-                            edge_id: he.id,
-                            reason: "twin symmetry broken".to_string(),
-                        });
-                    }
-                    // Check that twin points in opposite direction
-                    let he_dest = self.get_half_edge_dest(he.id);
-                    if he_dest != Some(twin.origin) {
-                        return Err(ManifoldError::NonManifoldEdge {
-                            edge_id: he.id,
-                            reason: "twin direction mismatch".to_string(),
-                        });
-                    }
-                }
+        self.validate()
+            .map_err(|error| ManifoldError::InvalidTopology(error.to_string()))?;
+        let cycles = self
+            .live_face_cycles()
+            .map_err(|error| ManifoldError::InvalidTopology(error.to_string()))?;
+        // Each face contributes an undirected edge (previous, next) to the link
+        // of each corner. Build from all faces, never from an arbitrary fan seed.
+        let mut links: HashMap<VertexId, HashMap<VertexId, Vec<VertexId>>> = HashMap::new();
+        let mut face_counts: HashMap<VertexId, usize> = HashMap::new();
+        for (_, edges) in cycles {
+            for id in edges {
+                let edge = &self.half_edges[id.0 as usize];
+                let prev = self.half_edges[edge.prev.0 as usize].origin;
+                let next = self.half_edges[edge.next.0 as usize].origin;
+                let link = links.entry(edge.origin).or_default();
+                link.entry(prev).or_default().push(next);
+                link.entry(next).or_default().push(prev);
+                *face_counts.entry(edge.origin).or_default() += 1;
             }
         }
-
-        // Check 2: Every vertex has a continuous ring of faces
-        // This is checked by ensuring ring_vertices.len() matches ring_faces.len()
-        // for interior vertices
-        for vertex in &self.vertices {
-            if vertex.outgoing_half_edge.is_none() {
-                continue; // Skip orphaned vertices
-            }
-
-            let ring_vertices = self.get_adjacent_vertices(vertex.id);
-            let ring_faces = self.get_vertex_faces(vertex.id);
-
-            // For interior vertices: ring_vertices == ring_faces
-            // For boundary vertices: ring_vertices == ring_faces + 1
-            let is_boundary = self.is_boundary_vertex(vertex.id);
-
-            if !ring_vertices.is_empty() && !ring_faces.is_empty() {
-                let expected_diff = if is_boundary { 1 } else { 0 };
-                let actual_diff = ring_vertices.len().saturating_sub(ring_faces.len());
-
-                if actual_diff != expected_diff && actual_diff != 0 {
-                    return Err(ManifoldError::NonManifoldVertex {
-                        vertex_id: vertex.id,
-                        ring_vertices: ring_vertices.len(),
-                        ring_faces: ring_faces.len(),
-                        is_boundary,
-                    });
+        for (vertex, link) in links {
+            let ends = link
+                .values()
+                .filter(|neighbors| neighbors.len() == 1)
+                .count();
+            let is_boundary = ends != 0;
+            let mut visited = HashSet::new();
+            let mut stack = vec![*link.keys().next().unwrap()];
+            while let Some(neighbor) = stack.pop() {
+                if visited.insert(neighbor) {
+                    stack.extend(link[&neighbor].iter().copied());
                 }
             }
-        }
-
-        // Check 3: All vertices have valence >= 3 (except isolated vertices)
-        for vertex in &self.vertices {
-            if vertex.outgoing_half_edge.is_none() {
-                continue;
-            }
-
-            let valence = self.get_adjacent_vertices(vertex.id).len();
-            if valence > 0 && valence < 3 {
-                return Err(ManifoldError::InvalidValence {
-                    vertex_id: vertex.id,
-                    valence,
+            if visited.len() != link.len()
+                || (ends != 0 && ends != 2)
+                || link
+                    .values()
+                    .any(|neighbors| neighbors.is_empty() || neighbors.len() > 2)
+            {
+                return Err(ManifoldError::NonManifoldVertex {
+                    vertex_id: vertex,
+                    ring_vertices: link.len(),
+                    ring_faces: face_counts[&vertex],
+                    is_boundary,
                 });
             }
         }
-
         Ok(())
     }
 
-    /// Quick check if the mesh appears to be manifold (fast heuristic).
-    ///
-    /// This is faster than `check_manifold()` but may miss some issues.
-    /// Good for runtime checks during tessellation.
+    /// Compatibility predicate. This now checks complete incidence; sampling two
+    /// traversals of the same fan cannot establish manifoldness.
     pub fn is_likely_manifold(&self) -> bool {
-        // Quick check: sample a few vertices for ring condition
-        let sample_size = (self.vertices.len() / 10).max(5).min(self.vertices.len());
-
-        for i in 0..sample_size {
-            let vertex = &self.vertices[i];
-            if vertex.outgoing_half_edge.is_none() {
-                continue;
-            }
-
-            let ring_v = self.get_adjacent_vertices(vertex.id).len();
-            let ring_f = self.get_vertex_faces(vertex.id).len();
-
-            // Interior vertex should have ring_v == ring_f
-            // Boundary vertex should have ring_v == ring_f + 1
-            if ring_v > 0 && ring_f > 0 {
-                let diff = ring_v.saturating_sub(ring_f);
-                if diff > 1 {
-                    return false;
-                }
-            }
-        }
-
-        true
+        self.check_manifold().is_ok()
     }
 }
 
 /// Error types for manifold validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ManifoldError {
+    /// Live face connectivity is malformed.
+    InvalidTopology(String),
     /// An edge is shared by more than 2 faces
     NonManifoldEdge {
         edge_id: super::types::HalfEdgeId,
@@ -323,6 +223,7 @@ pub enum ManifoldError {
 impl std::fmt::Display for ManifoldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidTopology(reason) => write!(f, "Invalid topology: {reason}"),
             Self::NonManifoldEdge { edge_id, reason } => {
                 write!(f, "Non-manifold edge {:?}: {}", edge_id, reason)
             }

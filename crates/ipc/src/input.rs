@@ -38,7 +38,14 @@ pub enum MouseButton {
 /// Keyboard input event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardEvent {
+    /// Existing key name used by frontend adapters.
     pub key: String,
+    /// Physical native key (Bevy/DOM code name), independent of typed text.
+    #[serde(default)]
+    pub code: String,
+    /// Layout-correct text produced by the native keypress, when available.
+    #[serde(default)]
+    pub text: Option<String>,
     pub pressed: bool,
     pub modifiers: Modifiers,
 }
@@ -50,4 +57,7 @@ pub struct Modifiers {
     pub ctrl: bool,
     pub alt: bool,
     pub meta: bool,
+    /// Native AltGraph differs from an ordinary Alt/Ctrl shortcut.
+    #[serde(default)]
+    pub alt_graph: bool,
 }

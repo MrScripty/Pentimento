@@ -3,8 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{
-    AddPaintCanvasRequest, CameraCommand, EditMode, GizmoCommand, GizmoMode, LayerInfo,
-    MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand, PaintCommand,
+    AddPaintCanvasRequest, CameraCommand, ColorSampleSource, EditMode, GizmoCommand, GizmoMode,
+    LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool, MeshSelectionMode, ObjectCommand,
+    PaintBrushPresetInfo, PaintBrushSettings, PaintCommand, PaintTargetState, SculptBrushSettings,
+    SculptCommand,
 };
 use crate::types::{
     AddObjectRequest, AmbientOcclusionSettings, AppSettings, DiffusionRequest, LayoutInfo,
@@ -15,6 +17,18 @@ use crate::types::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum BevyToUi {
+    ProjectStateChanged {
+        path: Option<String>,
+        available: bool,
+        active: bool,
+        blocked: bool,
+        notice: Option<String>,
+    },
+    ProjectOperationFinished {
+        operation: String,
+        success: bool,
+        message: String,
+    },
     /// Authoritative optional depth-view capability and current state.
     DepthViewState {
         available: bool,
@@ -92,6 +106,45 @@ pub enum BevyToUi {
     /// Projection mode changed
     ProjectionModeChanged { live_projection: bool },
 
+    /// Authoritative settings and supported paint presets.
+    PaintBrushStateChanged {
+        settings: PaintBrushSettings,
+        presets: Vec<PaintBrushPresetInfo>,
+        can_undo: bool,
+        can_redo: bool,
+        source_visible: bool,
+        #[serde(default)]
+        target: PaintTargetState,
+    },
+    PaintColorSamplingChanged {
+        enabled: bool,
+        source: ColorSampleSource,
+        active: bool,
+    },
+
+    /// None means sculpting is unavailable in this build.
+    SculptBrushStateChanged {
+        settings: Option<SculptBrushSettings>,
+    },
+    /// Device-local named presets; paint and sculpt IDs are separate namespaces.
+    SavedBrushPresetsChanged {
+        paint: Vec<PaintBrushPresetInfo>,
+        sculpt: Vec<PaintBrushPresetInfo>,
+        selected_paint: Option<u32>,
+        selected_sculpt: Option<u32>,
+        active: bool,
+        available: bool,
+        notice: Option<String>,
+    },
+
+    /// Authoritative local sculpt history availability, including transaction lock.
+    SculptHistoryChanged {
+        undo_strokes: usize,
+        redo_strokes: usize,
+        active: bool,
+        notice: Option<String>,
+    },
+
     /// Mesh edit mode state changed
     MeshEditModeChanged {
         /// Whether mesh edit mode is active
@@ -123,11 +176,17 @@ pub enum BevyToUi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum UiToBevy {
+    ProjectCommand(ProjectCommand),
     /// UI has rendered and needs capture
     UiDirty,
 
     /// UI layout changed (for input routing)
     LayoutUpdate(LayoutInfo),
+
+    /// Browser text/widget focus owns keyboard shortcuts.
+    SetUiInputCapture {
+        keyboard: bool,
+    },
 
     /// Camera control commands
     CameraCommand(CameraCommand),
@@ -142,7 +201,9 @@ pub enum UiToBevy {
     StartDiffusion(DiffusionRequest),
 
     /// Cancel diffusion generation
-    CancelDiffusion { task_id: String },
+    CancelDiffusion {
+        task_id: String,
+    },
 
     /// Settings changed
     UpdateSettings(AppSettings),
@@ -168,6 +229,12 @@ pub enum UiToBevy {
     /// Paint-specific commands (brush settings, undo, etc.)
     PaintCommand(PaintCommand),
 
+    /// Synchronize controls after UI mount/reload or mode change.
+    RequestBrushState,
+
+    /// Sculpt brush configuration.
+    SculptCommand(SculptCommand),
+
     /// Mesh edit mode commands
     MeshEditCommand(MeshEditCommand),
 
@@ -175,5 +242,14 @@ pub enum UiToBevy {
     GetDepthViewState,
 
     /// Toggle depth view mode
-    SetDepthView { enabled: bool },
+    SetDepthView {
+        enabled: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProjectCommand {
+    GetState,
+    Save { path: String },
+    Open { path: String },
 }

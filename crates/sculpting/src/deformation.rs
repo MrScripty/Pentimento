@@ -167,7 +167,7 @@ pub fn apply_grab(
         }
 
         let normalized_dist = distance / dab.radius;
-        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness);
+        let strength = falloff.evaluate_with_hardness(normalized_dist, dab.hardness) * dab.strength;
 
         // Move along stroke direction
         let displacement = stroke_delta * strength;
@@ -552,6 +552,25 @@ pub fn apply_deformation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grab_respects_strength_including_zero() {
+        let mut mesh =
+            HalfEdgeMesh::from_raw(Vec::new(), Vec::new(), Vec::new(), Default::default());
+        let vertex = mesh.add_vertex(Vec3::ZERO, Vec3::Y, None);
+        let mut dab = DabInfo {
+            position: Vec3::ZERO,
+            normal: Vec3::Y,
+            radius: 1.0,
+            strength: 0.0,
+            hardness: 1.0,
+        };
+        apply_grab(&mut mesh, &[vertex], &dab, FalloffCurve::Constant, Vec3::X);
+        assert_eq!(mesh.vertex(vertex).unwrap().position, Vec3::ZERO);
+        dab.strength = 0.25;
+        apply_grab(&mut mesh, &[vertex], &dab, FalloffCurve::Constant, Vec3::X);
+        assert_eq!(mesh.vertex(vertex).unwrap().position, Vec3::X * 0.25);
+    }
 
     #[test]
     fn test_falloff_affects_displacement() {

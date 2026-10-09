@@ -227,7 +227,7 @@ impl Default for TessellationConfig {
 /// Configuration for mesh chunk sizing.
 ///
 /// Values are configurable and should not be treated as magic numbers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkConfig {
     /// Below this face count, consider merging with neighbor (default: 5000)
     pub min_faces: usize,

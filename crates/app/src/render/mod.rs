@@ -35,6 +35,8 @@ use pentimento_scene::OutboundUiMessages;
 #[cfg(feature = "dioxus")]
 mod ui_blend_material;
 mod ui_commands;
+#[cfg(test)]
+pub(crate) use ui_commands::dispatch_ui_commands;
 #[cfg(feature = "dioxus")]
 mod ui_dioxus;
 #[cfg(feature = "egui")]
@@ -74,6 +76,7 @@ pub struct UiOverlay;
 pub struct FrontendStatus {
     pub initialized: bool,
     pub first_capture_done: bool,
+    pub first_painted_capture_done: bool,
     pub last_capture: Instant,
     /// Current composite mode
     pub mode: CompositeMode,
@@ -84,6 +87,7 @@ impl Default for FrontendStatus {
         Self {
             initialized: false,
             first_capture_done: false,
+            first_painted_capture_done: false,
             last_capture: Instant::now(),
             mode: CompositeMode::default(),
         }
@@ -416,8 +420,20 @@ fn upload_texture_data(
     height: u32,
     status: &mut FrontendStatus,
 ) {
+    // The first CEF OnPaint can be fully transparent. Preserve that receipt,
+    // and independently wait for the first nonempty frame actually uploaded.
+    let non_transparent = if !status.first_capture_done || !status.first_painted_capture_done {
+        data.chunks_exact(4).filter(|pixel| pixel[3] > 0).count()
+    } else {
+        0
+    };
+    let valid_capture = width > 0
+        && height > 0
+        && (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            == Some(data.len());
     if !status.first_capture_done {
-        let non_transparent = data.chunks(4).filter(|p| p.len() == 4 && p[3] > 0).count();
         info!(
             "First capture ({:?} mode): {}x{}, non-transparent pixels: {}",
             status.mode, width, height, non_transparent
@@ -444,6 +460,13 @@ fn upload_texture_data(
 
         // Copy pixel data
         image.data = Some(data);
+        if !status.first_painted_capture_done && valid_capture && non_transparent > 0 {
+            info!(
+                "First painted capture ({:?} mode): {}x{}, non-transparent pixels: {}",
+                status.mode, width, height, non_transparent
+            );
+            status.first_painted_capture_done = true;
+        }
     }
 }
 
@@ -635,5 +658,49 @@ impl Plugin for RenderPlugin {
                 info!("Render plugin: Tauri mode - no native render setup needed");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod framebuffer_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn transparent_first_capture_does_not_preclude_later_painted_receipt() {
+        let mut images = Assets::<Image>::default();
+        let handle = images.add(Image::default());
+        let mut status = FrontendStatus::default();
+        upload_texture_data(&mut images, &handle, vec![0; 8], 2, 1, &mut status);
+        assert!(status.first_capture_done);
+        assert!(!status.first_painted_capture_done);
+        assert_eq!(
+            images.get(&handle).unwrap().data.as_deref(),
+            Some(&[0; 8][..])
+        );
+
+        let painted = vec![20, 30, 40, 255, 0, 0, 0, 0];
+        upload_texture_data(&mut images, &handle, painted.clone(), 2, 1, &mut status);
+        assert!(status.first_painted_capture_done);
+        assert_eq!(images.get(&handle).unwrap().data.as_ref(), Some(&painted));
+        upload_texture_data(&mut images, &handle, vec![0; 8], 2, 1, &mut status);
+        assert!(status.first_painted_capture_done);
+    }
+
+    #[test]
+    fn missing_texture_or_invalid_frame_cannot_emit_painted_receipt() {
+        let mut images = Assets::<Image>::default();
+        let mut status = FrontendStatus::default();
+        upload_texture_data(
+            &mut images,
+            &Handle::default(),
+            vec![255; 8],
+            2,
+            1,
+            &mut status,
+        );
+        assert!(!status.first_painted_capture_done);
+        let handle = images.add(Image::default());
+        upload_texture_data(&mut images, &handle, vec![255; 4], 2, 1, &mut status);
+        assert!(!status.first_painted_capture_done);
     }
 }

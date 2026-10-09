@@ -95,6 +95,8 @@ The verification suite currently enforces:
 
 - active source-directory README coverage
 - active frontend Rust formatting
+- CPU sculpt topology, UV-seam, tessellation, and render-asset synchronization tests
+- combined projection, brush-control, and sculpt mode-transition engine tests
 - sculpting library unit tests, including the v1 normal codec and brush packets
 - Svelte accessibility linting
 - TypeScript typechecking for the browser and Electron shells
@@ -102,6 +104,12 @@ The verification suite currently enforces:
 - Rust-to-JavaScript IPC acceptance coverage
 - warning-free cargo checks for the CEF, Dioxus, egui, WASM, and shared native
   UI crates
+
+For the focused integration gate and required rendered CEF acceptance, see
+[paint/sculpt qualification](docs/paint-sculpt-qualification.md).
+
+Local File Save/Open and the bounded, lossless editable document subset are
+described in [project format v1](docs/project-format-v1.md).
 
 ## Project Structure
 

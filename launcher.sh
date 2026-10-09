@@ -483,6 +483,7 @@ run_verification_suite() {
         ./scripts/check-source-readmes.sh --all
         ./scripts/rustfmt-active.sh --check
         cargo test --locked -p sculpting --lib
+        ./scripts/test-paint-sculpt-tools.sh --engine-only
         npm run verify
         build_ui
         # Discover every format regression with selection enabled (outline is feature-gated).

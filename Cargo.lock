@@ -7850,6 +7850,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -8058,6 +8059,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "pentimento-ipc",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -8079,6 +8081,8 @@ dependencies = [
  "painting",
  "pentimento-ipc",
  "sculpting",
+ "serde",
+ "serde_json",
  "wgpu",
 ]
 

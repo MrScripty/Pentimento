@@ -8,6 +8,7 @@ frontend implementations depend on at runtime.
 | File/Folder | Description |
 |-------------|-------------|
 | `lib.rs` | Public facade for shared frontend abstractions and contracts. |
+| `cef_keyboard.rs` | Framework-independent Linux CEF virtual-key and UTF-16 text encoding. |
 | `native_state.rs` | Shared native frontend snapshot state and backend message application helpers. |
 
 ## Problem
@@ -63,6 +64,7 @@ apply_native_ui_message(&mut state, &pentimento_ipc::BevyToUi::CloseMenus);
   state; callers own rendering and side effects.
 
 ## Structured Producer Contract
-- Produces in-process snapshot values only.
+- Produces in-process snapshot values and CEF keyboard event values.
+- Keyboard encoding keeps physical virtual keys separate from native text; shortcuts emit no printable characters. Native scan-code fidelity and IME lifecycle remain outside this encoder.
 - Field semantics mirror the relevant `crates/ipc::BevyToUi` messages.
 - No persisted artifact or versioned external schema is produced here.

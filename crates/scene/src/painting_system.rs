@@ -21,6 +21,10 @@ use pentimento_ipc::{BevyToUi, BlendMode as IpcBlendMode, LayerInfo};
 use crate::canvas_plane::{ActiveCanvasPlane, CanvasPlane};
 use crate::paint_mode::PaintEvent;
 
+#[cfg(test)]
+#[path = "paint_input_batch_tests.rs"]
+mod paint_input_batch_tests;
+
 /// Resource holding painting pipelines for each canvas plane
 ///
 /// Each canvas plane gets its own painting pipeline, indexed by plane_id.
@@ -43,6 +47,59 @@ impl Default for PaintingResource {
 }
 
 impl PaintingResource {
+    pub(crate) fn restore_document_layers(
+        &mut self,
+        id: u32,
+        layers: painting::layer::LayerStackDocument,
+    ) -> Result<(), String> {
+        let width = layers.width;
+        let height = layers.height;
+        let restored = layers.restore()?;
+        let mut pipeline = PaintingPipeline::new(width, height);
+        pipeline.set_brush(self.brush_preset.clone());
+        pipeline.set_color(self.brush_color);
+        pipeline.set_blend_mode(self.blend_mode);
+        pipeline.layers = restored;
+        self.pipelines.insert(id, pipeline);
+        Ok(())
+    }
+    /// Sample straight RGB synchronously at the ordered input press. This read
+    /// never creates a pipeline, dirties tiles, logs a packet or changes history.
+    pub fn sample_brush_color(
+        &mut self,
+        canvas: &CanvasPlane,
+        uv: Vec2,
+        source: pentimento_ipc::ColorSampleSource,
+    ) -> bool {
+        if self.has_active_stroke()
+            || canvas.width == 0
+            || canvas.height == 0
+            || !uv.is_finite()
+            || !(0.0..=1.0).contains(&uv.x)
+            || !(0.0..=1.0).contains(&uv.y)
+        {
+            return false;
+        }
+        let x = ((uv.x * canvas.width as f32).floor() as u32).min(canvas.width - 1);
+        let y = ((uv.y * canvas.height as f32).floor() as u32).min(canvas.height - 1);
+        let rgb = self.get_pipeline(canvas.plane_id).and_then(|p| {
+            p.layers.sample_color(
+                x,
+                y,
+                source == pentimento_ipc::ColorSampleSource::VisibleLayers,
+            )
+        });
+        if let Some(rgb) = rgb {
+            self.set_brush_color([rgb[0], rgb[1], rgb[2], self.brush_color[3]]);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn has_active_stroke(&self) -> bool {
+        self.pipelines.values().any(PaintingPipeline::is_stroking)
+    }
     /// Create a new painting resource
     pub fn new() -> Self {
         Self {
@@ -124,6 +181,13 @@ impl PaintingResource {
         } else {
             false
         }
+    }
+
+    /// Redo the last undone stroke on the requested canvas only.
+    pub fn redo(&mut self, plane_id: u32) -> bool {
+        self.pipelines
+            .get_mut(&plane_id)
+            .is_some_and(|pipeline| pipeline.redo())
     }
 
     /// Undo the last stroke on any pipeline that has undo available
@@ -240,7 +304,7 @@ impl Plugin for PaintingSystemPlugin {
                 Update,
                 (
                     setup_canvas_textures,
-                    process_paint_events,
+                    process_paint_events.after(crate::paint_mode::handle_paint_input),
                     extract_dirty_tiles,
                 )
                     .chain(),

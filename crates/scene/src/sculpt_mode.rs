@@ -9,11 +9,15 @@
 use bevy::ecs::message::Message;
 use bevy::input::mouse::MouseButton;
 use bevy::math::{Affine3A, Isometry3d};
-use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow};
+#[cfg(test)]
+use bevy::window::CursorMoved;
+use bevy::window::{PrimaryWindow, WindowEvent};
 use painting::half_edge::HalfEdgeMesh;
-use pentimento_ipc::{BevyToUi, EditMode};
+use pentimento_ipc::{
+    BevyToUi, EditMode, SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool,
+};
 use sculpting::{
     BrushInput, BrushPreset, ChunkConfig, ChunkedMesh, DeformationType, FalloffCurve,
     PipelineConfig, ScreenSpaceConfig, SculptingPipeline, TessellationConfig, TessellationMode,
@@ -52,12 +56,14 @@ pub struct SculptState {
     pub target_entity: Option<Entity>,
     /// Current deformation type
     pub deformation_type: DeformationType,
-    /// Brush radius in world units
+    /// Brush radius in mesh-local units
     pub brush_radius: f32,
     /// Brush strength (0.0 - 1.0)
     pub brush_strength: f32,
     /// Brush hardness (0.0 - 1.0). Defines the inner zone of full strength.
     pub brush_hardness: f32,
+    /// Explicit post-dab smoothing override; None preserves existing tool defaults.
+    pub brush_autosmooth: Option<f32>,
     /// Falloff curve type for the brush
     pub brush_falloff: FalloffCurve,
     /// Tessellation configuration
@@ -76,6 +82,8 @@ pub struct SculptState {
     pub adjust_start_cursor: Option<Vec2>,
     /// Starting value when adjustment began
     pub adjust_start_value: f32,
+    /// A brush-adjustment confirmation owns its whole left-button press.
+    pub suppress_left_until_release: bool,
 }
 
 impl Default for SculptState {
@@ -87,6 +95,7 @@ impl Default for SculptState {
             brush_radius: 0.5,
             brush_strength: 1.0,
             brush_hardness: 0.5,
+            brush_autosmooth: None,
             brush_falloff: FalloffCurve::Smooth,
             tessellation_config: TessellationConfig::default(),
             chunk_config: ChunkConfig::default(),
@@ -96,6 +105,7 @@ impl Default for SculptState {
             adjust_mode: BrushAdjustMode::None,
             adjust_start_cursor: None,
             adjust_start_value: 0.0,
+            suppress_left_until_release: false,
         }
     }
 }
@@ -121,18 +131,19 @@ pub struct SculptingData {
     /// Vertex positions in HalfEdgeMesh are in local space; this matrix
     /// is needed to correctly compute screen-space edge lengths.
     pub model_matrix: Option<Mat4>,
-    /// Cached vertex mapping from merge (original_id → unified_id).
-    /// Used for position-only GPU updates without full re-merge.
-    pub cached_vertex_mapping: Option<
-        std::collections::HashMap<painting::half_edge::VertexId, painting::half_edge::VertexId>,
-    >,
+    /// Original topological vertex → every emitted render vertex (UV corners).
+    /// Used for position-only GPU updates without splitting sculpt seams.
+    pub cached_vertex_mapping:
+        Option<std::collections::HashMap<painting::half_edge::VertexId, Vec<usize>>>,
 }
 
 /// Message for sculpt mode events
 #[derive(Message, Debug, Clone)]
 pub enum SculptEvent {
     /// Enter sculpt mode for the specified entity
-    Enter { entity: Entity },
+    Enter {
+        entity: Entity,
+    },
     /// Exit sculpt mode
     Exit,
     /// Set the deformation type
@@ -163,6 +174,8 @@ pub enum SculptEvent {
     StrokeEnd,
     /// Cancel a sculpt stroke
     StrokeCancel,
+    Undo,
+    Redo,
 }
 
 /// Plugin for sculpt mode functionality
@@ -346,6 +359,25 @@ fn handle_sculpt_mode_hotkey(
     // Check for Ctrl modifier
     let ctrl = key_input.pressed(KeyCode::ControlLeft) || key_input.pressed(KeyCode::ControlRight);
     let tab = key_input.just_pressed(KeyCode::Tab);
+    if edit_mode.mode == EditMode::Sculpt {
+        if key_input.just_pressed(KeyCode::Escape) {
+            events.write(SculptEvent::StrokeCancel);
+        }
+        if ctrl && key_input.just_pressed(KeyCode::KeyZ) {
+            let shift =
+                key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight);
+            events.write(if shift {
+                SculptEvent::Redo
+            } else {
+                SculptEvent::Undo
+            });
+            return;
+        }
+        if ctrl && key_input.just_pressed(KeyCode::KeyY) {
+            events.write(SculptEvent::Redo);
+            return;
+        }
+    }
 
     if !ctrl || !tab {
         return;
@@ -461,6 +493,9 @@ fn handle_brush_adjustment(
 
         // Confirm with Enter or Left Click
         if key_input.just_pressed(KeyCode::Enter) || mouse_button.just_pressed(MouseButton::Left) {
+            // The next chained system sees this same ButtonInput. Keep the
+            // confirmation press consumed until release, even after this mode ends.
+            sculpt_state.suppress_left_until_release = mouse_button.just_pressed(MouseButton::Left);
             match sculpt_state.adjust_mode {
                 BrushAdjustMode::Radius => {
                     info!("Brush radius set to {:.2}", sculpt_state.brush_radius);
@@ -517,115 +552,153 @@ fn handle_brush_adjustment(
     }
 }
 
-/// Handle mouse input for sculpting
+/// Handle ordered pointer samples without dropping press/release-frame motion.
 fn handle_sculpt_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut cursor_events: MessageReader<CursorMoved>,
+    mut window_events: MessageReader<WindowEvent>,
+    mut last_cursor: Local<(Option<Vec2>, u64)>,
+    project: Option<Res<crate::project::ProjectState>>,
     camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
     meshes: Res<Assets<Mesh>>,
-    sculpt_state: Res<SculptState>,
+    mut sculpt_state: ResMut<SculptState>,
     mut stroke_id_gen: ResMut<StrokeIdGenerator>,
     mut sculpt_events: MessageWriter<SculptEvent>,
-    time: Res<Time>,
     input_blocks: Res<FrontendInputBlockState>,
 ) {
-    if input_blocks.blocks_pointer() {
-        cursor_events.clear();
+    let generation = project.as_ref().map_or(0, |p| p.generation);
+    if last_cursor.1 != generation {
+        *last_cursor = (None, generation);
+    }
+    let Ok((window_entity, window)) = windows.single() else {
+        window_events.clear();
         return;
+    };
+    // Read our own ordered stream. Other frontend/scene readers retain theirs.
+    // Track hover even during blocked or inactive frames, but never replay it.
+    let batch: Vec<_> = window_events.read().cloned().collect();
+    let prior_cursor = last_cursor.0;
+    let mut cursor = prior_cursor;
+    let mut has_cursor_event = false;
+    for event in &batch {
+        if let WindowEvent::CursorMoved(event) = event {
+            if event.window == window_entity {
+                last_cursor.0 = Some(event.position);
+                has_cursor_event = true;
+            }
+        }
+    }
+    // If no movement occurred this frame, Window's position is a valid fallback
+    // for a press. With later moves, its final position cannot identify origin.
+    if cursor.is_none() && !has_cursor_event {
+        cursor = window.cursor_position();
     }
 
-    // Only process if sculpt mode is active
-    if !sculpt_state.active {
+    if sculpt_state.suppress_left_until_release {
+        if sculpt_state.current_stroke_id.is_some() {
+            sculpt_events.write(SculptEvent::StrokeEnd);
+        }
+        if !mouse_button.pressed(MouseButton::Left) {
+            sculpt_state.suppress_left_until_release = false;
+        }
         return;
     }
-
-    // Don't process sculpting while adjusting brush parameters
-    if sculpt_state.adjust_mode != BrushAdjustMode::None {
-        // Consume cursor events to prevent them from accumulating
-        cursor_events.read().for_each(drop);
+    if input_blocks.blocks_pointer() || !window.focused {
+        if sculpt_state.current_stroke_id.is_some() {
+            sculpt_events.write(SculptEvent::StrokeEnd);
+        }
         return;
     }
-
+    if !sculpt_state.active || sculpt_state.adjust_mode != BrushAdjustMode::None {
+        return;
+    }
     let Some(target_entity) = sculpt_state.target_entity else {
         return;
     };
-
-    // Get camera for ray casting
     let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
-
-    // Get window for cursor position
-    let Ok((window_entity, window)) = windows.single() else {
-        return;
-    };
-
-    // Get target mesh
     let Ok((mesh_handle, mesh_transform)) = mesh_query.get(target_entity) else {
         return;
     };
-
     let Some(mesh) = meshes.get(&mesh_handle.0) else {
         return;
     };
+    let hit = |position| {
+        camera
+            .viewport_to_world(camera_transform, position)
+            .ok()
+            .and_then(|ray| ray_mesh_intersection_simple(&ray, mesh, mesh_transform))
+    };
 
-    // Collect cursor positions from this frame
-    let cursor_positions: Vec<Vec2> = cursor_events
-        .read()
-        .filter(|e| e.window == window_entity)
-        .map(|e| e.position)
-        .collect();
-
-    let _current_time = time.elapsed_secs_f64();
-
-    // Handle stroke start
-    if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions
-            .last()
-            .copied()
-            .or_else(|| window.cursor_position());
-        if let Some(cursor_pos) = cursor_pos {
-            if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                if let Some((world_pos, normal)) =
-                    ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
-                {
-                    let stroke_id = stroke_id_gen.next();
-                    sculpt_events.write(SculptEvent::StrokeStart {
-                        world_pos,
-                        normal,
-                        stroke_id,
-                    });
+    // Event handling follows after this system, so a stroke started in this
+    // batch is tracked locally until its queued Start/Move/End events execute.
+    let mut stroke_open = sculpt_state.current_stroke_id.is_some();
+    let mut began_this_frame = false;
+    let mut moved_this_frame = false;
+    let mut focus_lost = false;
+    for event in batch {
+        match event {
+            WindowEvent::CursorMoved(event) if event.window == window_entity => {
+                cursor = Some(event.position);
+                if stroke_open {
+                    if let Some((world_pos, normal)) = hit(event.position) {
+                        sculpt_events.write(SculptEvent::StrokeMove {
+                            world_pos,
+                            normal,
+                            pressure: 1.,
+                        });
+                        moved_this_frame = true;
+                    }
                 }
             }
-        }
-    } else if mouse_button.pressed(MouseButton::Left) && sculpt_state.current_stroke_id.is_some() {
-        // Continue stroke
-        let positions_to_process: Vec<Vec2> = if !cursor_positions.is_empty() {
-            cursor_positions
-        } else if let Some(pos) = window.cursor_position() {
-            vec![pos]
-        } else {
-            vec![]
-        };
-
-        for cursor_pos in positions_to_process {
-            if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                if let Some((world_pos, normal)) =
-                    ray_mesh_intersection_simple(&ray, mesh, mesh_transform)
-                {
-                    sculpt_events.write(SculptEvent::StrokeMove {
-                        world_pos,
-                        normal,
-                        pressure: 1.0, // No pressure sensitivity for mouse
-                    });
+            WindowEvent::MouseButtonInput(event)
+                if event.window == window_entity && event.button == MouseButton::Left =>
+            {
+                if event.state == bevy::input::ButtonState::Pressed {
+                    if !stroke_open && !focus_lost {
+                        if let Some((world_pos, normal)) = cursor.and_then(hit) {
+                            sculpt_events.write(SculptEvent::StrokeStart {
+                                world_pos,
+                                normal,
+                                stroke_id: stroke_id_gen.next(),
+                            });
+                            stroke_open = true;
+                            began_this_frame = true;
+                        }
+                    }
+                } else if stroke_open {
+                    sculpt_events.write(SculptEvent::StrokeEnd);
+                    stroke_open = false;
                 }
             }
+            WindowEvent::WindowFocused(event) if event.window == window_entity => {
+                focus_lost = !event.focused;
+                if focus_lost {
+                    if stroke_open {
+                        sculpt_events.write(SculptEvent::StrokeEnd);
+                    }
+                    stroke_open = false;
+                    cursor = None;
+                    last_cursor.0 = None;
+                }
+            }
+            _ => {}
         }
-    } else if mouse_button.just_released(MouseButton::Left) {
-        if sculpt_state.current_stroke_id.is_some() {
-            sculpt_events.write(SculptEvent::StrokeEnd);
+    }
+    if stroke_open && !mouse_button.pressed(MouseButton::Left) {
+        // Account for a host reset (e.g. focus loss) without a release message.
+        sculpt_events.write(SculptEvent::StrokeEnd);
+    } else if stroke_open && !began_this_frame && !moved_this_frame {
+        // Keep the established stationary-stroke behavior without duplicating
+        // sampled movement or resurrecting a stroke after its release.
+        if let Some((world_pos, normal)) = cursor.and_then(hit) {
+            sculpt_events.write(SculptEvent::StrokeMove {
+                world_pos,
+                normal,
+                pressure: 1.,
+            });
         }
     }
 }
@@ -777,9 +850,16 @@ fn handle_sculpt_events(
     mut edit_mode: ResMut<EditModeState>,
     mut sculpt_state: ResMut<SculptState>,
     mut sculpting_data: ResMut<SculptingData>,
+    mut paint_mode: ResMut<crate::PaintMode>,
+    mut paint_events: MessageWriter<crate::PaintEvent>,
+    mut active_canvas: ResMut<crate::ActiveCanvasPlane>,
     mut outbound: ResMut<OutboundUiMessages>,
-    mesh_query: Query<(&Mesh3d, &GlobalTransform)>,
-    meshes: Res<Assets<Mesh>>,
+    mesh_query: Query<(
+        &Mesh3d,
+        &GlobalTransform,
+        Option<&crate::project::ProjectSculptGeometry>,
+    )>,
+    mut meshes: ResMut<Assets<Mesh>>,
     material_query: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
@@ -788,77 +868,97 @@ fn handle_sculpt_events(
     for event in events.read() {
         match event {
             SculptEvent::Enter { entity } => {
-                // Enter sculpt mode
+                // Validate and prepare the entire target before changing either
+                // brush owner. A rejected import must not abandon paint or claim
+                // that an unusable mesh is actively being sculpted.
+                let prepared = (|| -> Result<_, String> {
+                    if sculpt_state.active {
+                        return Err(
+                            "Exit the current sculpt session before entering another.".into()
+                        );
+                    }
+                    let (mesh_handle, global_transform, saved_geometry) =
+                        mesh_query.get(*entity).map_err(|_| {
+                            "The sculpt target has no available mesh transform.".to_string()
+                        })?;
+                    let mesh = meshes
+                        .get(&mesh_handle.0)
+                        .ok_or_else(|| "The sculpt target mesh is not loaded.".to_string())?;
+                    let affine = global_transform.affine();
+                    if !affine.is_finite() || affine.matrix3.determinant().abs() < 1e-10 {
+                        return Err("The sculpt target has a non-invertible transform.".into());
+                    }
+                    if let Some(saved) = saved_geometry.filter(|s| s.rendered.matches(mesh)) {
+                        return Ok((mesh_handle.0.clone(), *global_transform, saved.mesh.clone()));
+                    }
+                    let he_mesh = HalfEdgeMesh::from_bevy_mesh_welded(mesh)
+                        .or_else(|error| {
+                            warn!("Sculpt seam weld rejected; preserving indexed connectivity: {error}");
+                            HalfEdgeMesh::from_bevy_mesh(mesh)
+                        })
+                        .map_err(|error| format!("Cannot sculpt this mesh: {error}"))?;
+                    let partition_config =
+                        sculpting::PartitionConfig::from(&sculpt_state.chunk_config);
+                    Ok((
+                        mesh_handle.0.clone(),
+                        *global_transform,
+                        partition_mesh(&he_mesh, &partition_config),
+                    ))
+                })();
+                let (mesh_handle, global_transform, chunked_mesh) = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(message) => {
+                        warn!("{message}");
+                        outbound.send(BevyToUi::Error {
+                            code: "sculpt_target_unavailable".into(),
+                            message,
+                        });
+                        continue;
+                    }
+                };
+
+                let preset = configured_sculpt_preset(&sculpt_state);
+                let pipeline_config = PipelineConfig {
+                    tessellation_enabled: true,
+                    tessellation_config: sculpt_state.tessellation_config.clone(),
+                    chunk_config: sculpt_state.chunk_config.clone(),
+                    rebalance_after_stroke: true,
+                };
+                let pipeline = SculptingPipeline::with_config(preset, pipeline_config);
+
+                // Only one viewport brush can own a stroke at a time.
+                paint_mode.active = false;
+                if paint_mode.current_stroke.take().is_some() {
+                    paint_events.write(crate::PaintEvent::StrokeCancel);
+                }
+                active_canvas.camera_locked = false;
                 edit_mode.mode = EditMode::Sculpt;
                 edit_mode.target_entity = Some(*entity);
                 sculpt_state.active = true;
                 sculpt_state.target_entity = Some(*entity);
-                sculpt_state.deformation_type = DeformationType::Push;
+                sculpt_state.current_stroke_id = None;
+                sculpt_state.last_world_pos = None;
+                sculpt_state.adjust_mode = BrushAdjustMode::None;
+                sculpt_state.adjust_start_cursor = None;
+                sculpt_state.suppress_left_until_release = false;
 
-                info!("Entered sculpt mode for entity {:?}", entity);
+                // Preserve the selected tool and customization when re-entering.
+                sculpting_data.inverse_transform = Some(global_transform.affine().inverse());
+                sculpting_data.transform_rotation = Some(global_transform.rotation());
+                sculpting_data.model_matrix = Some(global_transform.to_matrix());
+                sculpting_data.chunked_mesh = Some(chunked_mesh);
+                sculpting_data.pipeline = Some(pipeline);
+                sculpting_data.original_mesh_handle = Some(mesh_handle);
+                sculpting_data.mesh_id = entity.index().index();
+                sculpting_data.cached_vertex_mapping = None;
 
-                // Enable double-sided rendering for the sculpted mesh
                 if let Ok(material_handle) = material_query.get(*entity) {
                     if let Some(material) = materials.get_mut(&material_handle.0) {
                         material.double_sided = true;
                         material.cull_mode = None;
-                        info!("Enabled double-sided rendering for sculpt target");
                     }
                 }
-
-                // Initialize chunked mesh from entity
-                if let Ok((mesh_handle, global_transform)) = mesh_query.get(*entity) {
-                    // Store transforms for coordinate conversion
-                    let affine = global_transform.affine();
-                    sculpting_data.inverse_transform = Some(affine.inverse());
-                    sculpting_data.transform_rotation = Some(global_transform.rotation());
-                    sculpting_data.model_matrix = Some(global_transform.to_matrix());
-
-                    if let Some(bevy_mesh) = meshes.get(&mesh_handle.0) {
-                        match HalfEdgeMesh::from_bevy_mesh(bevy_mesh) {
-                            Ok(he_mesh) => {
-                                // Partition into chunks
-                                let partition_config =
-                                    sculpting::PartitionConfig::from(&sculpt_state.chunk_config);
-                                let chunked_mesh = partition_mesh(&he_mesh, &partition_config);
-
-                                info!(
-                                    "Created {} chunks from mesh with {} faces",
-                                    chunked_mesh.chunk_count(),
-                                    chunked_mesh.total_face_count()
-                                );
-
-                                // Create pipeline
-                                let mut preset = BrushPreset::push();
-                                preset.radius = sculpt_state.brush_radius;
-                                preset.strength = sculpt_state.brush_strength;
-                                preset.hardness = sculpt_state.brush_hardness;
-                                preset.falloff = sculpt_state.brush_falloff;
-
-                                // Enable tessellation for dynamic topology
-                                let pipeline_config = PipelineConfig {
-                                    tessellation_enabled: true,
-                                    tessellation_config: sculpt_state.tessellation_config.clone(),
-                                    chunk_config: sculpt_state.chunk_config.clone(),
-                                    rebalance_after_stroke: true,
-                                };
-
-                                let pipeline =
-                                    SculptingPipeline::with_config(preset, pipeline_config);
-
-                                sculpting_data.chunked_mesh = Some(chunked_mesh);
-                                sculpting_data.pipeline = Some(pipeline);
-                                sculpting_data.original_mesh_handle = Some(mesh_handle.0.clone());
-                                sculpting_data.mesh_id = entity.index().index();
-                            }
-                            Err(e) => {
-                                warn!("Failed to convert mesh to half-edge: {:?}", e);
-                            }
-                        }
-                    }
-                }
-
-                // Notify UI
+                info!("Entered sculpt mode for entity {:?}", entity);
                 outbound.send(BevyToUi::EditModeChanged {
                     mode: EditMode::Sculpt,
                 });
@@ -866,6 +966,39 @@ fn handle_sculpt_events(
             SculptEvent::Exit => {
                 info!("Exited sculpt mode");
 
+                {
+                    let SculptingData {
+                        pipeline,
+                        chunked_mesh,
+                        ..
+                    } = &mut *sculpting_data;
+                    if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
+                        if pipeline.is_stroke_active() {
+                            let result = pipeline.end_stroke(mesh);
+                            if let Some(id) = sculpt_state.current_stroke_id {
+                                let outcome = if result.rejected.is_some() {
+                                    "rejected"
+                                } else if result.packets.is_empty() {
+                                    "no_change"
+                                } else {
+                                    "accepted"
+                                };
+                                info!(
+                                    "Sculpt stroke completed: id={}, outcome={}, faces={}",
+                                    id,
+                                    outcome,
+                                    mesh.total_face_count()
+                                );
+                            }
+                            if let Some(error) = result.rejected {
+                                outbound.send(BevyToUi::Error {
+                                    code: "sculpt_stroke_rejected".into(),
+                                    message: format!("Sculpt stroke was rolled back: {error}"),
+                                });
+                            }
+                        }
+                    }
+                }
                 // Merge chunks back and update original mesh
                 if let Some(chunked_mesh) = sculpting_data.chunked_mesh.take() {
                     let merged = sculpting::merge_chunks(&chunked_mesh);
@@ -874,7 +1007,26 @@ fn handle_sculpt_events(
                         chunked_mesh.chunk_count(),
                         merged.mesh.face_count()
                     );
-                    // TODO: Update the original mesh entity with merged.mesh
+                    // Commit the final dirty stroke even when Exit and StrokeEnd arrive together.
+                    if let Some(handle) = sculpting_data.original_mesh_handle.as_ref() {
+                        if let Some((new_mesh, _)) = half_edge_to_bevy_mesh(&merged.mesh) {
+                            let saved_rendered =
+                                crate::project_assets::MeshDocument::capture(&new_mesh).ok();
+                            if let Some(original) = meshes.get_mut(handle) {
+                                *original = new_mesh;
+                                if let (Some(entity), Some(rendered)) =
+                                    (sculpt_state.target_entity, saved_rendered)
+                                {
+                                    commands.entity(entity).insert(
+                                        crate::project::ProjectSculptGeometry {
+                                            mesh: chunked_mesh.clone(),
+                                            rendered,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Cleanup
@@ -896,6 +1048,7 @@ fn handle_sculpt_events(
                 sculpt_state.target_entity = None;
                 sculpt_state.current_stroke_id = None;
                 sculpt_state.last_world_pos = None;
+                sculpt_state.suppress_left_until_release = false;
 
                 // Notify UI
                 outbound.send(BevyToUi::EditModeChanged {
@@ -1032,7 +1185,34 @@ fn handle_sculpt_events(
                         timestamp_ms,
                     };
 
+                    let input_started = std::time::Instant::now();
                     let result = pipeline.process_input(input, chunked_mesh);
+                    if std::env::var_os("PENTIMENTO_NATIVE_DIAGNOSTICS").is_some() {
+                        info!(
+                            "Sculpt input processed: id={}, vertices_modified={}, faces={}, elapsed_us={}, rejected={}",
+                            sculpt_state.current_stroke_id.unwrap_or(u64::MAX),
+                            result.vertices_modified,
+                            chunked_mesh.total_face_count(),
+                            input_started.elapsed().as_micros(),
+                            result.rejected.is_some()
+                        );
+                    }
+                    if let Some(error) = &result.rejected {
+                        outbound.send(BevyToUi::Error {
+                            code: "sculpt_stroke_rejected".into(),
+                            message: format!("Sculpt stroke was rolled back: {error}"),
+                        });
+                        pipeline.cancel_stroke(chunked_mesh);
+                        if let Some(id) = sculpt_state.current_stroke_id {
+                            info!(
+                                "Sculpt stroke completed: id={}, outcome=rejected, faces={}",
+                                id,
+                                chunked_mesh.total_face_count()
+                            );
+                        }
+                        sculpt_state.current_stroke_id = None;
+                        sculpt_state.suppress_left_until_release = true;
+                    }
 
                     if result.vertices_modified > 0 {
                         debug!(
@@ -1061,7 +1241,28 @@ fn handle_sculpt_events(
                     if let (Some(pipeline), Some(chunked_mesh)) =
                         (pipeline.as_mut(), chunked_mesh.as_mut())
                     {
+                        let finish_started = std::time::Instant::now();
                         let result = pipeline.end_stroke(chunked_mesh);
+                        let outcome = if result.rejected.is_some() {
+                            "rejected"
+                        } else if result.packets.is_empty() {
+                            "no_change"
+                        } else {
+                            "accepted"
+                        };
+                        info!(
+                            "Sculpt stroke completed: id={}, outcome={}, faces={}, elapsed_us={}",
+                            stroke_id,
+                            outcome,
+                            chunked_mesh.total_face_count(),
+                            finish_started.elapsed().as_micros()
+                        );
+                        if let Some(error) = &result.rejected {
+                            outbound.send(BevyToUi::Error {
+                                code: "sculpt_stroke_rejected".into(),
+                                message: format!("Sculpt stroke was rolled back: {error}"),
+                            });
+                        }
                         if result.chunks_split > 0 || result.chunks_merged > 0 {
                             info!(
                                 "Rebalanced: {} chunks split, {} chunks merged",
@@ -1077,13 +1278,54 @@ fn handle_sculpt_events(
                 if let Some(stroke_id) = sculpt_state.current_stroke_id.take() {
                     info!("Sculpt stroke cancelled: id={}", stroke_id);
 
-                    // Cancel stroke in pipeline
-                    if let Some(pipeline) = &mut sculpting_data.pipeline {
-                        pipeline.cancel_stroke();
+                    let SculptingData {
+                        pipeline,
+                        chunked_mesh,
+                        cached_vertex_mapping,
+                        ..
+                    } = &mut *sculpting_data;
+                    if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
+                        pipeline.cancel_stroke(mesh);
+                        *cached_vertex_mapping = None;
+                        info!("Sculpt stroke rollback: faces={}", mesh.total_face_count());
+                        info!(
+                            "Sculpt stroke completed: id={}, outcome=cancelled, faces={}",
+                            stroke_id,
+                            mesh.total_face_count()
+                        );
                     }
                 }
 
                 sculpt_state.last_world_pos = None;
+                sculpt_state.suppress_left_until_release = true;
+            }
+            SculptEvent::Undo | SculptEvent::Redo => {
+                if !sculpt_state.active {
+                    continue;
+                }
+                let SculptingData {
+                    pipeline,
+                    chunked_mesh,
+                    cached_vertex_mapping,
+                    ..
+                } = &mut *sculpting_data;
+                if let (Some(pipeline), Some(mesh)) = (pipeline, chunked_mesh) {
+                    match pipeline.restore_history(mesh, matches!(event, SculptEvent::Redo)) {
+                        Ok(true) => {
+                            *cached_vertex_mapping = None;
+                            info!(
+                                "Sculpt history restored: redo={}, faces={}",
+                                matches!(event, SculptEvent::Redo),
+                                mesh.total_face_count()
+                            );
+                        }
+                        Ok(false) => {}
+                        Err(error) => outbound.send(BevyToUi::Error {
+                            code: "sculpt_history_rejected".into(),
+                            message: format!("Sculpt history could not be restored: {error:?}"),
+                        }),
+                    }
+                }
             }
         }
     }
@@ -1151,17 +1393,37 @@ fn sync_sculpt_chunks_to_gpu(
             merged.mesh.face_count()
         );
 
-        if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
-            if let Some(new_mesh) = half_edge_to_bevy_mesh(&merged.mesh) {
-                *bevy_mesh = new_mesh;
-            }
+        let Some(bevy_mesh) = meshes.get_mut(&original_handle) else {
+            return;
+        };
+        let Some((new_mesh, render_to_vertex)) = half_edge_to_bevy_mesh(&merged.mesh) else {
+            return;
+        };
+        let mut unified_to_render: std::collections::HashMap<_, Vec<_>> =
+            std::collections::HashMap::new();
+        for (render_index, vertex) in render_to_vertex.into_iter().enumerate() {
+            unified_to_render
+                .entry(vertex)
+                .or_default()
+                .push(render_index);
         }
-
-        // Cache the vertex mapping for future position-only updates
-        *cached_vertex_mapping = Some(merged.vertex_mapping);
+        let mapping = merged
+            .vertex_mapping
+            .into_iter()
+            .filter_map(|(original, unified)| {
+                unified_to_render
+                    .remove(&unified)
+                    .map(|indices| (original, indices))
+            })
+            .collect();
+        *bevy_mesh = new_mesh;
+        *cached_vertex_mapping = Some(mapping);
     } else if let Some(mapping) = cached_vertex_mapping {
         // Position-only path: patch vertex buffers in-place
-        if let Some(bevy_mesh) = meshes.get_mut(&original_handle) {
+        let Some(bevy_mesh) = meshes.get_mut(&original_handle) else {
+            return;
+        };
+        {
             // Patch positions
             if let Some(VertexAttributeValues::Float32x3(positions)) =
                 bevy_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
@@ -1173,10 +1435,11 @@ fn sync_sculpt_chunks_to_gpu(
                     };
                     for vertex in chunk.mesh.vertices() {
                         if let Some(&original_id) = chunk.local_to_original.get(&vertex.id) {
-                            if let Some(&unified_id) = mapping.get(&original_id) {
-                                let idx = unified_id.0 as usize;
-                                if idx < num_positions {
-                                    positions[idx] = vertex.position.to_array();
+                            if let Some(render_indices) = mapping.get(&original_id) {
+                                for &idx in render_indices {
+                                    if idx < num_positions {
+                                        positions[idx] = vertex.position.to_array();
+                                    }
                                 }
                             }
                         }
@@ -1195,10 +1458,11 @@ fn sync_sculpt_chunks_to_gpu(
                     };
                     for vertex in chunk.mesh.vertices() {
                         if let Some(&original_id) = chunk.local_to_original.get(&vertex.id) {
-                            if let Some(&unified_id) = mapping.get(&original_id) {
-                                let idx = unified_id.0 as usize;
-                                if idx < num_normals {
-                                    normals[idx] = vertex.normal.to_array();
+                            if let Some(render_indices) = mapping.get(&original_id) {
+                                for &idx in render_indices {
+                                    if idx < num_normals {
+                                        normals[idx] = vertex.normal.to_array();
+                                    }
                                 }
                             }
                         }
@@ -1217,86 +1481,14 @@ fn sync_sculpt_chunks_to_gpu(
 }
 
 /// Convert a HalfEdgeMesh to a Bevy Mesh
-fn half_edge_to_bevy_mesh(he_mesh: &HalfEdgeMesh) -> Option<Mesh> {
-    let mut positions: Vec<[f32; 3]> = Vec::new();
-    let mut normals: Vec<[f32; 3]> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-
-    // Validate: check that vertex IDs match array indices
-    #[cfg(debug_assertions)]
-    for (idx, vertex) in he_mesh.vertices().iter().enumerate() {
-        if vertex.id.0 as usize != idx {
-            warn!(
-                "half_edge_to_bevy_mesh: vertex at index {} has id {:?} (expected {}). \
-                 This will cause incorrect face indices!",
-                idx, vertex.id, idx
-            );
-        }
+fn half_edge_to_bevy_mesh(
+    he_mesh: &HalfEdgeMesh,
+) -> Option<(Mesh, Vec<painting::half_edge::VertexId>)> {
+    if let Err(error) = he_mesh.validate() {
+        warn!("Cannot export invalid sculpt geometry: {error}");
+        return None;
     }
-
-    // Build vertex arrays
-    for vertex in he_mesh.vertices() {
-        positions.push(vertex.position.to_array());
-        normals.push(vertex.normal.to_array());
-    }
-
-    let num_positions = positions.len() as u32;
-
-    // Build index array from faces
-    let mut skipped_faces = 0;
-    for face in he_mesh.faces() {
-        let verts = he_mesh.get_face_vertices(face.id);
-        if verts.len() >= 3 {
-            // Validate: check that all vertex IDs are valid indices
-            let mut valid = true;
-            for v in &verts {
-                if v.0 >= num_positions {
-                    warn!(
-                        "half_edge_to_bevy_mesh: face {:?} references vertex {:?} \
-                         but only {} positions exist. Face will be skipped.",
-                        face.id, v, num_positions
-                    );
-                    valid = false;
-                    break;
-                }
-            }
-
-            if valid {
-                // Triangulate the face (assuming convex)
-                for i in 1..(verts.len() - 1) {
-                    indices.push(verts[0].0);
-                    indices.push(verts[i].0);
-                    indices.push(verts[i + 1].0);
-                }
-            } else {
-                skipped_faces += 1;
-            }
-        } else {
-            skipped_faces += 1;
-            trace!(
-                "half_edge_to_bevy_mesh: face {:?} has {} vertices, skipping",
-                face.id,
-                verts.len()
-            );
-        }
-    }
-
-    if skipped_faces > 0 {
-        warn!(
-            "half_edge_to_bevy_mesh: skipped {} faces due to invalid vertices or insufficient vertex count",
-            skipped_faces
-        );
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        bevy::asset::RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_indices(Indices::U32(indices));
-
-    Some(mesh)
+    Some(he_mesh.to_bevy_mesh_with_vertex_map())
 }
 
 /// Render the sculpt brush gizmo: a wire circle at the brush radius aligned to the
@@ -1395,5 +1587,1743 @@ fn render_sculpt_brush_gizmo(
             gizmos.line(prev, point, profile_color);
         }
         prev_point = Some(point);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod sculpt_geometry_sync_tests {
+    use super::*;
+    use bevy::mesh::PrimitiveTopology;
+    use painting::half_edge::VertexId;
+
+    #[test]
+    fn adjustment_confirmation_consumes_pointer_until_release() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        world.init_resource::<SculptState>();
+        world.init_resource::<SculptingData>();
+        world.init_resource::<FrontendInputBlockState>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<StrokeIdGenerator>();
+        world.init_resource::<Time>();
+        world.init_resource::<Messages<CursorMoved>>();
+        world.init_resource::<Messages<WindowEvent>>();
+        world.init_resource::<Messages<SculptEvent>>();
+        world.spawn((Window::default(), PrimaryWindow));
+        {
+            let mut state = world.resource_mut::<SculptState>();
+            state.active = true;
+            state.adjust_mode = BrushAdjustMode::Radius;
+            state.brush_radius = 1.25;
+            // A stroke interrupted by F must not resume on the confirming press.
+            state.current_stroke_id = Some(7);
+        }
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        world.run_system_once(handle_brush_adjustment).unwrap();
+        assert_eq!(
+            world.resource::<SculptState>().adjust_mode,
+            BrushAdjustMode::None
+        );
+        assert!(world.resource::<SculptState>().suppress_left_until_release);
+        assert_eq!(world.resource::<SculptState>().brush_radius, 1.25);
+        world.run_system_once(handle_sculpt_input).unwrap();
+        let events: Vec<_> = world
+            .resource_mut::<Messages<SculptEvent>>()
+            .drain()
+            .collect();
+        assert!(matches!(events.as_slice(), [SculptEvent::StrokeEnd]));
+        world.resource_mut::<SculptState>().current_stroke_id = None;
+        world.resource_mut::<ButtonInput<MouseButton>>().clear();
+        // Still held after leaving the adjustment: no new or continued stroke.
+        world.run_system_once(handle_sculpt_input).unwrap();
+        assert!(world.resource::<SculptState>().suppress_left_until_release);
+        assert!(world.resource::<Messages<SculptEvent>>().is_empty());
+        // Release is consumed even if it occurs over UI; the following press is free.
+        world
+            .resource_mut::<FrontendInputBlockState>()
+            .block_pointer = true;
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        world.run_system_once(handle_sculpt_input).unwrap();
+        assert!(!world.resource::<SculptState>().suppress_left_until_release);
+        assert!(world.resource::<Messages<SculptEvent>>().is_empty());
+    }
+
+    pub(crate) fn sculpt_event_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<EditModeState>()
+            .init_resource::<SculptState>()
+            .init_resource::<SculptingData>()
+            .init_resource::<crate::PaintMode>()
+            .init_resource::<crate::ActiveCanvasPlane>()
+            .init_resource::<OutboundUiMessages>()
+            .init_resource::<Time>()
+            .add_message::<SculptEvent>()
+            .add_message::<crate::PaintEvent>()
+            .add_systems(Update, handle_sculpt_events);
+        app
+    }
+    pub(crate) fn project_sculpt_app() -> App {
+        let mut app = sculpt_event_app();
+        app.add_systems(
+            Update,
+            sync_sculpt_chunks_to_gpu.after(handle_sculpt_events),
+        );
+        app
+    }
+
+    fn entered_history_app() -> App {
+        let mut app = sculpt_event_app();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Sphere::new(1.).mesh().uv(16, 8));
+        let entity = app
+            .world_mut()
+            .spawn((Mesh3d(handle), GlobalTransform::IDENTITY))
+            .id();
+        app.world_mut().write_message(SculptEvent::Enter { entity });
+        app.update();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::SetRadius { radius: 0.75 });
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetStrength { strength: 0.4 },
+        );
+        let mut data = app.world_mut().resource_mut::<SculptingData>();
+        let pipeline = data.pipeline.as_mut().unwrap();
+        pipeline.config.tessellation_enabled = false;
+        pipeline.config.rebalance_after_stroke = false;
+        drop(data);
+        app
+    }
+
+    fn move_history_stroke(app: &mut App) {
+        app.world_mut().write_message(SculptEvent::StrokeStart {
+            world_pos: Vec3::Z,
+            normal: Vec3::Z,
+            stroke_id: 8,
+        });
+        app.update();
+        app.world_mut().write_message(SculptEvent::StrokeMove {
+            world_pos: Vec3::new(0.02, 0., 1.),
+            normal: Vec3::Z,
+            pressure: 1.,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn autosmooth_changes_committed_geometry_and_history_restores_exact_snapshots() {
+        fn stamped_stroke(app: &mut App) {
+            app.world_mut().write_message(SculptEvent::StrokeStart {
+                world_pos: Vec3::Z,
+                normal: Vec3::Z,
+                stroke_id: 9,
+            });
+            app.update();
+            app.world_mut().write_message(SculptEvent::StrokeMove {
+                world_pos: Vec3::new(0.2, 0., 1.),
+                normal: Vec3::Z,
+                pressure: 1.,
+            });
+            app.update();
+        }
+        let mut app = entered_history_app();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Push,
+            },
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetStrength { strength: 0.15 },
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 0.0 },
+        );
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        stamped_stroke(&mut app);
+        app.world_mut().write_message(SculptEvent::StrokeEnd);
+        app.update();
+        let unsmoothed = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(!before.same_authoritative_state(&unsmoothed));
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        assert!(
+            before.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 1.0 },
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .redo_strokes,
+            1,
+            "A brush setting does not discard redo"
+        );
+        stamped_stroke(&mut app);
+        let active = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 0.0 },
+        );
+        assert_eq!(
+            sculpt_snapshot(app.world().resource::<SculptState>()).autosmooth,
+            1.0
+        );
+        assert!(
+            active.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        assert!(app.world().resource::<OutboundUiMessages>().messages.iter().any(|message| matches!(message, BevyToUi::Error { code, .. } if code == "sculpt_autosmooth_unavailable")));
+        app.world_mut().write_message(SculptEvent::StrokeEnd);
+        app.update();
+        let smoothed = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(
+            !unsmoothed.same_authoritative_state(&smoothed),
+            "The engine must actually apply the customized smoothing amount"
+        );
+        assert_eq!(
+            unsmoothed.next_original_vertex_id,
+            smoothed.next_original_vertex_id
+        );
+        let mut changed_positions = 0;
+        for (id, chunk) in &unsmoothed.chunks {
+            let smooth_chunk = &smoothed.chunks[id];
+            assert_eq!(chunk.local_to_original, smooth_chunk.local_to_original);
+            assert_eq!(chunk.original_to_local, smooth_chunk.original_to_local);
+            assert_eq!(chunk.boundary_vertices, smooth_chunk.boundary_vertices);
+            assert_eq!(
+                chunk.mesh.half_edges(),
+                smooth_chunk.mesh.half_edges(),
+                "Connectivity and face-corner UVs must remain intact"
+            );
+            assert_eq!(
+                chunk.mesh.vertices().len(),
+                smooth_chunk.mesh.vertices().len()
+            );
+            for (plain, smooth) in chunk
+                .mesh
+                .vertices()
+                .iter()
+                .zip(smooth_chunk.mesh.vertices())
+            {
+                assert_eq!(plain.id, smooth.id);
+                assert_eq!(plain.uv, smooth.uv);
+                assert_eq!(plain.source_index, smooth.source_index);
+                changed_positions += usize::from(plain.position != smooth.position);
+            }
+        }
+        assert!(
+            changed_positions > 0,
+            "Smoothing must change vertex positions, not only derived normals"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .redo_strokes,
+            0
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        assert!(
+            before.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Redo);
+        app.update();
+        assert!(
+            smoothed.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        stamped_stroke(&mut app);
+        app.world_mut().write_message(SculptEvent::StrokeCancel);
+        app.update();
+        assert!(
+            smoothed.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+    }
+
+    #[test]
+    fn autosmooth_customization_survives_real_sculpt_exit_and_reentry() {
+        let mut app = entered_history_app();
+        let entity = app.world().resource::<SculptState>().target_entity.unwrap();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Push,
+            },
+        );
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetAutoSmooth { amount: 0.27 },
+        );
+        app.world_mut().write_message(SculptEvent::Exit);
+        app.update();
+        assert!(!app.world().resource::<SculptState>().active);
+        app.world_mut().write_message(SculptEvent::Enter { entity });
+        app.update();
+        assert!(app.world().resource::<SculptState>().active);
+        assert_eq!(
+            sculpt_snapshot(app.world().resource::<SculptState>()).autosmooth,
+            0.27
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .brush_preset()
+                .autosmooth,
+            0.27
+        );
+    }
+
+    #[test]
+    fn scene_history_commands_roundtrip_and_invalidate_render_mapping() {
+        let mut app = entered_history_app();
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        move_history_stroke(&mut app);
+        app.world_mut().write_message(SculptEvent::StrokeEnd);
+        app.update();
+        let after = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(!before.same_authoritative_state(&after));
+        app.world_mut()
+            .resource_mut::<SculptingData>()
+            .cached_vertex_mapping = Some(Default::default());
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        let data = app.world().resource::<SculptingData>();
+        assert!(before.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+        assert!(data.cached_vertex_mapping.is_none());
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .redo_strokes,
+            1
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Redo);
+        app.update();
+        assert!(
+            after.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn scene_cancel_rolls_back_and_active_history_is_blocked() {
+        let mut app = entered_history_app();
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        move_history_stroke(&mut app);
+        apply_sculpt_command(app.world_mut(), &SculptCommand::Undo);
+        app.update();
+        assert!(app.world().resource::<OutboundUiMessages>().messages.iter().any(|message| matches!(message, BevyToUi::Error { code, .. } if code == "sculpt_history_rejected")));
+        app.world_mut().write_message(SculptEvent::StrokeCancel);
+        app.update();
+        let data = app.world().resource::<SculptingData>();
+        assert!(before.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            0
+        );
+        assert!(
+            app.world()
+                .resource::<SculptState>()
+                .suppress_left_until_release
+        );
+    }
+
+    fn batched_input_app() -> (App, Entity) {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
+        let mut app = entered_history_app();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<StrokeIdGenerator>()
+            .init_resource::<FrontendInputBlockState>()
+            .add_message::<CursorMoved>()
+            .add_message::<bevy::window::WindowEvent>()
+            .add_systems(Update, handle_sculpt_input.before(handle_sculpt_events));
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.world_mut().spawn((
+            Camera {
+                computed: ComputedCameraValues {
+                    clip_from_view: Mat4::perspective_infinite_reverse_rh(
+                        std::f32::consts::FRAC_PI_4,
+                        1.,
+                        0.1,
+                    ),
+                    target_info: Some(RenderTargetInfo {
+                        physical_size: UVec2::splat(1000),
+                        scale_factor: 1.,
+                    }),
+                    ..default()
+                },
+                ..default()
+            },
+            GlobalTransform::from(Transform::from_xyz(0., 0., 4.).looking_at(Vec3::ZERO, Vec3::Y)),
+            MainCamera,
+        ));
+        app.world_mut()
+            .resource_mut::<Messages<SculptEvent>>()
+            .clear();
+        (app, window)
+    }
+
+    fn pointer_move(window: Entity, x: f32, y: f32) -> bevy::window::WindowEvent {
+        bevy::window::WindowEvent::CursorMoved(CursorMoved {
+            window,
+            position: Vec2::new(x, y),
+            delta: None,
+        })
+    }
+
+    fn pointer_button(window: Entity, pressed: bool) -> bevy::window::WindowEvent {
+        bevy::window::WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+            window,
+            button: MouseButton::Left,
+            state: if pressed {
+                bevy::input::ButtonState::Pressed
+            } else {
+                bevy::input::ButtonState::Released
+            },
+        })
+    }
+
+    fn run_pointer_batch(
+        app: &mut App,
+        events: Vec<bevy::window::WindowEvent>,
+    ) -> Vec<SculptEvent> {
+        app.world_mut()
+            .resource_mut::<Messages<SculptEvent>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        for event in events {
+            match &event {
+                bevy::window::WindowEvent::CursorMoved(movement) => {
+                    app.world_mut()
+                        .get_mut::<Window>(movement.window)
+                        .unwrap()
+                        .set_cursor_position(Some(movement.position));
+                    app.world_mut().write_message(movement.clone());
+                }
+                bevy::window::WindowEvent::MouseButtonInput(button) => {
+                    let mut input = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+                    if button.state == bevy::input::ButtonState::Pressed {
+                        input.press(button.button);
+                    } else {
+                        input.release(button.button);
+                    }
+                }
+                bevy::window::WindowEvent::WindowFocused(focus) => {
+                    app.world_mut()
+                        .get_mut::<Window>(focus.window)
+                        .unwrap()
+                        .focused = focus.focused;
+                }
+                _ => {}
+            }
+            app.world_mut().write_message(event);
+        }
+        app.update();
+        app.world_mut()
+            .resource_mut::<Messages<SculptEvent>>()
+            .drain()
+            .collect()
+    }
+
+    #[test]
+    fn observed_press_moves_then_moves_release_batches_sculpt_real_geometry() {
+        let (mut app, window) = batched_input_app();
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let mut first = vec![
+            pointer_move(window, 500., 500.),
+            pointer_button(window, true),
+        ];
+        first.extend((1..=8).map(|step| pointer_move(window, 500. + step as f32, 500.)));
+        let emitted = run_pointer_batch(&mut app, first);
+        assert!(
+            matches!(emitted.first(), Some(SculptEvent::StrokeStart { world_pos, .. }) if world_pos.x.abs() < 1e-5),
+            "stroke must start at the press origin, not the final frame cursor"
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, SculptEvent::StrokeMove { .. }))
+                .count(),
+            8,
+            "press-frame motion was lost"
+        );
+        let intermediate = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        assert!(!baseline.same_authoritative_state(&intermediate));
+        let mut second: Vec<_> = (9..=16)
+            .map(|step| pointer_move(window, 500. + step as f32, 500.))
+            .collect();
+        second.push(pointer_button(window, false));
+        second.push(pointer_move(window, 20., 970.));
+        let emitted = run_pointer_batch(&mut app, second);
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, SculptEvent::StrokeMove { .. }))
+                .count(),
+            8,
+            "release-frame motion was lost"
+        );
+        assert!(matches!(emitted.last(), Some(SculptEvent::StrokeEnd)));
+        let data = app.world().resource::<SculptingData>();
+        assert!(!intermediate.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        assert!(!data.pipeline.as_ref().unwrap().is_stroke_active());
+    }
+
+    #[test]
+    fn native_dense_sphere_batch_publishes_moved_asset_and_history() {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
+        let mut app = sculpt_event_app();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<StrokeIdGenerator>()
+            .init_resource::<FrontendInputBlockState>()
+            .add_message::<CursorMoved>()
+            .add_message::<WindowEvent>()
+            .add_systems(
+                Update,
+                update_sculpt_screen_config.before(handle_sculpt_input),
+            )
+            .add_systems(Update, handle_sculpt_input.before(handle_sculpt_events))
+            .add_systems(
+                Update,
+                sync_sculpt_chunks_to_gpu.after(handle_sculpt_events),
+            )
+            .add_systems(PostUpdate, crate::brush_ui::sync_brush_ui_state);
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: (1920, 1080).into(),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.world_mut().spawn((
+            Camera {
+                computed: ComputedCameraValues {
+                    clip_from_view: Mat4::perspective_infinite_reverse_rh(
+                        std::f32::consts::FRAC_PI_4,
+                        1920. / 1080.,
+                        0.1,
+                    ),
+                    target_info: Some(RenderTargetInfo {
+                        physical_size: UVec2::new(1920, 1080),
+                        scale_factor: 1.,
+                    }),
+                    ..default()
+                },
+                ..default()
+            },
+            GlobalTransform::from(
+                Transform::from_xyz(5.0015483, 4.996461, 5.0015483).looking_at(Vec3::ZERO, Vec3::Y),
+            ),
+            MainCamera,
+        ));
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Sphere::new(0.5).mesh().uv(32, 18));
+        let target = app
+            .world_mut()
+            .spawn((
+                Mesh3d(handle.clone()),
+                GlobalTransform::from_translation(Vec3::new(2., 0.5, 0.)),
+            ))
+            .id();
+        app.world_mut()
+            .write_message(SculptEvent::Enter { entity: target });
+        app.update();
+        apply_sculpt_command(
+            app.world_mut(),
+            &SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        );
+        apply_sculpt_command(app.world_mut(), &SculptCommand::SetRadius { radius: 0.8 });
+        let before = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let before_asset = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .unwrap()
+            .clone();
+        app.world_mut()
+            .resource_mut::<OutboundUiMessages>()
+            .messages
+            .clear();
+        let mut batch = vec![
+            pointer_move(window, 1215., 614.),
+            pointer_button(window, true),
+        ];
+        batch.extend((1..=16).map(|step| {
+            pointer_move(
+                window,
+                (1215. + 24. * step as f32 / 16.).round(),
+                (614. - 12. * step as f32 / 16.).round(),
+            )
+        }));
+        run_pointer_batch(&mut app, batch);
+        // Release arrives as the next batch, exactly as in native run 37751926323.
+        run_pointer_batch(&mut app, vec![pointer_button(window, false)]);
+        let data = app.world().resource::<SculptingData>();
+        let chunks = data.chunked_mesh.as_ref().unwrap();
+        let positions_moved = before.chunks.iter().any(|(id, old)| {
+            chunks.get_chunk(*id).is_some_and(|new| {
+                old.mesh.vertices().iter().any(|vertex| {
+                    new.mesh
+                        .vertex(vertex.id)
+                        .is_some_and(|next| next.position.distance(vertex.position) > 1e-5)
+                })
+            })
+        });
+        assert!(
+            positions_moved,
+            "accepted processing must actually move original positions"
+        );
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        assert!(
+            chunks.dirty_chunks().is_empty(),
+            "asset sync must consume dirty chunks only after export"
+        );
+        let expected = half_edge_to_bevy_mesh(&sculpting::merge_chunks(chunks).mesh)
+            .unwrap()
+            .0;
+        let assets = app.world().resource::<Assets<Mesh>>();
+        let published = assets.get(&handle).unwrap();
+        assert_ne!(
+            published.attribute(Mesh::ATTRIBUTE_POSITION),
+            before_asset.attribute(Mesh::ATTRIBUTE_POSITION)
+        );
+        assert_eq!(
+            published.attribute(Mesh::ATTRIBUTE_POSITION),
+            expected.attribute(Mesh::ATTRIBUTE_POSITION)
+        );
+        assert_eq!(
+            published.indices().unwrap().len(),
+            expected.indices().unwrap().len()
+        );
+        assert!(
+            app.world()
+                .resource::<OutboundUiMessages>()
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    BevyToUi::SculptHistoryChanged {
+                        undo_strokes: 1,
+                        redo_strokes: 0,
+                        active: false,
+                        ..
+                    }
+                )),
+            "history publication must reflect the completed transaction"
+        );
+        let baseline_export = half_edge_to_bevy_mesh(&sculpting::merge_chunks(&before).mesh)
+            .unwrap()
+            .0;
+        for (redo, expected_asset) in [(false, baseline_export), (true, expected)] {
+            app.world_mut()
+                .resource_mut::<OutboundUiMessages>()
+                .messages
+                .clear();
+            apply_sculpt_command(
+                app.world_mut(),
+                if redo {
+                    &SculptCommand::Redo
+                } else {
+                    &SculptCommand::Undo
+                },
+            );
+            app.update();
+            let meshes = app.world().resource::<Assets<Mesh>>();
+            let restored_asset = meshes.get(&handle).unwrap();
+            for attribute in [
+                Mesh::ATTRIBUTE_POSITION,
+                Mesh::ATTRIBUTE_NORMAL,
+                Mesh::ATTRIBUTE_UV_0,
+            ] {
+                assert_eq!(
+                    restored_asset.attribute(attribute),
+                    expected_asset.attribute(attribute),
+                    "exact exported attribute after redo={redo}"
+                );
+            }
+            assert_eq!(
+                restored_asset.indices().unwrap().iter().collect::<Vec<_>>(),
+                expected_asset.indices().unwrap().iter().collect::<Vec<_>>()
+            );
+            assert!(app.world().resource::<OutboundUiMessages>().messages.iter().any(|message| matches!(message, BevyToUi::SculptHistoryChanged { undo_strokes, redo_strokes, active: false, .. } if *undo_strokes == usize::from(redo) && *redo_strokes == usize::from(!redo))));
+        }
+    }
+
+    #[test]
+    fn release_batch_processes_motion_before_end_and_ignores_later_hover() {
+        let (mut app, window) = batched_input_app();
+        run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+            ],
+        );
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let emitted = run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 508., 500.),
+                pointer_button(window, false),
+                pointer_move(window, 550., 500.),
+            ],
+        );
+        assert!(matches!(
+            emitted.as_slice(),
+            [SculptEvent::StrokeMove { .. }, SculptEvent::StrokeEnd]
+        ));
+        assert!(
+            !baseline.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn same_frame_press_motion_release_is_one_complete_sculpt_stroke() {
+        let (mut app, window) = batched_input_app();
+        let emitted = run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+                pointer_move(window, 508., 500.),
+                pointer_button(window, false),
+            ],
+        );
+        assert!(matches!(
+            emitted.as_slice(),
+            [
+                SculptEvent::StrokeStart { .. },
+                SculptEvent::StrokeMove { .. },
+                SculptEvent::StrokeEnd
+            ]
+        ));
+        let data = app.world().resource::<SculptingData>();
+        assert_eq!(
+            data.pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            1
+        );
+        assert!(!data.pipeline.as_ref().unwrap().is_stroke_active());
+    }
+
+    #[test]
+    fn blocked_batch_and_off_target_press_cannot_claim_sculpt_ownership() {
+        let (mut app, window) = batched_input_app();
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<FrontendInputBlockState>()
+            .block_pointer = true;
+        assert!(
+            run_pointer_batch(
+                &mut app,
+                vec![
+                    pointer_move(window, 500., 500.),
+                    pointer_button(window, true),
+                    pointer_move(window, 508., 500.),
+                    pointer_button(window, false)
+                ]
+            )
+            .is_empty()
+        );
+        app.world_mut()
+            .resource_mut::<FrontendInputBlockState>()
+            .block_pointer = false;
+        assert!(run_pointer_batch(&mut app, vec![pointer_move(window, 510., 500.)]).is_empty());
+        assert!(
+            run_pointer_batch(
+                &mut app,
+                vec![
+                    pointer_move(window, 20., 970.),
+                    pointer_button(window, true),
+                    pointer_move(window, 500., 500.),
+                    pointer_button(window, false)
+                ]
+            )
+            .is_empty()
+        );
+        assert!(
+            baseline.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn focus_loss_ends_owned_stroke_and_regain_does_not_synthesize_a_press() {
+        let (mut app, window) = batched_input_app();
+        run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+                pointer_move(window, 508., 500.),
+            ],
+        );
+        let moved = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let lost = bevy::window::WindowEvent::WindowFocused(bevy::window::WindowFocused {
+            window,
+            focused: false,
+        });
+        let emitted = run_pointer_batch(&mut app, vec![lost, pointer_move(window, 516., 500.)]);
+        assert!(matches!(emitted.as_slice(), [SculptEvent::StrokeEnd]));
+        assert!(run_pointer_batch(&mut app, vec![pointer_move(window, 520., 500.)]).is_empty());
+        let gained = bevy::window::WindowEvent::WindowFocused(bevy::window::WindowFocused {
+            window,
+            focused: true,
+        });
+        assert!(
+            run_pointer_batch(&mut app, vec![gained, pointer_move(window, 524., 500.)]).is_empty()
+        );
+        assert!(
+            moved.same_authoritative_state(
+                app.world()
+                    .resource::<SculptingData>()
+                    .chunked_mesh
+                    .as_ref()
+                    .unwrap()
+            )
+        );
+        let emitted = run_pointer_batch(
+            &mut app,
+            vec![
+                pointer_button(window, false),
+                pointer_move(window, 500., 500.),
+                pointer_button(window, true),
+                pointer_move(window, 504., 500.),
+                pointer_button(window, false),
+            ],
+        );
+        assert!(matches!(
+            emitted.as_slice(),
+            [
+                SculptEvent::StrokeStart { .. },
+                SculptEvent::StrokeMove { .. },
+                SculptEvent::StrokeEnd
+            ]
+        ));
+        assert_eq!(
+            app.world()
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .history_status()
+                .undo_strokes,
+            2
+        );
+    }
+
+    fn assert_final_rejection_is_reported(event: SculptEvent, exiting: bool) {
+        let mut app = entered_history_app();
+        let baseline = app
+            .world()
+            .resource::<SculptingData>()
+            .chunked_mesh
+            .clone()
+            .unwrap();
+        let handle = app
+            .world()
+            .resource::<SculptingData>()
+            .original_mesh_handle
+            .clone()
+            .unwrap();
+        move_history_stroke(&mut app);
+        app.world_mut()
+            .resource_mut::<SculptingData>()
+            .chunked_mesh
+            .as_mut()
+            .unwrap()
+            .next_original_vertex_id = 0;
+        app.world_mut()
+            .resource_mut::<OutboundUiMessages>()
+            .messages
+            .clear();
+        app.world_mut().write_message(event);
+        app.update();
+        let messages = &app.world().resource::<OutboundUiMessages>().messages;
+        let errors: Vec<_> = messages.iter().filter(|message| matches!(message, BevyToUi::Error { code, .. } if code == "sculpt_stroke_rejected")).collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "final rejection must emit exactly one user-visible error"
+        );
+        let BevyToUi::Error { message, .. } = errors[0] else {
+            unreachable!()
+        };
+        assert!(message.contains("rolled back"));
+        if exiting {
+            assert!(!app.world().resource::<SculptState>().active);
+            let expected = half_edge_to_bevy_mesh(&sculpting::merge_chunks(&baseline).mesh)
+                .unwrap()
+                .0;
+            let assets = app.world().resource::<Assets<Mesh>>();
+            let restored = assets.get(&handle).unwrap();
+            assert_eq!(
+                restored.attribute(Mesh::ATTRIBUTE_POSITION),
+                expected.attribute(Mesh::ATTRIBUTE_POSITION)
+            );
+            assert_eq!(
+                restored.attribute(Mesh::ATTRIBUTE_UV_0),
+                expected.attribute(Mesh::ATTRIBUTE_UV_0)
+            );
+            assert_eq!(
+                restored.indices().unwrap().iter().collect::<Vec<_>>(),
+                expected.indices().unwrap().iter().collect::<Vec<_>>()
+            );
+        } else {
+            let data = app.world().resource::<SculptingData>();
+            assert!(baseline.same_authoritative_state(data.chunked_mesh.as_ref().unwrap()));
+            assert_eq!(
+                data.pipeline
+                    .as_ref()
+                    .unwrap()
+                    .history_status()
+                    .undo_strokes,
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn stroke_end_final_rejection_reports_rollback() {
+        assert_final_rejection_is_reported(SculptEvent::StrokeEnd, false);
+    }
+
+    #[test]
+    fn exit_final_rejection_reports_rollback() {
+        assert_final_rejection_is_reported(SculptEvent::Exit, true);
+    }
+
+    #[test]
+    fn rejected_sculpt_entry_keeps_existing_mode_and_reports_error() {
+        let mut app = sculpt_event_app();
+        let missing_entity = app.world_mut().spawn_empty().id();
+        let missing_asset = app
+            .world_mut()
+            .spawn((Mesh3d(Handle::default()), GlobalTransform::IDENTITY))
+            .id();
+        let invalid = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        let invalid_handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(invalid);
+        let invalid_entity = app
+            .world_mut()
+            .spawn((Mesh3d(invalid_handle), GlobalTransform::IDENTITY))
+            .id();
+        let valid_handle = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Sphere::new(1.).mesh().uv(12, 6));
+        let singular_entity = app
+            .world_mut()
+            .spawn((
+                Mesh3d(valid_handle),
+                GlobalTransform::from(Transform::from_scale(Vec3::ZERO)),
+            ))
+            .id();
+        {
+            let mut paint = app.world_mut().resource_mut::<crate::PaintMode>();
+            paint.active = true;
+            paint.current_stroke = Some(crate::StrokeState {
+                stroke_id: 17,
+                space_id: 3,
+                start_time: 0,
+                last_world_pos: Some(Vec3::ZERO),
+                last_time: 0.0,
+            });
+        }
+        app.world_mut()
+            .resource_mut::<crate::ActiveCanvasPlane>()
+            .camera_locked = true;
+        for entity in [
+            missing_entity,
+            missing_asset,
+            invalid_entity,
+            singular_entity,
+        ] {
+            app.world_mut()
+                .resource_mut::<OutboundUiMessages>()
+                .messages
+                .clear();
+            app.world_mut().write_message(SculptEvent::Enter { entity });
+            app.update();
+            assert!(!app.world().resource::<SculptState>().active);
+            assert_eq!(app.world().resource::<EditModeState>().mode, EditMode::None);
+            let paint = app.world().resource::<crate::PaintMode>();
+            assert!(paint.active);
+            assert_eq!(paint.current_stroke.as_ref().unwrap().stroke_id, 17);
+            assert!(
+                app.world()
+                    .resource::<crate::ActiveCanvasPlane>()
+                    .camera_locked
+            );
+            assert!(app.world().resource::<SculptingData>().pipeline.is_none());
+            let outbound = &app.world().resource::<OutboundUiMessages>().messages;
+            assert!(
+                matches!(outbound.as_slice(), [BevyToUi::Error { code, .. }] if code == "sculpt_target_unavailable")
+            );
+        }
+    }
+
+    #[test]
+    fn exit_commits_dirty_geometry_and_reentry_preserves_brush_and_uv_corners() {
+        let mut app = sculpt_event_app();
+        let source = Sphere::new(1.).mesh().uv(12, 6);
+        let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(source);
+        let entity = app
+            .world_mut()
+            .spawn((Mesh3d(handle.clone()), GlobalTransform::IDENTITY))
+            .id();
+        {
+            let mut state = app.world_mut().resource_mut::<SculptState>();
+            state.deformation_type = DeformationType::Grab;
+            state.brush_radius = 1.25;
+            state.brush_strength = 0.4;
+            state.brush_hardness = 0.7;
+            state.brush_falloff = FalloffCurve::Sharp;
+        }
+        let settings = sculpt_snapshot(app.world().resource::<SculptState>());
+        app.world_mut().write_message(SculptEvent::Enter { entity });
+        app.update();
+        assert!(app.world().resource::<SculptState>().active);
+
+        // Change chunk geometry without running GPU sync. Exit must commit this
+        // final dirty update, and must use the UV-corner-preserving mesh export.
+        let expected = {
+            let mut data = app.world_mut().resource_mut::<SculptingData>();
+            let chunks = data.chunked_mesh.as_mut().unwrap();
+            for chunk in chunks.chunks.values_mut() {
+                let ids: Vec<_> = chunk.mesh.vertices().iter().map(|v| v.id).collect();
+                for id in ids {
+                    chunk.mesh.vertex_mut(id).unwrap().position.y += 0.2;
+                }
+                chunk.mark_dirty();
+            }
+            half_edge_to_bevy_mesh(&sculpting::merge_chunks(chunks).mesh)
+                .unwrap()
+                .0
+        };
+        app.world_mut().write_message(SculptEvent::Exit);
+        app.update();
+        {
+            let assets = app.world().resource::<Assets<Mesh>>();
+            let committed = assets.get(&handle).unwrap();
+            for attribute in [
+                Mesh::ATTRIBUTE_POSITION,
+                Mesh::ATTRIBUTE_NORMAL,
+                Mesh::ATTRIBUTE_UV_0,
+            ] {
+                assert_eq!(
+                    committed.attribute(attribute),
+                    expected.attribute(attribute)
+                );
+            }
+            assert_eq!(
+                committed.indices().unwrap().iter().collect::<Vec<_>>(),
+                expected.indices().unwrap().iter().collect::<Vec<_>>()
+            );
+        }
+        assert!(!app.world().resource::<SculptState>().active);
+        assert!(
+            app.world()
+                .resource::<SculptingData>()
+                .chunked_mesh
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .resource::<SculptingData>()
+                .cached_vertex_mapping
+                .is_none()
+        );
+
+        app.world_mut().write_message(SculptEvent::Enter { entity });
+        app.update();
+        assert_eq!(
+            format!(
+                "{:?}",
+                sculpt_snapshot(app.world().resource::<SculptState>())
+            ),
+            format!("{settings:?}")
+        );
+        let data = app.world().resource::<SculptingData>();
+        let merged = sculpting::merge_chunks(data.chunked_mesh.as_ref().unwrap());
+        merged.mesh.validate().unwrap();
+        assert_eq!(
+            merged.mesh.face_count(),
+            expected.indices().unwrap().len() / 3
+        );
+        assert!(
+            merged
+                .mesh
+                .half_edges()
+                .iter()
+                .all(|edge| edge.twin.is_some())
+        );
+        assert_eq!(data.pipeline.as_ref().unwrap().brush_preset().radius, 1.25);
+    }
+
+    #[test]
+    fn gpu_sync_keeps_uv_corners_and_patches_every_render_copy() {
+        let source = Sphere::new(1.).mesh().uv(12, 6);
+        let imported = HalfEdgeMesh::from_bevy_mesh_welded(&source).unwrap();
+        let mut chunks = partition_mesh(&imported, &sculpting::PartitionConfig::default());
+        for chunk in chunks.chunks.values_mut() {
+            chunk.mark_dirty();
+        }
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>();
+        let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(source);
+        let entity = app.world_mut().spawn(Mesh3d(handle.clone())).id();
+        app.insert_resource(SculptState {
+            active: true,
+            target_entity: Some(entity),
+            ..Default::default()
+        });
+        app.insert_resource(SculptingData {
+            chunked_mesh: Some(chunks),
+            original_mesh_handle: Some(handle.clone()),
+            ..Default::default()
+        });
+        app.add_systems(Update, sync_sculpt_chunks_to_gpu);
+        app.update();
+        let first_uv = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .unwrap()
+            .attribute(Mesh::ATTRIBUTE_UV_0)
+            .unwrap()
+            .clone();
+        let render_indices = app
+            .world()
+            .resource::<SculptingData>()
+            .cached_vertex_mapping
+            .as_ref()
+            .unwrap()[&VertexId(0)]
+            .clone();
+        assert!(render_indices.len() > 1);
+        let position = Vec3::new(2., 3., 4.);
+        {
+            let mut data = app.world_mut().resource_mut::<SculptingData>();
+            for chunk in data.chunked_mesh.as_mut().unwrap().chunks.values_mut() {
+                if let Some(&local) = chunk.original_to_local.get(&VertexId(0)) {
+                    chunk.mesh.set_vertex_position(local, position);
+                    chunk.mark_dirty();
+                }
+            }
+        }
+        app.update();
+        let mesh = app.world().resource::<Assets<Mesh>>().get(&handle).unwrap();
+        assert_eq!(mesh.attribute(Mesh::ATTRIBUTE_UV_0), Some(&first_uv));
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        for index in render_indices {
+            assert_eq!(positions[index], position.to_array());
+        }
+        assert!(
+            app.world()
+                .resource::<SculptingData>()
+                .chunked_mesh
+                .as_ref()
+                .unwrap()
+                .dirty_chunks()
+                .is_empty()
+        );
+    }
+}
+
+/// Keep UI and keyboard paths backed by the same brush state.
+pub(crate) fn sculpt_snapshot(state: &SculptState) -> SculptBrushSettings {
+    SculptBrushSettings {
+        tool: match state.deformation_type {
+            DeformationType::Push => SculptTool::Push,
+            DeformationType::Pull => SculptTool::Pull,
+            DeformationType::Grab => SculptTool::Grab,
+            DeformationType::Smooth => SculptTool::Smooth,
+            DeformationType::Flatten => SculptTool::Flatten,
+            DeformationType::Inflate => SculptTool::Inflate,
+            DeformationType::Pinch => SculptTool::Pinch,
+            DeformationType::Crease => SculptTool::Crease,
+        },
+        radius: state.brush_radius,
+        strength: state.brush_strength,
+        hardness: state.brush_hardness,
+        autosmooth: configured_sculpt_preset(state).autosmooth,
+        falloff: match state.brush_falloff {
+            FalloffCurve::Linear => SculptFalloff::Linear,
+            FalloffCurve::Smooth => SculptFalloff::Smooth,
+            FalloffCurve::Sharp => SculptFalloff::Sharp,
+            FalloffCurve::Constant => SculptFalloff::Constant,
+            FalloffCurve::Sphere => SculptFalloff::Sphere,
+        },
+    }
+}
+
+fn sculpt_preset(tool: DeformationType) -> BrushPreset {
+    match tool {
+        DeformationType::Push => BrushPreset::push(),
+        DeformationType::Pull => BrushPreset::pull(),
+        DeformationType::Grab => BrushPreset::grab(),
+        DeformationType::Smooth => BrushPreset::smooth(),
+        DeformationType::Flatten => BrushPreset::flatten(),
+        DeformationType::Inflate => BrushPreset::inflate(),
+        DeformationType::Pinch => BrushPreset::pinch(),
+        DeformationType::Crease => BrushPreset::crease(),
+    }
+}
+
+fn configured_sculpt_preset(state: &SculptState) -> BrushPreset {
+    let mut preset = sculpt_preset(state.deformation_type);
+    preset.radius = state.brush_radius;
+    preset.strength = state.brush_strength;
+    preset.hardness = state.brush_hardness;
+    preset.falloff = state.brush_falloff;
+    // Grab's continuous deformation bypasses stamped-dab smoothing.
+    if state.deformation_type != DeformationType::Grab {
+        if let Some(amount) = state.brush_autosmooth {
+            preset.autosmooth = amount;
+        }
+    }
+    preset
+}
+
+pub(crate) fn preset_from_saved_settings(
+    settings: &SculptBrushSettings,
+    autosmooth_override: Option<f32>,
+) -> Result<BrushPreset, String> {
+    let mut candidate = SculptState::default();
+    candidate.deformation_type = match settings.tool {
+        SculptTool::Push => DeformationType::Push,
+        SculptTool::Pull => DeformationType::Pull,
+        SculptTool::Grab => DeformationType::Grab,
+        SculptTool::Smooth => DeformationType::Smooth,
+        SculptTool::Flatten => DeformationType::Flatten,
+        SculptTool::Inflate => DeformationType::Inflate,
+        SculptTool::Pinch => DeformationType::Pinch,
+        SculptTool::Crease => DeformationType::Crease,
+    };
+    candidate.brush_radius = settings.radius;
+    candidate.brush_strength = settings.strength;
+    candidate.brush_hardness = settings.hardness;
+    candidate.brush_autosmooth = autosmooth_override;
+    candidate.brush_falloff = match settings.falloff {
+        SculptFalloff::Linear => FalloffCurve::Linear,
+        SculptFalloff::Smooth => FalloffCurve::Smooth,
+        SculptFalloff::Sharp => FalloffCurve::Sharp,
+        SculptFalloff::Constant => FalloffCurve::Constant,
+        SculptFalloff::Sphere => FalloffCurve::Sphere,
+    };
+    if sculpt_snapshot(&candidate) != *settings {
+        return Err("The saved sculpt brush disagrees with its effective tool settings.".into());
+    }
+    Ok(configured_sculpt_preset(&candidate))
+}
+
+pub(crate) fn restore_saved_brush(
+    world: &mut World,
+    settings: &SculptBrushSettings,
+    autosmooth_override: Option<f32>,
+) -> Result<(), String> {
+    if crate::brush_presets::active(world) {
+        return Err("Finish or cancel the active stroke before restoring a sculpt brush.".into());
+    }
+    let preset = preset_from_saved_settings(settings, autosmooth_override)?;
+    let mut state = world
+        .get_resource_mut::<SculptState>()
+        .ok_or("Sculpt brushes are unavailable.")?;
+    state.deformation_type = preset.deformation_type;
+    state.brush_radius = preset.radius;
+    state.brush_strength = preset.strength;
+    state.brush_hardness = preset.hardness;
+    state.brush_autosmooth = autosmooth_override;
+    state.brush_falloff = preset.falloff;
+    if let Some(mut data) = world.get_resource_mut::<SculptingData>() {
+        if let Some(pipeline) = data.pipeline.as_mut() {
+            pipeline.set_brush_preset(preset);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_sculpt_command(world: &mut World, command: &SculptCommand) {
+    if matches!(command, SculptCommand::SetAutoSmooth { .. }) {
+        let active_stroke = world
+            .get_resource::<SculptState>()
+            .is_some_and(|state| state.current_stroke_id.is_some())
+            || world
+                .get_resource::<SculptingData>()
+                .and_then(|data| data.pipeline.as_ref())
+                .is_some_and(|pipeline| pipeline.is_stroke_active());
+        let grab = world
+            .get_resource::<SculptState>()
+            .is_some_and(|state| state.deformation_type == DeformationType::Grab);
+        if active_stroke || grab {
+            if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+                outbound.send(BevyToUi::Error {
+                    code: "sculpt_autosmooth_unavailable".into(),
+                    message: if active_stroke {
+                        "Finish or cancel the active sculpt stroke before changing auto smoothing."
+                    } else {
+                        "Auto smoothing applies to stamped sculpt brushes; Grab stays continuous."
+                    }
+                    .into(),
+                });
+            }
+            return;
+        }
+    }
+    if matches!(command, SculptCommand::Undo | SculptCommand::Redo) {
+        if world
+            .get_resource::<SculptState>()
+            .is_some_and(|state| state.active)
+        {
+            if let Some(mut events) =
+                world.get_resource_mut::<bevy::ecs::message::Messages<SculptEvent>>()
+            {
+                events.write(if matches!(command, SculptCommand::Undo) {
+                    SculptEvent::Undo
+                } else {
+                    SculptEvent::Redo
+                });
+            }
+        }
+        return;
+    }
+    let Some(mut state) = world.get_resource_mut::<SculptState>() else {
+        return;
+    };
+    match command {
+        SculptCommand::SetTool { tool } => {
+            state.deformation_type = match tool {
+                SculptTool::Push => DeformationType::Push,
+                SculptTool::Pull => DeformationType::Pull,
+                SculptTool::Grab => DeformationType::Grab,
+                SculptTool::Smooth => DeformationType::Smooth,
+                SculptTool::Flatten => DeformationType::Flatten,
+                SculptTool::Inflate => DeformationType::Inflate,
+                SculptTool::Pinch => DeformationType::Pinch,
+                SculptTool::Crease => DeformationType::Crease,
+            }
+        }
+        SculptCommand::SetRadius { radius } if radius.is_finite() => {
+            state.brush_radius = radius.clamp(0.01, 10.0)
+        }
+        SculptCommand::SetStrength { strength } if strength.is_finite() => {
+            state.brush_strength = strength.clamp(0.0, 1.0)
+        }
+        SculptCommand::SetHardness { hardness } if hardness.is_finite() => {
+            state.brush_hardness = hardness.clamp(0.0, 1.0)
+        }
+        SculptCommand::SetAutoSmooth { amount } if amount.is_finite() => {
+            state.brush_autosmooth = Some(amount.clamp(0.0, 1.0));
+        }
+        SculptCommand::SetFalloff { falloff } => {
+            state.brush_falloff = match falloff {
+                SculptFalloff::Linear => FalloffCurve::Linear,
+                SculptFalloff::Smooth => FalloffCurve::Smooth,
+                SculptFalloff::Sharp => FalloffCurve::Sharp,
+                SculptFalloff::Constant => FalloffCurve::Constant,
+                SculptFalloff::Sphere => FalloffCurve::Sphere,
+            }
+        }
+        _ => return,
+    }
+    // Tool-specific engine behavior (e.g. continuous Grab) is preserved, while the
+    // user's radius/strength/hardness/falloff survive tool and mode switches.
+    let preset = configured_sculpt_preset(&state);
+    if let Some(mut data) = world.get_resource_mut::<SculptingData>() {
+        if let Some(pipeline) = data.pipeline.as_mut() {
+            pipeline.set_brush_preset(preset);
+        }
+    }
+    if matches!(command, SculptCommand::SetRadius { .. })
+        && std::env::var_os("PENTIMENTO_NATIVE_DIAGNOSTICS").is_some()
+    {
+        let radius = world.resource::<SculptState>().brush_radius;
+        let pipeline_radius = world
+            .get_resource::<SculptingData>()
+            .and_then(|data| data.pipeline.as_ref())
+            .map(|pipeline| pipeline.brush_preset().radius);
+        info!(
+            "Sculpt radius accepted: value={} pipeline={:?}",
+            radius, pipeline_radius
+        );
+    }
+}
+
+#[cfg(test)]
+mod brush_control_tests {
+    use super::*;
+
+    #[test]
+    fn autosmooth_preserves_defaults_bounds_and_customization_without_changing_grab() {
+        let mut world = World::new();
+        world.init_resource::<SculptState>();
+        world.init_resource::<OutboundUiMessages>();
+        world.insert_resource(SculptingData {
+            pipeline: Some(SculptingPipeline::new(BrushPreset::push())),
+            ..default()
+        });
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.5
+        );
+        apply_sculpt_command(
+            &mut world,
+            &SculptCommand::SetTool {
+                tool: SculptTool::Smooth,
+            },
+        );
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.0
+        );
+        apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: 0.2 });
+        for tool in [SculptTool::Push, SculptTool::Crease, SculptTool::Smooth] {
+            apply_sculpt_command(&mut world, &SculptCommand::SetTool { tool });
+            assert_eq!(
+                sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+                0.2
+            );
+            assert_eq!(
+                world
+                    .resource::<SculptingData>()
+                    .pipeline
+                    .as_ref()
+                    .unwrap()
+                    .brush_preset()
+                    .autosmooth,
+                0.2
+            );
+        }
+        apply_sculpt_command(
+            &mut world,
+            &SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        );
+        apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: 0.9 });
+        assert_eq!(world.resource::<SculptState>().brush_autosmooth, Some(0.2));
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.0
+        );
+        assert_eq!(
+            world
+                .resource::<SculptingData>()
+                .pipeline
+                .as_ref()
+                .unwrap()
+                .brush_preset()
+                .spacing,
+            0.0
+        );
+        apply_sculpt_command(
+            &mut world,
+            &SculptCommand::SetTool {
+                tool: SculptTool::Push,
+            },
+        );
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+            0.2
+        );
+        for (input, expected) in [
+            (-2.0, 0.0),
+            (2.0, 1.0),
+            (f32::NAN, 1.0),
+            (f32::INFINITY, 1.0),
+        ] {
+            apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: input });
+            assert_eq!(
+                sculpt_snapshot(world.resource::<SculptState>()).autosmooth,
+                expected
+            );
+        }
+        world.resource_mut::<SculptState>().current_stroke_id = Some(13);
+        apply_sculpt_command(&mut world, &SculptCommand::SetAutoSmooth { amount: 0.1 });
+        assert_eq!(world.resource::<SculptState>().current_stroke_id, Some(13));
+        assert_eq!(world.resource::<SculptState>().brush_autosmooth, Some(1.0));
+    }
+
+    #[test]
+    fn sculpt_controls_update_the_active_pipeline_and_preserve_user_settings() {
+        let mut world = World::new();
+        world.init_resource::<SculptState>();
+        world.insert_resource(SculptingData {
+            pipeline: Some(SculptingPipeline::new(BrushPreset::push())),
+            ..default()
+        });
+        for command in [
+            SculptCommand::SetRadius { radius: 1.2 },
+            SculptCommand::SetStrength { strength: 0.25 },
+            SculptCommand::SetHardness { hardness: 0.2 },
+            SculptCommand::SetFalloff {
+                falloff: SculptFalloff::Sharp,
+            },
+            SculptCommand::SetTool {
+                tool: SculptTool::Grab,
+            },
+        ] {
+            apply_sculpt_command(&mut world, &command);
+        }
+        let data = world.resource::<SculptingData>();
+        let preset = data.pipeline.as_ref().unwrap().brush_preset();
+        assert_eq!(preset.deformation_type, DeformationType::Grab);
+        assert_eq!(preset.radius, 1.2);
+        assert_eq!(preset.strength, 0.25);
+        assert_eq!(preset.hardness, 0.2);
+        assert_eq!(preset.falloff, FalloffCurve::Sharp);
+        assert_eq!(
+            preset.spacing, 0.0,
+            "Grab must keep its continuous engine preset"
+        );
+        assert_eq!(preset.autosmooth, 0.0);
+        assert_eq!(
+            sculpt_snapshot(world.resource::<SculptState>()).tool,
+            SculptTool::Grab
+        );
+    }
+
+    #[test]
+    fn sculpt_strength_and_falloff_change_real_vertex_displacement() {
+        fn displacement(strength: f32, falloff: SculptFalloff, hardness: f32) -> f32 {
+            let mut world = World::new();
+            world.init_resource::<SculptState>();
+            world.init_resource::<SculptingData>();
+            for command in [
+                SculptCommand::SetRadius { radius: 1.0 },
+                SculptCommand::SetStrength { strength },
+                SculptCommand::SetHardness { hardness },
+                SculptCommand::SetFalloff { falloff },
+            ] {
+                apply_sculpt_command(&mut world, &command);
+            }
+            let state = world.resource::<SculptState>();
+            let mut mesh =
+                HalfEdgeMesh::from_raw(Vec::new(), Vec::new(), Vec::new(), Default::default());
+            let vertex = mesh.add_vertex(Vec3::new(0.75, 0.0, 0.0), Vec3::Y, None);
+            let dab = sculpting::deformation::DabInfo {
+                position: Vec3::ZERO,
+                normal: Vec3::Y,
+                radius: state.brush_radius,
+                strength: state.brush_strength,
+                hardness: state.brush_hardness,
+            };
+            sculpting::deformation::apply_push(&mut mesh, &[vertex], &dab, state.brush_falloff);
+            mesh.vertex(vertex).unwrap().position.y
+        }
+        assert!(
+            displacement(1.0, SculptFalloff::Linear, 0.0)
+                > displacement(0.2, SculptFalloff::Linear, 0.0)
+        );
+        assert!(
+            displacement(1.0, SculptFalloff::Linear, 0.0)
+                > displacement(1.0, SculptFalloff::Sharp, 0.0)
+        );
+        assert!(
+            displacement(1.0, SculptFalloff::Sharp, 0.9)
+                > displacement(1.0, SculptFalloff::Sharp, 0.0)
+        );
     }
 }

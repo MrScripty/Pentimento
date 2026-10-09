@@ -1,15 +1,11 @@
 use bevy::ecs::message::Messages;
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
-use painting::PaintingPipeline;
-use pentimento_ipc::{
-    BevyToUi, CameraCommand, GizmoCommand, LayerInfo, MaterialCommand, ObjectCommand, PaintCommand,
-    UiToBevy,
-};
+use pentimento_ipc::{CameraCommand, GizmoCommand, MaterialCommand, ObjectCommand, UiToBevy};
 use pentimento_scene::{
-    ActiveCanvasPlane, AddObjectEvent, CanvasPlane, CanvasPlaneEvent, DepthViewCapability,
-    DepthViewSettings, GizmoState, MainCamera, MeshEditEvent, OrbitCamera, OutboundUiMessages,
-    PaintingResource, SceneAmbientOcclusion, SceneLighting,
+    AddObjectEvent, CanvasPlaneEvent, DepthViewCapability, DepthViewSettings, GizmoState,
+    MainCamera, MeshEditEvent, OrbitCamera, OutboundUiMessages, SceneAmbientOcclusion,
+    SceneLighting,
 };
 #[cfg(feature = "selection")]
 use pentimento_scene::{Selectable, Selected, SelectionState};
@@ -18,16 +14,28 @@ pub(crate) fn dispatch_ui_commands(
     world: &mut World,
     commands: impl IntoIterator<Item = UiToBevy>,
 ) {
-    let active_plane_id = world
-        .get_resource::<ActiveCanvasPlane>()
-        .and_then(|active| active.entity)
-        .and_then(|entity| world.get::<CanvasPlane>(entity))
-        .map(|canvas| canvas.plane_id);
-
     let mut canvas_events = Vec::new();
     let mut outbound_layer_messages = Vec::new();
 
     for command in commands {
+        if matches!(
+            &command,
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Save { .. })
+        ) {
+            if let Some(mut messages) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
+                for event in canvas_events.drain(..) {
+                    messages.write(event);
+                }
+            }
+        }
+        let generation = pentimento_scene::project_generation(world);
+        if pentimento_scene::dispatch_brush_ui_command(world, &command) {
+            if generation != pentimento_scene::project_generation(world) {
+                canvas_events.clear();
+                break;
+            }
+            continue;
+        }
         match command {
             UiToBevy::CameraCommand(command) => handle_camera_command(world, command),
             UiToBevy::ObjectCommand(command) => handle_object_command(world, command),
@@ -69,17 +77,14 @@ pub(crate) fn dispatch_ui_commands(
                     outbound_layer_messages.push(capability.state_message(&settings));
                 }
             }
-            UiToBevy::PaintCommand(command) => {
-                handle_paint_command(
-                    world,
-                    active_plane_id,
-                    command,
-                    &mut outbound_layer_messages,
-                );
-            }
             UiToBevy::MeshEditCommand(command) => handle_mesh_edit_command(world, command),
             UiToBevy::GizmoCommand(command) => handle_gizmo_command(world, command),
-            UiToBevy::UiDirty
+            UiToBevy::PaintCommand(_)
+            | UiToBevy::ProjectCommand(_)
+            | UiToBevy::SculptCommand(_)
+            | UiToBevy::RequestBrushState
+            | UiToBevy::SetUiInputCapture { .. }
+            | UiToBevy::UiDirty
             | UiToBevy::LayoutUpdate(_)
             | UiToBevy::StartDiffusion(_)
             | UiToBevy::CancelDiffusion { .. }
@@ -97,7 +102,6 @@ pub(crate) fn dispatch_ui_commands(
             }
         }
     }
-
     if !outbound_layer_messages.is_empty() {
         if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
             for message in outbound_layer_messages {
@@ -392,132 +396,151 @@ fn handle_gizmo_command(world: &mut World, command: GizmoCommand) {
     }
 }
 
-fn handle_paint_command(
-    world: &mut World,
-    active_plane_id: Option<u32>,
-    command: PaintCommand,
-    outbound_layer_messages: &mut Vec<BevyToUi>,
-) {
-    let Some(mut painting) = world.get_resource_mut::<PaintingResource>() else {
-        return;
-    };
-
-    match command {
-        PaintCommand::SelectBrushPreset { preset_id } => {
-            let presets = painting::brush::builtin_presets();
-            if let Some(preset) = presets.into_iter().find(|preset| preset.id == preset_id) {
-                painting.set_brush_preset(preset);
-            }
-        }
-        PaintCommand::SetBrushColor { color } => {
-            painting.set_brush_color(color);
-        }
-        PaintCommand::SetBrushSize { size } => {
-            painting.brush_preset.base_size = size;
-            let preset = painting.brush_preset.clone();
-            painting.set_brush_preset(preset);
-        }
-        PaintCommand::SetBrushOpacity { opacity } => {
-            painting.brush_preset.opacity = opacity;
-            let preset = painting.brush_preset.clone();
-            painting.set_brush_preset(preset);
-        }
-        PaintCommand::SetBrushHardness { hardness } => {
-            painting.brush_preset.hardness = hardness;
-            let preset = painting.brush_preset.clone();
-            painting.set_brush_preset(preset);
-        }
-        PaintCommand::SetBlendMode { mode } => {
-            painting.set_blend_mode_ipc(mode);
-        }
-        PaintCommand::Undo => {
-            let _ = painting.undo_any();
-        }
-        PaintCommand::SetLiveProjection { enabled } => {
-            debug!("Live projection toggle requested: {}", enabled);
-        }
-        PaintCommand::ProjectToScene => {
-            debug!("Project-to-scene requested");
-        }
-        PaintCommand::AddLayer { name } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                let _ = pipeline.layers.add_layer(name);
-                outbound_layer_messages.push(make_layer_state_message(pipeline));
-            });
-        }
-        PaintCommand::RemoveLayer { layer_id } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                if pipeline.layers.remove_layer(layer_id) {
-                    outbound_layer_messages.push(make_layer_state_message(pipeline));
-                }
-            });
-        }
-        PaintCommand::SetActiveLayer { layer_id } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                if pipeline.layers.set_active(layer_id) {
-                    outbound_layer_messages.push(make_layer_state_message(pipeline));
-                }
-            });
-        }
-        PaintCommand::SetLayerVisibility { layer_id, visible } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                pipeline.layers.set_visibility(layer_id, visible);
-                outbound_layer_messages.push(make_layer_state_message(pipeline));
-            });
-        }
-        PaintCommand::SetLayerOpacity { layer_id, opacity } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                pipeline.layers.set_opacity(layer_id, opacity);
-                outbound_layer_messages.push(make_layer_state_message(pipeline));
-            });
-        }
-        PaintCommand::ReorderLayer {
-            layer_id,
-            new_index,
-        } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                pipeline.layers.reorder(layer_id, new_index as usize);
-                outbound_layer_messages.push(make_layer_state_message(pipeline));
-            });
-        }
-        PaintCommand::RenameLayer { layer_id, name } => {
-            with_active_pipeline(active_plane_id, &mut painting, |pipeline| {
-                pipeline.layers.rename(layer_id, name);
-                outbound_layer_messages.push(make_layer_state_message(pipeline));
-            });
-        }
+#[cfg(test)]
+mod project_command_tests {
+    use super::*;
+    use pentimento_ipc::ProjectCommand;
+    #[test]
+    fn save_refuses_earlier_unapplied_object_and_canvas_commands_in_native_batch() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<pentimento_scene::PaintingResource>();
+        world.init_resource::<pentimento_scene::OutboundUiMessages>();
+        world.init_resource::<Messages<CanvasPlaneEvent>>();
+        world.init_resource::<Messages<AddObjectEvent>>();
+        let directory = std::env::temp_dir().join(format!(
+            "pentimento-native-project-save-order-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory
+            .join("owned.pentimento.json")
+            .to_string_lossy()
+            .into_owned();
+        dispatch_ui_commands(
+            &mut world,
+            [
+                UiToBevy::AddObject(pentimento_ipc::AddObjectRequest {
+                    primitive_type: pentimento_ipc::PrimitiveType::Cube,
+                    position: None,
+                    name: None,
+                }),
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(2),
+                    height: Some(2),
+                }),
+                UiToBevy::ProjectCommand(ProjectCommand::Save { path: path.clone() }),
+            ],
+        );
+        assert!(!std::path::Path::new(&path).exists());
+        assert!(!world.resource::<Messages<CanvasPlaneEvent>>().is_empty());
+        assert!(!world.resource::<Messages<AddObjectEvent>>().is_empty());
+        assert_eq!(pentimento_scene::project_generation(&world), 0);
+        assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished{operation,success:false,..} if operation=="Save")));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn successful_open_discards_prefix_queued_actions_and_suffix_commands_in_native_batch() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<pentimento_scene::PaintingResource>();
+        world.init_resource::<pentimento_scene::OutboundUiMessages>();
+        world.init_resource::<Messages<CanvasPlaneEvent>>();
+        world.init_resource::<Messages<AddObjectEvent>>();
+        let mesh = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Rectangle::new(2., 2.));
+        let mat = world
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        world.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::default()));
+        let directory = std::env::temp_dir().join(format!(
+            "pentimento-native-project-batch-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory
+            .join("owned.pentimento.json")
+            .to_string_lossy()
+            .into_owned();
+        dispatch_ui_commands(
+            &mut world,
+            [UiToBevy::ProjectCommand(ProjectCommand::Save {
+                path: path.clone(),
+            })],
+        );
+        assert!(std::path::Path::new(&path).is_file());
+        let add = || {
+            UiToBevy::AddObject(pentimento_ipc::AddObjectRequest {
+                primitive_type: pentimento_ipc::PrimitiveType::Cube,
+                position: None,
+                name: None,
+            })
+        };
+        dispatch_ui_commands(
+            &mut world,
+            [
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(2),
+                    height: Some(2),
+                }),
+                add(),
+                UiToBevy::ProjectCommand(ProjectCommand::Open { path }),
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(4),
+                    height: Some(4),
+                }),
+                add(),
+            ],
+        );
+        assert_eq!(pentimento_scene::project_generation(&world), 1);
+        assert!(world.resource::<Messages<CanvasPlaneEvent>>().is_empty());
+        assert!(world.resource::<Messages<AddObjectEvent>>().is_empty());
+        assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), 1);
+        assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished{operation,success:true,..} if operation=="Open")));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
 
-fn with_active_pipeline(
-    active_plane_id: Option<u32>,
-    painting: &mut PaintingResource,
-    apply: impl FnOnce(&mut PaintingPipeline),
-) {
-    let Some(plane_id) = active_plane_id else {
-        return;
-    };
+#[cfg(test)]
+mod depth_command_tests {
+    use super::*;
+    use pentimento_ipc::BevyToUi;
 
-    let Some(pipeline) = painting.get_pipeline_mut(plane_id) else {
-        return;
-    };
-
-    apply(pipeline);
-}
-
-fn make_layer_state_message(pipeline: &PaintingPipeline) -> BevyToUi {
-    let layers = pipeline
-        .layers
-        .layer_info()
-        .into_iter()
-        .map(|layer| LayerInfo {
-            id: layer.id,
-            name: layer.name,
-            visible: layer.visible,
-            opacity: layer.opacity,
-            is_active: layer.is_active,
-        })
-        .collect();
-
-    BevyToUi::LayerStateChanged { layers }
+    #[test]
+    fn native_depth_query_and_rejected_toggle_emit_authoritative_replies() {
+        let mut world = World::new();
+        world.init_resource::<DepthViewSettings>();
+        world.init_resource::<DepthViewCapability>();
+        world.init_resource::<OutboundUiMessages>();
+        dispatch_ui_commands(
+            &mut world,
+            [
+                UiToBevy::GetDepthViewState,
+                UiToBevy::SetDepthView { enabled: true },
+            ],
+        );
+        assert!(!world.resource::<DepthViewSettings>().enabled);
+        let messages = &world.resource::<OutboundUiMessages>().messages;
+        assert!(matches!(
+            messages.as_slice(),
+            [
+                BevyToUi::DepthViewState {
+                    available: false,
+                    enabled: false,
+                    ..
+                },
+                BevyToUi::DepthViewRejected { .. },
+                BevyToUi::DepthViewState {
+                    available: false,
+                    enabled: false,
+                    ..
+                },
+            ]
+        ));
+    }
 }

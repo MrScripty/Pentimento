@@ -30,6 +30,7 @@ jobs:
           sudo apt-get install -y \
             libasound2-dev \
             libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
             libudev-dev \
             libwayland-dev \
             libwebkit2gtk-4.1-dev \
@@ -45,11 +46,44 @@ jobs:
           ./launcher.sh --install
           sha256sum --check "$RUNNER_TEMP/npm-lockfiles.sha256"
 
+      - name: Exercise rendered UI and viewport-edge menus
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PENTIMENTO_EVIDENCE_DIR="$RUNNER_TEMP/pentimento-ui-evidence"
+          mkdir -p "$PENTIMENTO_EVIDENCE_DIR"
+          browser=""
+          for name in google-chrome-stable google-chrome chromium chromium-browser; do
+            candidate="$(command -v "$name" || true)"
+            if [[ -n "$candidate" && -x "$candidate" ]]; then browser="$candidate"; break; fi
+          done
+          test -n "$browser" || { echo 'No installed runner browser executable found'; exit 1; }
+          export CHROMIUM_PATH="$browser"
+          { echo "$CHROMIUM_PATH"; "$CHROMIUM_PATH" --version; } | tee "$PENTIMENTO_EVIDENCE_DIR/browser.log"
+          setsid npm run dev -- --host 127.0.0.1 --port 5187 --strictPort > "$PENTIMENTO_EVIDENCE_DIR/vite.log" 2>&1 &
+          server_pid=$!
+          trap 'kill -TERM -- "-$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+          timeout 30s bash -c 'until curl --fail --silent --max-time 1 http://127.0.0.1:5187/ > /dev/null; do sleep 0.2; done'
+          kill -0 "$server_pid"
+          export PENTIMENTO_UI_URL=http://127.0.0.1:5187
+          timeout --signal=TERM --kill-after=10s 180s npm run test:ui:browser \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/ui-browser.log"
+
       - name: Verify active frontends
         run: |
           sha256sum Cargo.lock > "$RUNNER_TEMP/cargo-lock.sha256"
           ./launcher.sh --test
           sha256sum --check "$RUNNER_TEMP/cargo-lock.sha256"
+
+      - name: Retain rendered UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-browser-${{ github.sha }}
+          path: ${{ runner.temp }}/pentimento-ui-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
   sculpting:
     runs-on: ubuntu-24.04

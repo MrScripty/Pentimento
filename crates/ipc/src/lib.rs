@@ -12,7 +12,7 @@ pub mod types;
 // This allows existing imports like `use pentimento_ipc::BevyToUi` to continue working.
 
 // Main message enums
-pub use messages::{BevyToUi, UiToBevy};
+pub use messages::{BevyToUi, ProjectCommand, UiToBevy};
 
 // Types
 pub use types::{
@@ -24,9 +24,11 @@ pub use types::{
 
 // Commands
 pub use commands::{
-    AddPaintCanvasRequest, BlendMode, CameraCommand, CoordinateSpace, EditMode, GizmoAxis,
-    GizmoCommand, GizmoMode, LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool,
-    MeshSelectionMode, ObjectCommand, PaintCommand,
+    AddPaintCanvasRequest, BlendMode, CameraCommand, ColorSampleSource, CoordinateSpace, EditMode,
+    GizmoAxis, GizmoCommand, GizmoMode, LayerInfo, MaterialCommand, MeshEditCommand, MeshEditTool,
+    MeshSelectionMode, ObjectCommand, PaintBrushPresetInfo, PaintBrushSettings, PaintCommand,
+    PaintTarget, PaintTargetState, SculptBrushSettings, SculptCommand, SculptFalloff, SculptTool,
+    UvLayerCommand, UvLayerInfo, UvLayerState, UvReceiverInfo,
 };
 
 // Input types

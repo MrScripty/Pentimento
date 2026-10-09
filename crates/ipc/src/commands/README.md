@@ -55,3 +55,8 @@ let command = PaintCommand::SetLayerOpacity { layer_id: 2, opacity: 0.5 };
 - Serialized command variants use serde enum tagging semantics.
 - Variant names such as `SetDepthView`, `SetTool`, and `AddLayer` are consumer-visible.
 - Renames require synchronized updates across Rust, TypeScript, and contract tests.
+
+## Brush controls
+`paint.rs` owns paint settings, preset metadata and round-tip spacing. `sculpt.rs` lists only engine-supported deformations/falloff curves and settings commands. `RequestBrushState`, `PaintBrushStateChanged`, `SculptBrushStateChanged` and browser input-capture messages are mirrored in TypeScript and the Rust-generated contract samples. Paint size means full-pressure diameter; frontend radius is half that value.
+
+`SetColorSampling` and `SetColorSampleSource` arm/cancel the one-shot source canvas sampler and choose `VisibleLayers` or `ActiveLayer`. `PaintColorSamplingChanged` publishes authoritative enabled/source/active-stroke state; sampling updates regular native brush color without stroke/history messages.

@@ -91,6 +91,7 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
 
             // Get vertices in this face (in chunk-local IDs)
             let local_verts = chunk.mesh.get_face_vertices(face.id);
+            let source_corners = chunk.mesh.get_face_half_edges(face.id);
 
             // Skip collapsed/invalid faces (these have < 3 vertices after collapse operations)
             if local_verts.len() < 3 {
@@ -185,6 +186,7 @@ pub fn merge_chunks(chunked_mesh: &ChunkedMesh) -> MergeResult {
                 half_edges.push(HalfEdge {
                     id: he_id,
                     origin,
+                    corner_uv: chunk.mesh.corner_uv(source_corners[i]),
                     twin: None,
                     next: HalfEdgeId(base_he_idx + next_idx as u32),
                     prev: HalfEdgeId(base_he_idx + prev_idx as u32),
@@ -310,6 +312,7 @@ pub fn merge_two_chunks(
     for chunk in [&a, &b] {
         for face in chunk.mesh.faces() {
             let local_verts = chunk.mesh.get_face_vertices(face.id);
+            let source_corners = chunk.mesh.get_face_half_edges(face.id);
 
             // Skip collapsed/invalid faces (these have < 3 vertices after collapse operations)
             if local_verts.len() < 3 {
@@ -380,6 +383,7 @@ pub fn merge_two_chunks(
                 half_edges.push(HalfEdge {
                     id: he_id,
                     origin,
+                    corner_uv: chunk.mesh.corner_uv(source_corners[i]),
                     twin: None,
                     next: HalfEdgeId(base_he_idx + next_idx as u32),
                     prev: HalfEdgeId(base_he_idx + prev_idx as u32),

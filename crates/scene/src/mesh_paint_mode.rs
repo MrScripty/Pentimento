@@ -12,10 +12,11 @@
 //! - `MeshPaintEvent` messages are emitted for the painting system to process
 
 use bevy::ecs::message::Message;
+use bevy::ecs::message::MessageCursor;
 use bevy::input::mouse::MouseButton;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy::window::{PrimaryWindow, WindowEvent};
 
 use painting::projection::build_tangent_space;
 use painting::types::{MeshHit, MeshStorageMode};
@@ -25,7 +26,7 @@ use crate::frontend_input::FrontendInputBlockState;
 use crate::paint_mode::{PaintMode, StrokeIdGenerator};
 
 /// Component marking a mesh as paintable
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct PaintableMesh {
     /// Unique identifier for this mesh (used for stroke storage)
     pub mesh_id: u32,
@@ -40,6 +41,12 @@ pub struct MeshIdGenerator {
 }
 
 impl MeshIdGenerator {
+    pub(crate) fn document_next_id(&self) -> u32 {
+        self.next_id
+    }
+    pub(crate) fn from_document(next_id: u32) -> Self {
+        Self { next_id }
+    }
     /// Generate the next unique mesh ID
     pub fn next(&mut self) -> u32 {
         let id = self.next_id;
@@ -85,6 +92,14 @@ pub enum MeshPaintEvent {
         /// Unique stroke ID
         stroke_id: u64,
     },
+    /// Pressure-bearing native contact; legacy mouse Start remains full pressure.
+    StrokeStartWithPressure {
+        mesh_entity: Entity,
+        mesh_id: u32,
+        hit: MeshHit,
+        stroke_id: u64,
+        pressure: f32,
+    },
     /// Stroke continues with a new position
     StrokeMove {
         /// Hit data at the new position
@@ -98,6 +113,11 @@ pub enum MeshPaintEvent {
     StrokeEnd,
     /// Stroke was cancelled
     StrokeCancel,
+    StrokeBreak,
+    History {
+        mesh_entity: Entity,
+        redo: bool,
+    },
 }
 
 /// Plugin for mesh painting functionality
@@ -110,167 +130,373 @@ impl Plugin for MeshPaintModePlugin {
         app.init_resource::<MeshIdGenerator>()
             .init_resource::<MeshPaintState>()
             .add_message::<MeshPaintEvent>()
-            .add_systems(Update, handle_mesh_paint_input);
+            .add_systems(
+                Update,
+                handle_mesh_paint_input
+                    .after(crate::paint_mode::handle_paint_mode_toggle)
+                    .after(crate::mesh_painting_system::sync_mesh_paint_owners)
+                    .before(crate::mesh_painting_system::process_mesh_paint_events),
+            );
     }
 }
 
-/// Handle mesh painting input
-fn handle_mesh_paint_input(
-    mouse_button: Res<ButtonInput<MouseButton>>,
-    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut cursor_events: MessageReader<CursorMoved>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    mesh_query: Query<(Entity, &PaintableMesh, &Mesh3d, &GlobalTransform)>,
-    meshes: Res<Assets<Mesh>>,
-    paint_mode: Res<PaintMode>,
-    input_blocks: Res<FrontendInputBlockState>,
-    mut mesh_paint_state: ResMut<MeshPaintState>,
-    mut stroke_id_gen: ResMut<StrokeIdGenerator>,
-    mut mesh_paint_events: MessageWriter<MeshPaintEvent>,
-    time: Res<Time>,
-) {
-    if input_blocks.blocks_pointer() {
-        cursor_events.clear();
-        return;
-    }
-
-    // Only process if paint mode is active
-    if !paint_mode.active {
-        return;
-    }
-
-    // Get camera for ray casting
-    let Ok((camera, camera_transform)) = camera_query.single() else {
+#[derive(Default)]
+struct DirectPointer {
+    reader: MessageCursor<WindowEvent>,
+    cursor: Option<Vec2>,
+    window: Option<Entity>,
+    generation: u64,
+    touch: Option<u64>,
+    pressure: f32,
+    keys: ButtonInput<KeyCode>,
+}
+/// Consume the actual app-arbitrated WindowEvent stream, including native contact
+/// identity and force. Never synthesize scene mouse buttons from touch input.
+fn handle_mesh_paint_input(world: &mut World, mut previous: Local<DirectPointer>) {
+    use bevy::input::touch::TouchPhase;
+    let raw: Vec<_> = world
+        .get_resource::<Messages<WindowEvent>>()
+        .map(|m| previous.reader.read(m).cloned().collect())
+        .unwrap_or_default();
+    let Some((window, focused, current_cursor)) = world
+        .query_filtered::<(Entity, &Window), With<PrimaryWindow>>()
+        .iter(world)
+        .next()
+        .map(|(e, w)| (e, w.focused, w.cursor_position()))
+    else {
         return;
     };
-
-    // Get window for cursor position
-    let Ok((window_entity, window)) = windows.single() else {
-        return;
-    };
-
-    // Collect cursor positions from this frame
-    let cursor_positions: Vec<Vec2> = cursor_events
-        .read()
-        .filter(|e| e.window == window_entity)
-        .map(|e| e.position)
-        .collect();
-
-    let current_time = time.elapsed_secs_f64();
-
-    // Handle stroke start
-    if mouse_button.just_pressed(MouseButton::Left) {
-        let cursor_pos = cursor_positions
-            .last()
-            .copied()
-            .or_else(|| window.cursor_position());
-        if let Some(cursor_pos) = cursor_pos {
-            if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos).ok() {
-                // Find closest mesh hit
-                if let Some((entity, paintable, hit)) =
-                    find_closest_mesh_hit(&ray, &mesh_query, &meshes)
-                {
-                    let stroke_id = stroke_id_gen.next();
-                    let mesh_id = paintable.mesh_id;
-
-                    mesh_paint_state.current_stroke = Some(MeshStrokeState {
-                        stroke_id,
-                        mesh_id,
-                        start_time: (current_time * 1000.0) as u64,
-                        last_world_pos: Some(hit.world_pos),
-                        last_time: current_time,
-                    });
-                    mesh_paint_state.active_mesh = Some(entity);
-
-                    mesh_paint_events.write(MeshPaintEvent::StrokeStart {
-                        mesh_entity: entity,
-                        mesh_id,
-                        hit,
-                        stroke_id,
-                    });
-
-                    info!("Mesh stroke started on mesh_id={}", mesh_id);
+    let generation = world
+        .get_resource::<crate::project::ProjectState>()
+        .map_or(0, |p| p.generation);
+    if previous.window != Some(window) || previous.generation != generation {
+        previous.cursor = None;
+        previous.touch = None;
+        previous.keys.reset_all();
+        previous.window = Some(window);
+        previous.generation = generation;
+    }
+    let arbitrated = world
+        .get_resource::<crate::FrontendScenePointerInput>()
+        .and_then(|s| s.events(window))
+        .map(|e| e.to_vec());
+    let using_arbitration = arbitrated.is_some();
+    let batch = arbitrated.unwrap_or_else(|| raw.clone());
+    let blocks = *world.resource::<FrontendInputBlockState>();
+    // Retain chronological modifiers across frames: focus loss clears Bevy's
+    // final ButtonInput before Update, even for a valid shortcut before the loss.
+    let mut keys = previous.keys.clone();
+    for event in &raw {
+        match event {
+            WindowEvent::KeyboardInput(e) if e.window == window => {
+                if e.state.is_pressed() {
+                    previous.keys.press(e.key_code);
+                } else {
+                    previous.keys.release(e.key_code);
                 }
             }
+            WindowEvent::KeyboardFocusLost(_) => previous.keys.reset_all(),
+            WindowEvent::WindowFocused(e) if e.window == window && !e.focused => {
+                previous.keys.reset_all()
+            }
+            _ => {}
         }
-    } else if mouse_button.pressed(MouseButton::Left) {
-        // Continue stroke - extract active_mesh before borrowing current_stroke
-        let active_entity = mesh_paint_state.active_mesh;
-
-        if let (Some(active_entity), Some(ref mut stroke_state)) =
-            (active_entity, mesh_paint_state.current_stroke.as_mut())
-        {
-            let positions_to_process: Vec<Vec2> = if !cursor_positions.is_empty() {
-                cursor_positions
-            } else if let Some(pos) = window.cursor_position() {
-                vec![pos]
-            } else {
-                vec![]
-            };
-
-            for cursor_pos in positions_to_process {
-                if let Some(ray) = camera.viewport_to_world(camera_transform, cursor_pos).ok() {
-                    // Only hit test against the active mesh
-                    if let Ok((_entity, _, mesh_handle, mesh_transform)) =
-                        mesh_query.get(active_entity)
+    }
+    let active = world
+        .get_resource::<PaintMode>()
+        .is_some_and(|p| p.active && p.target == pentimento_ipc::PaintTarget::DirectUv);
+    if !active {
+        if crate::direct_uv_tool::is_direct(world) {
+            crate::direct_uv_tool::restore_canvas(world);
+        }
+        previous.cursor = None;
+        previous.touch = None;
+        close_direct(world, true);
+        return;
+    }
+    if !using_arbitration && blocks.blocks_pointer() {
+        close_direct(world, previous.touch.is_some());
+        previous.cursor = None;
+        return;
+    }
+    if previous.cursor.is_none()
+        && !batch
+            .iter()
+            .any(|e| matches!(e, WindowEvent::CursorMoved(_)))
+    {
+        previous.cursor = current_cursor.filter(|p| p.is_finite());
+    }
+    let first_focus = batch.iter().find_map(|e| match e {
+        WindowEvent::WindowFocused(e) if e.window == window => Some(e.focused),
+        _ => None,
+    });
+    if !focused && first_focus.is_none() {
+        close_direct(world, previous.touch.is_some());
+        previous.cursor = None;
+        return;
+    }
+    let mut focus_lost = first_focus.map_or(!focused, |f| f);
+    for event in batch {
+        match event {
+            WindowEvent::CursorMoved(e) if e.window == window && previous.touch.is_none() => {
+                previous.cursor = (!focus_lost && e.position.is_finite()).then_some(e.position);
+                if let Some(position) = previous.cursor {
+                    move_direct(world, position, 1.);
+                }
+            }
+            WindowEvent::MouseButtonInput(e)
+                if e.window == window
+                    && e.button == MouseButton::Left
+                    && previous.touch.is_none() =>
+            {
+                if e.state.is_pressed() && !focus_lost {
+                    if let Some(position) = previous.cursor {
+                        start_direct(world, position, 1.);
+                    }
+                } else if !e.state.is_pressed() {
+                    close_direct(world, false);
+                }
+            }
+            WindowEvent::TouchInput(e) if e.window == window => {
+                if e.phase == TouchPhase::Started {
+                    if previous.touch.is_some()
+                        || world.resource::<MeshPaintState>().current_stroke.is_some()
+                        || focus_lost
                     {
-                        if let Some(mesh) = meshes.get(&mesh_handle.0) {
-                            if let Some(hit) = ray_mesh_intersection(&ray, mesh, mesh_transform) {
-                                let speed = if let Some(last_pos) = stroke_state.last_world_pos {
-                                    let distance = hit.world_pos.distance(last_pos);
-                                    let dt = (current_time - stroke_state.last_time) as f32;
-                                    if dt > 0.0 { distance / dt } else { 0.0 }
-                                } else {
-                                    0.0
-                                };
-
-                                stroke_state.last_world_pos = Some(hit.world_pos);
-                                stroke_state.last_time = current_time;
-
-                                mesh_paint_events.write(MeshPaintEvent::StrokeMove {
-                                    hit,
-                                    pressure: 1.0,
-                                    speed,
-                                });
-                            }
+                        continue;
+                    }
+                    previous.touch = Some(e.id);
+                }
+                if previous.touch != Some(e.id) {
+                    continue;
+                }
+                if e.phase == TouchPhase::Canceled {
+                    close_direct(world, true);
+                    previous.touch = None;
+                    previous.cursor = None;
+                    continue;
+                }
+                let pressure = if e.phase == TouchPhase::Ended && e.force.is_none() {
+                    Some(previous.pressure)
+                } else {
+                    crate::touch_pressure(e.force)
+                };
+                if !e.position.is_finite() || pressure.is_none() {
+                    close_direct(world, true);
+                    previous.cursor = None;
+                    if e.phase == TouchPhase::Ended {
+                        previous.touch = None;
+                    }
+                    continue;
+                }
+                let pressure = pressure.unwrap();
+                previous.pressure = pressure;
+                previous.cursor = Some(e.position);
+                match e.phase {
+                    TouchPhase::Started => start_direct(world, e.position, pressure),
+                    TouchPhase::Moved => move_direct(world, e.position, pressure),
+                    TouchPhase::Ended => {
+                        move_direct(world, e.position, pressure);
+                        close_direct(world, false);
+                        previous.touch = None;
+                        previous.cursor = None;
+                    }
+                    TouchPhase::Canceled => unreachable!(),
+                }
+            }
+            WindowEvent::WindowFocused(e) if e.window == window => {
+                focus_lost = !e.focused;
+                if focus_lost {
+                    close_direct(world, previous.touch.is_some());
+                    previous.touch = None;
+                    previous.cursor = None;
+                    keys.reset_all();
+                }
+            }
+            WindowEvent::KeyboardInput(e) if e.window == window => {
+                if e.state.is_pressed() {
+                    keys.press(e.key_code);
+                } else {
+                    keys.release(e.key_code);
+                }
+                if e.state.is_pressed() && !e.repeat && !focus_lost && !blocks.blocks_keyboard() {
+                    if e.key_code == KeyCode::Escape {
+                        crate::direct_uv_tool::cancel(world);
+                    }
+                    if e.key_code == KeyCode::KeyZ
+                        && (keys.pressed(KeyCode::ControlLeft)
+                            || keys.pressed(KeyCode::ControlRight))
+                    {
+                        if let Some(entity) = world.resource::<PaintMode>().direct_target {
+                            world.write_message(MeshPaintEvent::History {
+                                mesh_entity: entity,
+                                redo: keys.pressed(KeyCode::ShiftLeft)
+                                    || keys.pressed(KeyCode::ShiftRight),
+                            });
                         }
                     }
                 }
             }
+            _ => {}
         }
-    } else if mouse_button.just_released(MouseButton::Left) {
-        // End stroke
-        if mesh_paint_state.current_stroke.is_some() {
-            mesh_paint_events.write(MeshPaintEvent::StrokeEnd);
-            mesh_paint_state.current_stroke = None;
-            mesh_paint_state.active_mesh = None;
-            info!("Mesh stroke ended");
-        }
+    }
+    if previous.touch.is_none()
+        && !world
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left)
+    {
+        close_direct(world, false);
+    }
+    if !focused {
+        previous.cursor = None;
     }
 }
-
-/// Find the closest paintable mesh hit by a ray
-fn find_closest_mesh_hit<'a>(
-    ray: &Ray3d,
-    mesh_query: &'a Query<(Entity, &PaintableMesh, &Mesh3d, &GlobalTransform)>,
-    meshes: &Assets<Mesh>,
-) -> Option<(Entity, &'a PaintableMesh, MeshHit)> {
-    let mut closest: Option<(Entity, &PaintableMesh, MeshHit, f32)> = None;
-
-    for (entity, paintable, mesh_handle, transform) in mesh_query.iter() {
-        let Some(mesh) = meshes.get(&mesh_handle.0) else {
-            continue;
-        };
-
-        if let Some(hit) = ray_mesh_intersection(ray, mesh, transform) {
-            let distance = ray.origin.distance(hit.world_pos);
-            if closest.is_none() || distance < closest.as_ref().unwrap().3 {
-                closest = Some((entity, paintable, hit, distance));
-            }
+fn close_direct(world: &mut World, cancel: bool) {
+    if world
+        .resource_mut::<MeshPaintState>()
+        .current_stroke
+        .take()
+        .is_some()
+    {
+        world.write_message(if cancel {
+            MeshPaintEvent::StrokeCancel
+        } else {
+            MeshPaintEvent::StrokeEnd
+        });
+    }
+    world.resource_mut::<MeshPaintState>().active_mesh = None;
+}
+fn move_direct(world: &mut World, position: Vec2, pressure: f32) {
+    if world.resource::<MeshPaintState>().current_stroke.is_none() {
+        return;
+    }
+    let owner = world.resource::<MeshPaintState>().active_mesh;
+    if let Some((_, _, hit)) = nearest(world, position).filter(|(e, _, _)| Some(*e) == owner) {
+        world.write_message(MeshPaintEvent::StrokeMove {
+            hit,
+            pressure,
+            speed: 0.,
+        });
+    } else {
+        world.write_message(MeshPaintEvent::StrokeBreak);
+    }
+}
+fn start_direct(world: &mut World, position: Vec2, pressure: f32) {
+    if world.resource::<MeshPaintState>().current_stroke.is_some() {
+        return;
+    }
+    let Some((entity, paintable, hit)) = nearest(world, position) else {
+        return;
+    };
+    let Some(p) = paintable.filter(|p| matches!(p.storage_mode, MeshStorageMode::UvAtlas { .. }))
+    else {
+        crate::direct_uv_tool::error(
+            world,
+            "The visible surface is not a supported DirectUV receiver. PTex painting is unavailable.",
+        );
+        return;
+    };
+    if world
+        .get_resource::<PaintMode>()
+        .and_then(|m| m.direct_target)
+        .is_some_and(|selected| {
+            selected != entity
+                && world
+                    .resource::<crate::MeshPaintingResource>()
+                    .shared_id_for_entity(selected)
+                    .is_some()
+        })
+    {
+        crate::direct_uv_tool::error(
+            world,
+            "Paint on the explicitly selected UV receiver, or select another receiver first.",
+        );
+        return;
+    }
+    if !crate::direct_uv_tool::admitted(world, entity) {
+        crate::direct_uv_tool::error(
+            world,
+            "This DirectUV receiver is not ready or its paint ownership changed. Reopen or choose another supported receiver.",
+        );
+        return;
+    }
+    if let Some(layers) = world
+        .resource::<crate::MeshPaintingResource>()
+        .uv_layers(p.mesh_id)
+    {
+        if let Err(message) = layers.paintable() {
+            crate::direct_uv_tool::error(world, message);
+            return;
         }
     }
-
-    closest.map(|(e, p, h, _)| (e, p, h))
+    let stroke_id = world.resource_mut::<StrokeIdGenerator>().next();
+    let time = world.resource::<Time>().elapsed_secs_f64();
+    world.resource_mut::<MeshPaintState>().active_mesh = Some(entity);
+    world.resource_mut::<MeshPaintState>().current_stroke = Some(MeshStrokeState {
+        stroke_id,
+        mesh_id: p.mesh_id,
+        start_time: (time * 1000.) as u64,
+        last_world_pos: Some(hit.world_pos),
+        last_time: time,
+    });
+    let mut mode = world.resource_mut::<PaintMode>();
+    mode.direct_target = Some(entity);
+    mode.target_notice = None;
+    world.write_message(MeshPaintEvent::StrokeStartWithPressure {
+        mesh_entity: entity,
+        mesh_id: p.mesh_id,
+        hit,
+        stroke_id,
+        pressure,
+    });
+}
+/// Nearest visible triangle is the occluder even if it cannot receive paint.
+fn nearest(world: &mut World, cursor: Vec2) -> Option<(Entity, Option<PaintableMesh>, MeshHit)> {
+    let (camera, transform) = world
+        .query_filtered::<(&Camera, &GlobalTransform), With<MainCamera>>()
+        .iter(world)
+        .next()
+        .map(|(c, t)| (c.clone(), *t))?;
+    let ray = camera.viewport_to_world(&transform, cursor).ok()?;
+    let candidates: Vec<_> = world
+        .query::<(
+            Entity,
+            &Mesh3d,
+            &GlobalTransform,
+            Option<&PaintableMesh>,
+            Option<&Visibility>,
+            Option<&InheritedVisibility>,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+        )>()
+        .iter(world)
+        .filter(|(_, _, _, _, v, inherited, _)| {
+            v.is_none_or(|v| *v != Visibility::Hidden) && inherited.is_none_or(|v| v.get())
+        })
+        .map(|(e, m, t, p, _, _, material)| {
+            (
+                e,
+                m.0.clone(),
+                *t,
+                p.copied(),
+                material.map(|m| m.0.clone()),
+            )
+        })
+        .collect();
+    let meshes = world.resource::<Assets<Mesh>>();
+    let materials = world.resource::<Assets<StandardMaterial>>();
+    candidates
+        .into_iter()
+        .filter_map(|(entity, mesh, transform, p, material)| {
+            let mesh = meshes.get(&mesh)?;
+            let cull = material
+                .as_ref()
+                .and_then(|h| materials.get(h))
+                .and_then(|m| m.cull_mode);
+            let hit = ray_mesh_intersection_culled(&ray, mesh, &transform, cull)?;
+            Some((ray.origin.distance(hit.world_pos), entity, p, hit))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, e, p, h)| (e, p, h))
 }
 
 /// Perform ray-mesh intersection and return hit data
@@ -282,6 +508,14 @@ pub fn ray_mesh_intersection(
     mesh: &Mesh,
     transform: &GlobalTransform,
 ) -> Option<MeshHit> {
+    ray_mesh_intersection_culled(ray, mesh, transform, None)
+}
+fn ray_mesh_intersection_culled(
+    ray: &Ray3d,
+    mesh: &Mesh,
+    transform: &GlobalTransform,
+    cull: Option<bevy::render::render_resource::Face>,
+) -> Option<MeshHit> {
     // Get vertex positions
     let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
         Some(VertexAttributeValues::Float32x3(v)) => v,
@@ -292,7 +526,7 @@ pub fn ray_mesh_intersection(
     let indices = match mesh.indices() {
         Some(Indices::U32(i)) => i.iter().map(|&x| x as usize).collect::<Vec<_>>(),
         Some(Indices::U16(i)) => i.iter().map(|&x| x as usize).collect::<Vec<_>>(),
-        None => return None,
+        None => (0..positions.len()).collect(),
     };
 
     // Get optional vertex attributes
@@ -312,6 +546,9 @@ pub fn ray_mesh_intersection(
     };
 
     // Transform ray to local space for intersection
+    if !transform.to_matrix().is_finite() || transform.to_matrix().determinant() == 0.0 {
+        return None;
+    }
     let inv_transform = transform.affine().inverse();
     let local_ray_origin = inv_transform.transform_point3(ray.origin);
     let local_ray_dir = inv_transform.transform_vector3(*ray.direction).normalize();
@@ -328,9 +565,21 @@ pub fn ray_mesh_intersection(
         let i1 = triangle[1];
         let i2 = triangle[2];
 
-        let v0 = Vec3::from(positions[i0]);
-        let v1 = Vec3::from(positions[i1]);
-        let v2 = Vec3::from(positions[i2]);
+        let v0 = Vec3::from(*positions.get(i0)?);
+        let v1 = Vec3::from(*positions.get(i1)?);
+        let v2 = Vec3::from(*positions.get(i2)?);
+        if !v0.is_finite() || !v1.is_finite() || !v2.is_finite() {
+            return None;
+        }
+        let a = transform.transform_point(v0);
+        let b = transform.transform_point(v1);
+        let c = transform.transform_point(v2);
+        let front = (b - a).cross(c - a).dot(*ray.direction) < 0.0;
+        if matches!(cull, Some(bevy::render::render_resource::Face::Back)) && !front
+            || matches!(cull, Some(bevy::render::render_resource::Face::Front)) && front
+        {
+            continue;
+        }
 
         // Möller–Trumbore ray-triangle intersection
         if let Some((t, u, v)) =
@@ -362,34 +611,44 @@ pub fn ray_mesh_intersection(
 
     // Interpolate and transform normal
     let normal = if let Some(normals) = normals {
-        let n0 = Vec3::from(normals[i0]);
-        let n1 = Vec3::from(normals[i1]);
-        let n2 = Vec3::from(normals[i2]);
+        let n0 = Vec3::from(*normals.get(i0)?);
+        let n1 = Vec3::from(*normals.get(i1)?);
+        let n2 = Vec3::from(*normals.get(i2)?);
         let local_normal =
             (n0 * barycentric.x + n1 * barycentric.y + n2 * barycentric.z).normalize();
         // Transform normal (use rotation only, not scale)
-        (transform.rotation() * local_normal).normalize()
+        transform
+            .to_matrix()
+            .inverse()
+            .transpose()
+            .transform_vector3(local_normal)
+            .normalize()
     } else {
         // Compute face normal from triangle edges
         let edge1 = v1 - v0;
         let edge2 = v2 - v0;
         let local_normal = edge1.cross(edge2).normalize();
-        (transform.rotation() * local_normal).normalize()
+        transform
+            .to_matrix()
+            .inverse()
+            .transpose()
+            .transform_vector3(local_normal)
+            .normalize()
     };
 
     // Interpolate UV if available
-    let uv = uvs.map(|uvs| {
-        let uv0 = Vec2::from(uvs[i0]);
-        let uv1 = Vec2::from(uvs[i1]);
-        let uv2 = Vec2::from(uvs[i2]);
-        uv0 * barycentric.x + uv1 * barycentric.y + uv2 * barycentric.z
+    let uv = uvs.and_then(|uvs| {
+        let uv0 = Vec2::from(*uvs.get(i0)?);
+        let uv1 = Vec2::from(*uvs.get(i1)?);
+        let uv2 = Vec2::from(*uvs.get(i2)?);
+        Some(uv0 * barycentric.x + uv1 * barycentric.y + uv2 * barycentric.z)
     });
 
     // Build tangent space
     let (tangent, bitangent) = if let Some(tangents) = tangents {
-        let t0 = Vec4::from(tangents[i0]);
-        let t1 = Vec4::from(tangents[i1]);
-        let t2 = Vec4::from(tangents[i2]);
+        let t0 = Vec4::from(*tangents.get(i0)?);
+        let t1 = Vec4::from(*tangents.get(i1)?);
+        let t2 = Vec4::from(*tangents.get(i2)?);
         let local_tangent4 = t0 * barycentric.x + t1 * barycentric.y + t2 * barycentric.z;
         let local_tangent =
             Vec3::new(local_tangent4.x, local_tangent4.y, local_tangent4.z).normalize();

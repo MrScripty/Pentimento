@@ -168,7 +168,6 @@ fn camera_pan_system(
     key_input: Res<ButtonInput<KeyCode>>,
     mut motion_events: MessageReader<MouseMotion>,
     mut camera_query: Query<(&mut OrbitCamera, &Transform)>,
-    active_plane: Res<ActiveCanvasPlane>,
     gizmo_state: Res<GizmoState>,
     input_blocks: Res<FrontendInputBlockState>,
 ) {
@@ -177,11 +176,7 @@ fn camera_pan_system(
         return;
     }
 
-    // Don't allow camera movement when locked to a canvas plane
-    if active_plane.camera_locked {
-        motion_events.clear();
-        return;
-    }
+    // Canvas view locks orbit only; panning remains available for detailed painting.
 
     // Don't allow camera movement when gizmo is being manipulated
     if gizmo_state.is_active {
@@ -229,7 +224,6 @@ fn camera_pan_system(
 fn camera_zoom_system(
     mut scroll_events: MessageReader<MouseWheel>,
     mut camera_query: Query<&mut OrbitCamera>,
-    active_plane: Res<ActiveCanvasPlane>,
     gizmo_state: Res<GizmoState>,
     input_blocks: Res<FrontendInputBlockState>,
 ) {
@@ -238,11 +232,7 @@ fn camera_zoom_system(
         return;
     }
 
-    // Don't allow camera movement when locked to a canvas plane
-    if active_plane.camera_locked {
-        scroll_events.clear();
-        return;
-    }
+    // Zooming preserves the canvas view orientation.
 
     // Don't allow camera movement when gizmo is being manipulated
     if gizmo_state.is_active {

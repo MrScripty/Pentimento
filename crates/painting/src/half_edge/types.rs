@@ -15,11 +15,12 @@ pub struct HalfEdgeId(pub u32);
 pub struct FaceId(pub u32);
 
 /// A vertex in the half-edge mesh
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Vertex {
     pub id: VertexId,
     pub position: Vec3,
     pub normal: Vec3,
+    /// Representative/fallback UV. Imported UV0 is authoritative on face corners.
     pub uv: Option<Vec2>,
     /// One outgoing half-edge from this vertex (arbitrary choice if multiple)
     pub outgoing_half_edge: Option<HalfEdgeId>,
@@ -31,11 +32,13 @@ pub struct Vertex {
 ///
 /// Each edge in the mesh is represented by two half-edges pointing in opposite
 /// directions. Half-edges store connectivity information for traversing the mesh.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HalfEdge {
     pub id: HalfEdgeId,
     /// The vertex this half-edge originates from
     pub origin: VertexId,
+    /// UV at this face corner; independent of the topological vertex at seams.
+    pub corner_uv: Option<Vec2>,
     /// The opposite half-edge (None for boundary edges)
     pub twin: Option<HalfEdgeId>,
     /// The next half-edge around the face (counter-clockwise)
@@ -47,7 +50,7 @@ pub struct HalfEdge {
 }
 
 /// A face (polygon) in the mesh
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Face {
     pub id: FaceId,
     /// One half-edge on the boundary of this face

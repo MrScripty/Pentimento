@@ -5,6 +5,42 @@
 
 use bevy::prelude::*;
 
+/// A native frontend's per-frame, chronologically arbitrated scene input.
+/// UI-owned gestures never enter this stream; a scene gesture entering UI or
+/// losing focus receives an explicit closing event. Global blocking flags
+/// remain conservative for scene systems that do not consume this stream.
+#[derive(Resource, Default)]
+pub struct FrontendScenePointerInput {
+    batch: Option<(Entity, Vec<bevy::window::WindowEvent>)>,
+}
+
+impl FrontendScenePointerInput {
+    pub fn publish(&mut self, window: Entity, events: Vec<bevy::window::WindowEvent>) {
+        self.batch = Some((window, events));
+    }
+    /// A backend switch cannot reinterpret a prefix already admitted by native input.
+    pub fn has_scene_press(&self) -> bool {
+        self.batch.as_ref().is_some_and(|(_, events)| {
+            events.iter().any(|e| match e {
+                bevy::window::WindowEvent::MouseButtonInput(e) => e.state.is_pressed(),
+                bevy::window::WindowEvent::TouchInput(e) => {
+                    e.phase == bevy::input::touch::TouchPhase::Started
+                }
+                _ => false,
+            })
+        })
+    }
+    pub fn clear(&mut self) {
+        self.batch = None;
+    }
+    pub fn events(&self, window: Entity) -> Option<&[bevy::window::WindowEvent]> {
+        self.batch
+            .as_ref()
+            .filter(|(owner, _)| *owner == window)
+            .map(|(_, events)| events.as_slice())
+    }
+}
+
 /// Generic input blocking flags owned by the active frontend integration.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct FrontendInputBlockState {
@@ -24,4 +60,76 @@ impl FrontendInputBlockState {
     pub fn blocks_keyboard(self) -> bool {
         self.block_keyboard
     }
+}
+
+/// Browser-owned rectangles in webview coordinates; native and WASM hosts can
+/// block viewport input before forwarding a click into an interactive widget.
+#[derive(Resource, Default)]
+pub struct FrontendUiLayout {
+    pub regions: Vec<pentimento_ipc::LayoutRegion>,
+    pub received: bool,
+    pub pointer_captured: bool,
+}
+
+impl FrontendUiLayout {
+    pub fn update_pointer(&mut self, x: f32, y: f32, down: bool, just_pressed: bool) -> bool {
+        let over_ui = self
+            .regions
+            .iter()
+            .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height);
+        if just_pressed && over_ui {
+            self.pointer_captured = true;
+        }
+        let blocked = over_ui || self.pointer_captured;
+        if !down {
+            self.pointer_captured = false;
+        }
+        blocked
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn widget_drag_stays_captured_until_release() {
+        let mut layout = FrontendUiLayout {
+            regions: vec![pentimento_ipc::LayoutRegion {
+                id: "brush".into(),
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 20.0,
+                z_index: 1,
+                accepts_keyboard: true,
+            }],
+            received: true,
+            ..default()
+        };
+        assert!(layout.update_pointer(15.0, 15.0, true, true));
+        assert!(layout.update_pointer(200.0, 200.0, true, false));
+        assert!(layout.update_pointer(200.0, 200.0, false, false));
+        assert!(!layout.update_pointer(200.0, 200.0, false, false));
+    }
+}
+
+/// Pressure supplied by Bevy/winit. Missing force is the ordinary full-pressure
+/// pointer fallback; malformed supplied force is rejected, never promoted to 1.
+pub fn touch_pressure(force: Option<bevy::input::touch::ForceTouch>) -> Option<f32> {
+    use bevy::input::touch::ForceTouch;
+    let pressure = match force {
+        None => 1.,
+        Some(ForceTouch::Normalized(value)) => value,
+        Some(ForceTouch::Calibrated {
+            force,
+            max_possible_force,
+            ..
+        }) => {
+            if !force.is_finite() || !max_possible_force.is_finite() || max_possible_force <= 0. {
+                return None;
+            }
+            force / max_possible_force
+        }
+    };
+    (pressure.is_finite() && (0.0..=1.0).contains(&pressure)).then_some(pressure as f32)
 }

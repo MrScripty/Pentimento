@@ -1,0 +1,106 @@
+name: native-cef-qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'ui/**'
+      - 'tests/native/**'
+      - 'package*.json'
+      - 'Cargo.toml'
+      - 'launcher.sh'
+      - '.github/workflows/native-cef-qualification.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-cef-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-cef:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      # Official CEF software-OSR mode for this headless qualification process.
+      # Bevy still renders through Mesa Vulkan; this is not hardware-GPU validation.
+      PENTIMENTO_CEF_RENDERING: 'software'
+      # Official CEF documentation links this recognized binary distributor.
+      # cef-dll-sys selects and verifies the archive matching its binding version.
+      CEF_DOWNLOAD_URL: https://cef-builds.spotifycdn.com
+    steps:
+      - name: Prepare runner-local evidence path
+        run: echo "PENTIMENTO_EVIDENCE_DIR=$RUNNER_TEMP/pentimento-cef-evidence" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install official Ubuntu native frontend and X11 test packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev libudev-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libwebkit2gtk-4.1-dev pkg-config \
+            cmake ninja-build xvfb xauth xdotool imagemagick iproute2 \
+            mesa-vulkan-drivers libgl1-mesa-dri
+      - name: Install pinned frontend packages
+        run: npm ci --no-audit --no-fund
+      - name: Record qualification environment
+        run: |
+          mkdir -p "$PENTIMENTO_EVIDENCE_DIR"
+          {
+            git rev-parse HEAD
+            echo "CEF rendering qualification: $PENTIMENTO_CEF_RENDERING"
+            rustc --version
+            node --version
+            npm --version
+            uname -a
+            dpkg-query -W libgtk-3-dev libwebkit2gtk-4.1-dev mesa-vulkan-drivers xvfb
+          } > "$PENTIMENTO_EVIDENCE_DIR/environment.log"
+      - name: Build the actual canonical CEF app and subprocess helper
+        shell: bash
+        run: |
+          set -o pipefail
+          unset CEF_PATH CARGO_TARGET_DIR
+          ./launcher.sh --build --frontend cef 2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/build.log"
+          cp Cargo.lock "$PENTIMENTO_EVIDENCE_DIR/Cargo.lock"
+      - name: Test native event ordering and UI capture regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          unset CARGO_TARGET_DIR
+          cef_input_lib_dir="$(find target/debug/build -type d -name cef_linux_x86_64 -print -quit)"
+          test -f "$cef_input_lib_dir/libcef.so"
+          export LD_LIBRARY_PATH="$cef_input_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo test --locked -p pentimento --features cef input:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/input-tests.log"
+          cargo test --locked -p pentimento --features cef render::framebuffer_receipt_tests:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/framebuffer-receipt-tests.log"
+      - name: Exercise actual native input, panels, painting and sculpting
+        shell: bash
+        run: |
+          set -o pipefail
+          unset WAYLAND_DISPLAY CARGO_TARGET_DIR
+          export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name '*lvp*.json' -print -quit)"
+          test -n "$VK_ICD_FILENAMES"
+          # Original checks plus separate receiver views and layered projection history
+          # need a larger total window; all per-condition limits remain 30s.
+          xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' \
+            timeout --signal=TERM --kill-after=10s 900s \
+            node tests/native/cef-paint-sculpt.mjs 2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/test.log"
+      - name: Retain inspected evidence and exact resolved dependency graph
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cef-${{ github.sha }}
+          path: ${{ runner.temp }}/pentimento-cef-evidence
+          if-no-files-found: warn
+          retention-days: 14

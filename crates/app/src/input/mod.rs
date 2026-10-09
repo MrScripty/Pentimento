@@ -29,6 +29,8 @@ use bevy::prelude::*;
 use std::time::Instant;
 
 mod backend;
+#[cfg(all(test, feature = "mesh_painting", feature = "egui"))]
+mod direct_uv_native_tests;
 mod hotkeys;
 mod keyboard;
 mod mouse;
@@ -38,21 +40,17 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseState>()
+            .init_resource::<pentimento_scene::FrontendScenePointerInput>()
             // Run in PreUpdate to get the freshest input state before other systems
             .add_systems(
                 PreUpdate,
-                (clear_motion_events, mouse::track_mouse_position)
+                (
+                    clear_motion_events,
+                    mouse::trace_pointer_origin,
+                    mouse::forward_native_input,
+                )
                     .chain()
                     .after(InputSystems),
-            )
-            .add_systems(
-                PreUpdate,
-                (
-                    mouse::forward_mouse_buttons,
-                    mouse::forward_mouse_scroll,
-                    keyboard::forward_keyboard,
-                )
-                    .after(mouse::track_mouse_position),
             );
 
         // CEF DevTools hotkey (Ctrl+Shift+I)
@@ -71,7 +69,7 @@ impl Plugin for InputPlugin {
         // Add object menu hotkey (Shift+A)
         app.add_systems(
             PreUpdate,
-            hotkeys::handle_add_menu_hotkey.after(InputSystems),
+            hotkeys::handle_add_menu_hotkey.after(mouse::forward_native_input),
         );
 
         info!("Input plugin initialized");

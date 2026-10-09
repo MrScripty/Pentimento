@@ -80,11 +80,14 @@ pub enum CollapseRejection {
     LinkConditionFailed,
     /// Collapse would cause one or more face normals to flip
     WouldCauseFlip,
+    /// A collapse would erase or mix a UV chart boundary.
+    UvSeam,
 }
 
 impl std::fmt::Display for CollapseRejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UvSeam => write!(f, "vertex lies on a UV seam"),
             Self::InvalidEdge => write!(f, "edge does not exist"),
             Self::OriginOnBoundary => write!(f, "origin vertex is on boundary"),
             Self::DestinationOnBoundary => write!(f, "destination vertex is on boundary"),
@@ -127,41 +130,7 @@ pub struct CollapseResult {
 /// Adapted from SculptGL Decimation.js ring boundary check, corrected to
 /// work with our half-edge ring walk pattern.
 fn is_ring_boundary_vertex(mesh: &HalfEdgeMesh, vertex_id: VertexId) -> bool {
-    let Some(vertex) = mesh.vertex(vertex_id) else {
-        return true;
-    };
-    let Some(start) = vertex.outgoing_half_edge else {
-        return true;
-    };
-
-    let mut current = start;
-    let mut iterations = 0;
-    loop {
-        iterations += 1;
-        if iterations > 100 {
-            return true; // Safety limit — treat as boundary
-        }
-
-        let Some(he) = mesh.half_edge(current) else {
-            return true;
-        };
-        // Check if the current outgoing half-edge itself is a boundary
-        if he.twin.is_none() {
-            return true;
-        }
-        let Some(prev_he) = mesh.half_edge(he.prev) else {
-            return true;
-        };
-        match prev_he.twin {
-            Some(twin) => {
-                current = twin;
-                if current == start {
-                    return false; // Full loop completed — interior vertex
-                }
-            }
-            None => return true, // Boundary edge found
-        }
-    }
+    mesh.is_boundary_vertex(vertex_id)
 }
 
 // =============================================================================
@@ -196,6 +165,9 @@ pub fn can_collapse_edge_safe(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Colla
     };
     let v1_id = next_he.origin;
 
+    if mesh.is_uv_seam_vertex(v0_id) || mesh.is_uv_seam_vertex(v1_id) {
+        return CollapseCheck::Rejected(CollapseRejection::UvSeam);
+    }
     // ===== PHASE 2: Ring boundary check for edge endpoints =====
     // From SculptGL: if (ring1.length !== tris1.length || ring2.length !== tris2.length) return;
     if is_ring_boundary_vertex(mesh, v0_id) {
@@ -250,7 +222,7 @@ pub fn can_collapse_edge_safe(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> Colla
     let is_boundary = he.twin.is_none();
     let expected_common = if is_boundary { 1 } else { 2 };
 
-    if common.len() != expected_common {
+    if common.len() != expected_common || !mesh.satisfies_collapse_link(edge_id) {
         return CollapseCheck::Rejected(CollapseRejection::LinkConditionFailed);
     }
 
@@ -461,63 +433,55 @@ pub fn calculate_collapse_position(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId) -> 
 /// Face flipping occurs when a face's normal reverses direction after
 /// a vertex move, which can cause rendering artifacts.
 pub fn would_cause_flip(mesh: &HalfEdgeMesh, edge_id: HalfEdgeId, new_pos: Vec3) -> bool {
+    if !new_pos.is_finite() {
+        return true;
+    }
     let Some(he) = mesh.half_edge(edge_id) else {
         return true;
     };
-
-    let v0_id = he.origin;
-
-    // Check all faces adjacent to v0
-    let faces = mesh.get_vertex_faces(v0_id);
-
-    for face_id in faces {
-        let face_verts = mesh.get_face_vertices(face_id);
-        if face_verts.len() < 3 {
+    let v0 = he.origin;
+    let Some(v1) = mesh.get_half_edge_dest(edge_id) else {
+        return true;
+    };
+    let faces: HashSet<_> = mesh
+        .get_vertex_faces(v0)
+        .into_iter()
+        .chain(mesh.get_vertex_faces(v1))
+        .collect();
+    for face in faces {
+        let vertices = mesh.get_face_vertices(face);
+        if vertices.len() != 3 {
+            return true;
+        }
+        // These faces intentionally disappear. Only surviving triangles need a
+        // finite, nondegenerate, consistently oriented simulated placement.
+        if vertices.contains(&v0) && vertices.contains(&v1) {
             continue;
         }
-
-        // Get current positions
-        let positions: Vec<Vec3> = face_verts
+        let Some(old): Option<Vec<_>> = vertices
             .iter()
-            .filter_map(|&vid| mesh.vertex(vid).map(|v| v.position))
-            .collect();
-
-        if positions.len() < 3 {
-            continue;
-        }
-
-        // Calculate current normal
-        let e1 = positions[1] - positions[0];
-        let e2 = positions[2] - positions[0];
-        let current_normal = e1.cross(e2);
-
-        // Calculate new positions (replacing v0 with new_pos)
-        let new_positions: Vec<Vec3> = face_verts
+            .map(|&id| mesh.vertex(id).map(|v| v.position))
+            .collect()
+        else {
+            return true;
+        };
+        let new: Vec<_> = vertices
             .iter()
-            .filter_map(|&vid| {
-                if vid == v0_id {
-                    Some(new_pos)
+            .zip(&old)
+            .map(|(&id, &position)| {
+                if id == v0 || id == v1 {
+                    new_pos
                 } else {
-                    mesh.vertex(vid).map(|v| v.position)
+                    position
                 }
             })
             .collect();
-
-        if new_positions.len() < 3 {
-            continue;
-        }
-
-        // Calculate new normal
-        let e1_new = new_positions[1] - new_positions[0];
-        let e2_new = new_positions[2] - new_positions[0];
-        let new_normal = e1_new.cross(e2_new);
-
-        // Check if normal flipped (dot product negative)
-        if current_normal.dot(new_normal) < 0.0 {
+        let old_normal = (old[1] - old[0]).cross(old[2] - old[0]);
+        let new_normal = (new[1] - new[0]).cross(new[2] - new[0]);
+        if !old_normal.is_finite() || !new_normal.is_finite() || old_normal.dot(new_normal) <= 0.0 {
             return true;
         }
     }
-
     false
 }
 

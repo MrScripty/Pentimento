@@ -41,3 +41,13 @@ Always use `NonSendMut<T>` to access frontend resources, never `ResMut<T>`.
 
 For capture-based: Implement `CompositeBackend` trait, add to `create_frontend()`.
 For GPU-native: Follow the Dioxus pattern with separate resource type.
+
+## Keyboard forwarding contract
+
+Physical key codes and native `KeyboardInput.text` travel separately. Modifier
+flags reflect each event in a batch, including chords pressed and released in
+one frame. AltGraph is distinct from ordinary Alt/Ctrl shortcuts. A focus-loss
+batch is discarded because Bevy clears held physical keys without matching
+release messages; reconstructing that batch can turn a shortcut into text.
+Subsequent batches provide fresh authoritative modifier flags. This does not
+implement a separate browser focus or IME lifecycle.

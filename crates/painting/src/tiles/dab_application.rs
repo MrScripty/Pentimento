@@ -58,6 +58,59 @@ impl TiledSurface {
         angle: f32,
         aspect_ratio: f32,
     ) -> Option<(u32, u32, u32, u32)> {
+        self.apply_dab_ellipse_policy(
+            center_x,
+            center_y,
+            radius,
+            color,
+            opacity,
+            hardness,
+            blend_mode,
+            angle,
+            aspect_ratio,
+            false,
+        )
+    }
+
+    pub fn apply_dab_ellipse_uv(
+        &mut self,
+        center_x: f32,
+        center_y: f32,
+        radius: f32,
+        color: [f32; 4],
+        opacity: f32,
+        hardness: f32,
+        blend_mode: BlendMode,
+        angle: f32,
+        aspect_ratio: f32,
+    ) -> Option<(u32, u32, u32, u32)> {
+        self.apply_dab_ellipse_policy(
+            center_x,
+            center_y,
+            radius,
+            color,
+            opacity,
+            hardness,
+            blend_mode,
+            angle,
+            aspect_ratio,
+            true,
+        )
+    }
+
+    fn apply_dab_ellipse_policy(
+        &mut self,
+        center_x: f32,
+        center_y: f32,
+        radius: f32,
+        color: [f32; 4],
+        opacity: f32,
+        hardness: f32,
+        blend_mode: BlendMode,
+        angle: f32,
+        aspect_ratio: f32,
+        shared_uv: bool,
+    ) -> Option<(u32, u32, u32, u32)> {
         debug!(
             "TiledSurface::apply_dab_ellipse: center=({:.1}, {:.1}), radius={:.1}, aspect={:.2}, angle={:.2}rad, opacity={:.2}, hardness={:.2}, mode={:?}",
             center_x, center_y, radius, aspect_ratio, angle, opacity, hardness, blend_mode
@@ -138,6 +191,13 @@ impl TiledSurface {
                     match blend_mode {
                         BlendMode::Normal => {
                             // Blend the color with the calculated falloff
+                            if shared_uv
+                                && color[3] * effective_opacity > 0.
+                                && self.surface.get_pixel(px, py).is_some_and(|p| p[3] == 0.)
+                            {
+                                // Mask latent transparent destination RGB only at actually painted texels.
+                                self.surface.set_pixel(px, py, [0.; 4]);
+                            }
                             self.surface.blend_pixel(px, py, color, effective_opacity);
                         }
                         BlendMode::Erase => {
