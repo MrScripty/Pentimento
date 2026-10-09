@@ -29,6 +29,270 @@ fn crossing_fixture() -> HalfEdgeMesh {
     HalfEdgeMesh::from_bevy_mesh(&source).unwrap()
 }
 
+fn thin_crossing_fixture(stationary_first: bool, height: f32) -> HalfEdgeMesh {
+    let mut source = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    source.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [0., 0., height],
+            [0.05, 0., height],
+            [0., 0.05, height],
+            [-1., -1., 0.],
+            [2., -1., 0.],
+            [-1., 2., 0.],
+        ],
+    );
+    source.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![
+            [0., 0.],
+            [1., 0.],
+            [0., 1.],
+            [0.1, 0.2],
+            [0.8, 0.2],
+            [0.1, 0.9],
+        ],
+    );
+    source.insert_indices(Indices::U32(if stationary_first {
+        vec![3, 4, 5, 0, 1, 2]
+    } else {
+        vec![0, 1, 2, 3, 4, 5]
+    }));
+    HalfEdgeMesh::from_bevy_mesh(&source).unwrap()
+}
+
+fn ordered_crossing_chunks(
+    face_order: bool,
+    chunk_order: Option<bool>,
+    height: f32,
+) -> sculpting::ChunkedMesh {
+    let mut mesh = partition_mesh(
+        &thin_crossing_fixture(face_order, height),
+        &PartitionConfig {
+            target_faces: 1,
+            min_faces: 1,
+            max_faces: if chunk_order.is_some() { 1 } else { 100 },
+        },
+    );
+    if let Some(stationary_first) = chunk_order {
+        assert_eq!(mesh.chunk_count(), 2);
+        let mut chunks = std::mem::take(&mut mesh.chunks);
+        for (_, mut chunk) in chunks.drain() {
+            let moving = chunk
+                .original_to_local
+                .contains_key(&painting::half_edge::VertexId(0));
+            chunk.id = sculpting::ChunkId(u32::from(moving == stationary_first));
+            assert!(mesh.chunks.insert(chunk.id, chunk).is_none());
+        }
+        mesh.rebuild_boundary_relationships();
+        mesh.rebuild_spatial_grid();
+    }
+    mesh
+}
+
+fn crossing_pipeline(strength: f32) -> SculptingPipeline {
+    SculptingPipeline::with_config(
+        BrushPreset {
+            radius: 0.15,
+            strength,
+            spacing: 0.,
+            autosmooth: 0.,
+            falloff: FalloffCurve::Constant,
+            ..BrushPreset::push()
+        },
+        PipelineConfig {
+            tessellation_enabled: false,
+            rebalance_after_stroke: false,
+            ..Default::default()
+        },
+    )
+}
+
+fn crossing_input(height: f32, time: u64) -> BrushInput {
+    BrushInput {
+        position: Vec3::new(0., 0., height),
+        normal: -Vec3::Z,
+        pressure: 1.,
+        timestamp_ms: time,
+    }
+}
+
+fn sweep_rejects_crossing(face_order: bool, chunk_order: Option<bool>) -> bool {
+    let mut mesh = ordered_crossing_chunks(face_order, chunk_order, 0.06);
+    assert_surface(&mesh, "swept crossing baseline");
+    let before = mesh.clone();
+    // Endpoint-only validation cannot catch this path: the moving triangle is
+    // completely below the stationary sheet at the otherwise valid endpoint.
+    let mut endpoint = mesh.clone();
+    for chunk in endpoint.chunks.values_mut() {
+        for global in 0..3 {
+            if let Some(&local) = chunk
+                .original_to_local
+                .get(&painting::half_edge::VertexId(global))
+            {
+                let position = chunk.mesh.vertex(local).unwrap().position - Vec3::Z * 0.1;
+                chunk.mesh.set_vertex_position(local, position);
+            }
+        }
+    }
+    assert_surface(&endpoint, "separated endpoint after forbidden crossing");
+    let mut pipeline = crossing_pipeline(1.);
+    let input = crossing_input(0.06, 0);
+    pipeline.begin_stroke(0, input);
+    let result = pipeline.process_input(
+        BrushInput {
+            timestamp_ms: 1,
+            ..input
+        },
+        &mut mesh,
+    );
+    let end = pipeline.end_stroke(&mut mesh);
+    assert_surface(&mesh, "swept crossing returned endpoint");
+    let rejected = result.rejected == Some(SafetyError::Intersection)
+        && end.rejected == Some(SafetyError::Intersection)
+        && end.packets.is_empty()
+        && pipeline.history_status().undo_strokes == 0
+        && before.same_authoritative_state(&mesh);
+    eprintln!(
+        "sweep face_order={face_order} chunk_order={chunk_order:?}: rejected={rejected}, reason={:?}, packets={}",
+        result.rejected,
+        end.packets.len()
+    );
+    rejected
+}
+
+#[test]
+fn swept_collision_is_independent_of_face_order() {
+    let results = [false, true].map(|order| sweep_rejects_crossing(order, None));
+    assert!(
+        results.into_iter().all(|rejected| rejected),
+        "both face orders must reject the same crossing"
+    );
+}
+
+#[test]
+fn swept_collision_is_independent_of_chunk_order() {
+    let mut results = Vec::new();
+    for faces in [false, true] {
+        for chunks in [false, true] {
+            results.push(sweep_rejects_crossing(faces, Some(chunks)));
+        }
+    }
+    assert!(
+        results.into_iter().all(|rejected| rejected),
+        "all face/chunk orders must reject the same crossing"
+    );
+}
+
+#[test]
+fn repeated_swept_crossings_roll_back_earlier_dabs_and_preserve_exact_undo_redo() {
+    for faces in [false, true] {
+        for chunks in [None, Some(false), Some(true)] {
+            let mut mesh = ordered_crossing_chunks(faces, chunks, 0.16);
+            let original = mesh.clone();
+            let mut pipeline = crossing_pipeline(0.1);
+            let input = BrushInput {
+                normal: Vec3::Z,
+                ..crossing_input(0.16, 0)
+            };
+            pipeline.begin_stroke(0, input);
+            assert!(
+                pipeline
+                    .process_input(
+                        BrushInput {
+                            timestamp_ms: 1,
+                            ..input
+                        },
+                        &mut mesh
+                    )
+                    .rejected
+                    .is_none()
+            );
+            assert!(!pipeline.end_stroke(&mut mesh).packets.is_empty());
+            let accepted = mesh.clone();
+            assert!(!original.same_authoritative_state(&accepted));
+            assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+            assert!(original.same_authoritative_state(&mesh));
+            let pending_redo = pipeline.history_status();
+            assert_eq!(pending_redo.redo_strokes, 1);
+            pipeline.set_brush_preset(BrushPreset {
+                strength: 1.,
+                ..pipeline.brush_preset().clone()
+            });
+            for stroke in 0..4 {
+                let input = crossing_input(0.16, 10 + stroke * 10);
+                pipeline.begin_stroke(0, input);
+                assert!(
+                    pipeline
+                        .process_input(
+                            BrushInput {
+                                timestamp_ms: input.timestamp_ms + 1,
+                                ..input
+                            },
+                            &mut mesh
+                        )
+                        .rejected
+                        .is_none()
+                );
+                assert!(
+                    !original.same_authoritative_state(&mesh),
+                    "first dab must really deform"
+                );
+                assert_surface(&mesh, "admitted dab before crossing");
+                let result = pipeline.process_input(
+                    BrushInput {
+                        timestamp_ms: input.timestamp_ms + 2,
+                        ..input
+                    },
+                    &mut mesh,
+                );
+                assert_eq!(
+                    result.rejected,
+                    Some(SafetyError::Intersection),
+                    "face_order={faces} chunk_order={chunks:?} stroke={stroke}"
+                );
+                assert!(original.same_authoritative_state(&mesh));
+                let end = pipeline.end_stroke(&mut mesh);
+                assert_eq!(end.rejected, Some(SafetyError::Intersection));
+                assert!(end.packets.is_empty());
+                assert_eq!(pending_redo, pipeline.history_status());
+                assert_surface(&mesh, "rejected whole-stroke rollback");
+                assert!(pipeline.restore_history(&mut mesh, true).unwrap());
+                assert!(accepted.same_authoritative_state(&mesh));
+                assert_surface(&mesh, "redo after rejected crossing");
+                assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+                assert!(original.same_authoritative_state(&mesh));
+                assert_surface(&mesh, "undo after rejected crossing");
+            }
+            let input = BrushInput {
+                normal: Vec3::Z,
+                ..crossing_input(0.16, 100)
+            };
+            pipeline.begin_stroke(0, input);
+            assert!(
+                pipeline
+                    .process_input(
+                        BrushInput {
+                            timestamp_ms: 101,
+                            ..input
+                        },
+                        &mut mesh
+                    )
+                    .rejected
+                    .is_none()
+            );
+            assert!(!pipeline.end_stroke(&mut mesh).packets.is_empty());
+            assert_eq!(pipeline.history_status().redo_strokes, 0);
+            assert_surface(&mesh, "fresh accepted stroke after rejected layers");
+            assert!(pipeline.restore_history(&mut mesh, false).unwrap());
+            assert!(original.same_authoritative_state(&mesh));
+        }
+    }
+}
+
 #[test]
 fn repeated_strokes_cannot_drive_one_sheet_through_another() {
     let imported = crossing_fixture();

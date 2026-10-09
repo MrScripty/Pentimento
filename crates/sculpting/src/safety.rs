@@ -573,10 +573,12 @@ impl Bvh {
         match self {
             Self::Leaf { faces, .. } => {
                 for &j in faces {
-                    if j <= i {
+                    let b = &all[j];
+                    // Only moving faces issue queries. An earlier stationary
+                    // face has not checked this pair; earlier moving faces have.
+                    if j == i || (j < i && b.p != starts[j]) {
                         continue;
                     }
-                    let b = &all[j];
                     if a.ids.iter().any(|id| b.ids.contains(id))
                         || !overlaps(a.min, a.max, b.min, b.max)
                     {
@@ -891,6 +893,44 @@ mod tests {
                 &mut 0
             ),
             Err(SafetyError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn swept_moving_pairs_are_checked_once_and_stationary_pairs_keep_the_work_cap() {
+        // Disjoint coplanar triangles with overlapping AABBs. Their common
+        // translation has a separating axis, so one pair consumes one proof.
+        let triangles = [
+            tri([0, 1, 2], [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+            tri([3, 4, 5], [[1., 1., 0.], [0.6, 1., 0.], [1., 0.6, 0.]]),
+        ];
+        let starts = triangles.each_ref().map(|triangle| triangle.p);
+        let swept = triangles.map(|triangle| {
+            let mut moving = Triangle::new(
+                triangle.ids,
+                triangle.p.map(|point| point + DVec3::Z * 0.1),
+                triangle.chunk,
+            )
+            .unwrap();
+            moving.min = moving.min.min(triangle.min);
+            moving.max = moving.max.max(triangle.max);
+            moving
+        });
+        let bvh = Bvh::build(&swept, &mut [0, 1]);
+        let mut remaining = 1;
+        for index in 0..2 {
+            bvh.motion_candidates(index, &swept[index], &swept, &starts, &mut remaining)
+                .unwrap();
+        }
+        assert_eq!(remaining, 0, "moving pair must be checked exactly once");
+
+        let mut one_moving = swept;
+        one_moving[0] = tri([0, 1, 2], starts[0].map(|point| point.to_array()));
+        let bvh = Bvh::build(&one_moving, &mut [0, 1]);
+        assert_eq!(
+            bvh.motion_candidates(1, &one_moving[1], &one_moving, &starts, &mut 0),
+            Err(SafetyError::WorkLimit),
+            "an earlier stationary pair must not pass an exhausted proof budget"
         );
     }
 }
