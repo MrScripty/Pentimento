@@ -22,7 +22,7 @@ pub(crate) fn show(
     ui.heading("Sculpt brushes");
     presets::show(ui, snapshot, runtime, true, commands);
     let history = &snapshot.sculpt_history;
-    ui.add_enabled_ui(!history.active, |ui| {
+    ui.scope(|ui| {
         ui.horizontal_wrapped(|ui| {
             for tool in [
                 SculptTool::Push,
@@ -36,6 +36,7 @@ pub(crate) fn show(
             ] {
                 if ui
                     .selectable_label(settings.tool == tool, format!("{tool:?}"))
+                    .on_hover_text(description(tool))
                     .clicked()
                 {
                     sculpt(commands, SculptCommand::SetTool { tool });
@@ -79,7 +80,7 @@ pub(crate) fn show(
                     }
                 }
             });
-        ui.add_enabled_ui(settings.tool != SculptTool::Grab, |ui| {
+        ui.add_enabled_ui(!history.active && settings.tool != SculptTool::Grab, |ui| {
             if let Some(amount) = slider(
                 ui,
                 settings.autosmooth * 100.0,
@@ -95,6 +96,7 @@ pub(crate) fn show(
             }
         });
     });
+    ui.small(format!("{}. Custom settings stay selected when switching tools. Object scale affects the brush footprint.", description(settings.tool)));
     ui.small(if settings.tool == SculptTool::Grab {
         "Grab stays continuous without post-dab smoothing."
     } else {
@@ -125,5 +127,19 @@ pub(crate) fn show(
     if let Some(notice) = &history.notice {
         ui.label(notice);
     }
-    ui.small("F: radius · Shift+F: strength · Ctrl+Tab: leave sculpt mode");
+    ui.small("F: radius · Shift+F: strength · Click or Enter confirms; Escape cancels adjustment.");
+    ui.small("Middle-drag: orbit · Shift + middle-drag: pan · Scroll: zoom · Ctrl+Tab: leave sculpt mode");
+}
+
+fn description(tool: SculptTool) -> &'static str {
+    match tool {
+        SculptTool::Push => "Move along the hit surface normal",
+        SculptTool::Pull => "Draw vertices toward the brush center",
+        SculptTool::Grab => "Drag the surface along your stroke",
+        SculptTool::Smooth => "Average neighboring vertex positions",
+        SculptTool::Flatten => "Level the surface toward a plane",
+        SculptTool::Inflate => "Expand along vertex normals",
+        SculptTool::Pinch => "Gather the surface inward",
+        SculptTool::Crease => "Carve a crease along the stroke",
+    }
 }

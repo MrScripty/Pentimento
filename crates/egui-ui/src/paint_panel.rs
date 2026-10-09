@@ -1,6 +1,6 @@
 use crate::{
     controls::{button, paint, slider},
-    egui, presets,
+    egui, paint_color, presets,
     state::{EguiUiRuntime, EguiUiSnapshot},
     uv_layer_panel,
 };
@@ -60,15 +60,18 @@ pub(crate) fn show(
         ui.label(notice);
     }
     let settings = &state.settings;
-    ui.add_enabled_ui(!locked, |ui| {
+    paint_color::preview(ui, settings);
+    ui.add_enabled_ui(!(direct && locked), |ui| {
         ui.horizontal(|ui| {
             if ui.selectable_label(settings.blend_mode==BlendMode::Normal,"Brush").clicked() {paint(commands,PaintCommand::SetBlendMode{mode:BlendMode::Normal});}
             if ui.selectable_label(settings.blend_mode==BlendMode::Erase,"Eraser").clicked() {paint(commands,PaintCommand::SetBlendMode{mode:BlendMode::Erase});}
         });
+        ui.add_enabled_ui(!snapshot.saved_brushes.active, |ui| {
         egui::ComboBox::from_id_salt("paint_preset").selected_text(if settings.customized {"Custom round brush"} else {state.presets.iter().find(|p|p.id==settings.preset_id).map_or("Round brush",|p|p.name.as_str())}).show_ui(ui,|ui| {
             for preset in &state.presets {
                 if ui.selectable_label(!settings.customized && settings.preset_id==preset.id,&preset.name).clicked() {paint(commands,PaintCommand::SelectBrushPreset{preset_id:preset.id});}
             }
+        });
         });
         if let Some(radius)=slider(ui,settings.size/2.0,0.5..=256.0,if direct {"Radius (atlas px)"} else {"Radius (canvas px)"}) {paint(commands,PaintCommand::SetBrushSize{size:radius*2.0});}
         if let Some(opacity)=slider(ui,settings.opacity*100.0,0.0..=100.0,"Opacity %") {paint(commands,PaintCommand::SetBrushOpacity{opacity:opacity/100.0});}
@@ -81,9 +84,7 @@ pub(crate) fn show(
                 if let Some(gray)=slider(ui,gray*100.0,0.0..=100.0,"Mask grayscale %") {let g=gray/100.0;paint(commands,PaintCommand::SetBrushColor{color:[g,g,g,1.0]});}
                 ui.small("Black conceals; white reveals. Eraser reveals white.");
             } else {
-                // This egui API accepts linear RGB and handles display conversion itself.
-                let mut rgb=[settings.color[0],settings.color[1],settings.color[2]];
-                ui.horizontal(|ui| {ui.label("Color");if ui.color_edit_button_rgb(&mut rgb).changed() {paint(commands,PaintCommand::SetBrushColor{color:[rgb[0],rgb[1],rgb[2],1.0]});}});
+                paint_color::edit(ui, settings, runtime, !(direct && locked) && settings.blend_mode != BlendMode::Erase, commands);
                 if mask {ui.small("Canvas linear brightness supplies mask coverage. Transparent source pixels leave it unchanged.");}
             }
         });
@@ -127,24 +128,35 @@ pub(crate) fn show(
         });
     }
     ui.separator();
+    let layered = target
+        .uv_layers
+        .as_ref()
+        .is_some_and(|layers| layers.enabled);
+    let (undo, redo) = match (direct, layered) {
+        (false, _) => ("Undo canvas stroke", "Redo canvas stroke"),
+        (true, false) => ("Undo surface stroke", "Redo surface stroke"),
+        (true, true) => ("Undo UV edit", "Redo UV edit"),
+    };
     ui.horizontal_wrapped(|ui| {
-        if button(ui, state.can_undo && !locked, "Undo paint stroke") {
+        if button(ui, state.can_undo && !locked, undo) {
             paint(commands, PaintCommand::Undo);
         }
-        if button(ui, state.can_redo && !locked, "Redo paint stroke") {
+        if button(ui, state.can_redo && !locked, redo) {
             paint(commands, PaintCommand::Redo);
         }
         if button(ui, locked, "Cancel current stroke") {
             paint(commands, PaintCommand::CancelStroke);
         }
     });
-    ui.small(format!(
+    if direct || layered {
+        ui.small(format!(
         "UV history payload: {:.1} / {:.1} MiB retained; {:.1} MiB pending; {} older edits expired.",
         target.retained_bytes as f64 / 1048576.0,
         target.limit_bytes as f64 / 1048576.0,
         target.pending_bytes as f64 / 1048576.0,
         target.evicted_strokes
     ));
+    }
     if !direct {
         let mut live = snapshot.live_projection;
         if ui
@@ -167,16 +179,28 @@ pub(crate) fn show(
         if ui.checkbox(&mut source, "Show source canvas").changed() {
             paint(commands, PaintCommand::SetSourceVisible { visible: source });
         }
-        if button(ui, !locked && !conflicted, "Apply canvas to UV surfaces") {
+        if button(
+            ui,
+            !locked && !conflicted,
+            if layered {
+                "Apply canvas to active UV layer"
+            } else {
+                "Apply canvas to UV surfaces"
+            },
+        ) {
             paint(commands, PaintCommand::ProjectToScene);
         }
         if target.uv_layers.as_ref().is_some_and(|s| s.enabled) {
-            if button(ui, preview && !locked, "Cancel UV preview") {
+            if button(ui, preview, "Cancel UV preview") {
                 paint(commands, PaintCommand::CancelUvProjection);
             }
             ui.small("Apply commits once and pauses live. Cancel retains Canvas edits and UV history. Apply or Cancel before DirectUV, layer edits or Save.");
         }
         canvas_layers(ui, snapshot, runtime, locked, commands);
+        ui.small("Canvas Undo edits the source canvas. UV Undo edits receiver layers. Shift + middle-drag: pan · Scroll: zoom · Tab: leave / return to canvas view.");
+    } else {
+        ui.small(format!("Paint the visible UV surface. Undo and Redo target {}. Escape cancels the current stroke. The source canvas is hidden and live projection is paused.", target.target_name.as_deref().unwrap_or("the last painted receiver")));
+        ui.small("Middle-drag: orbit · Shift + middle-drag: pan · Scroll: zoom");
     }
     if let Some(layers) = &target.uv_layers {
         uv_layer_panel::show(ui, layers, runtime, commands);

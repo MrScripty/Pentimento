@@ -53,10 +53,10 @@ pub(crate) fn show(
     }
     ui.add_enabled_ui(ready, |ui| {
         ui.horizontal_wrapped(|ui| {
-            if button(ui, state.can_undo, "Undo UV edit") {
+            if button(ui, state.can_undo, "Undo UV layer edit") {
                 uv(commands, UvLayerCommand::Undo);
             }
-            if button(ui, state.can_redo, "Redo UV edit") {
+            if button(ui, state.can_redo, "Redo UV layer edit") {
                 uv(commands, UvLayerCommand::Redo);
             }
         });
@@ -236,4 +236,10 @@ pub(crate) fn show(
         }
     });
     ui.small("White mask reveals; black conceals. UV edits share one bounded Undo/Redo history. External edits require receiver reconciliation.");
+    if state.projection_preview {
+        ui.label("Live preview owns this receiver, layer and paint target. Apply or Cancel preview before changing the stack.");
+    }
+    if state.conflicted {
+        ui.label("UV ownership changed. Reopen the owned project before editing this receiver.");
+    }
 }

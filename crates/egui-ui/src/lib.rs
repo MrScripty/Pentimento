@@ -5,6 +5,7 @@
 
 mod app;
 mod controls;
+mod paint_color;
 mod paint_panel;
 mod presets;
 mod project_dialog;

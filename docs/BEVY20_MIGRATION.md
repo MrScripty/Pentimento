@@ -41,6 +41,10 @@ the widget, shared dispatcher, Scene resource, and acknowledged snapshot roundtr
 
 ## Qualification
 
+These results describe migration milestone
+136d1ff12a329e48709bd9f7bb8d01bc20c80f12. The later native brush UI followup
+has separate qualification in NATIVE_BRUSH_PARITY.md.
+
 - Production native executable: `cargo build -p pentimento --features egui --locked --offline` linked successfully.
 - Production App, Scene, and Sculpt unit/integration suites: **429 passed, zero failed, four manual tests ignored** with `cargo test -p pentimento -p pentimento-scene -p sculpting --features pentimento/egui,sculpting/bevy --lib --tests --locked --offline -- --test-threads=2`.
 - Production egui presentation widgets: **14 passed** separately with egui 0.36.2.
@@ -51,8 +55,8 @@ the widget, shared dispatcher, Scene resource, and acknowledged snapshot roundtr
 - Independent source reviews approved the migration, depth invalidation/snapshot repairs, and optional Dioxus API followup.
 
 The production suite and GUI smoke used the frozen native source before the final
-Dioxus-only API followup. The final native executable was rebuilt from the complete
-delivery source and is byte-identical to the GUI-qualified executable
+Dioxus-only API followup. The migration milestone native executable was rebuilt
+from its complete delivery source and is byte-identical to the GUI-qualified executable
 (SHA-256 1f4a38d0b54a3144db680e089cdc524680e60598688bb232123277e552de2fbd).
 The lockfile and active native egui Rust/WESL paths are unchanged by that optional
 Dioxus followup.

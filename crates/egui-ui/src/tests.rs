@@ -12,6 +12,31 @@ struct Harness {
     time: f64,
 }
 impl Harness {
+    fn replace_hex(&mut self, text: &str) -> Vec<UiToBevy> {
+        let current = self.runtime.paint_hex_color.as_ref().unwrap().1.clone();
+        assert!(self.click(&current).is_empty());
+        assert!(self.ctx.egui_wants_keyboard_input());
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        self.frame(vec![
+            key(
+                egui::Key::A,
+                egui::Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Default::default()
+                },
+            ),
+            egui::Event::Text(text.into()),
+            key(egui::Key::Enter, Default::default()),
+        ])
+        .1
+    }
     fn new() -> Self {
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|s| s.animation_time = 0.0);
@@ -143,6 +168,145 @@ impl Harness {
         );
     }
 }
+
+#[test]
+fn actual_hex_field_commits_linear_rgb_and_rejects_invalid_input_without_optimism() {
+    let mut h = Harness::new();
+    h.paint();
+    h.frame(vec![]);
+    let original = h.snapshot.paint.as_ref().unwrap().settings.color;
+    let commands = h.replace_hex("#808080");
+    let color = commands
+        .iter()
+        .find_map(|c| match c {
+            UiToBevy::PaintCommand(PaintCommand::SetBrushColor { color }) => Some(*color),
+            _ => None,
+        })
+        .expect("real TextEdit must commit a color command");
+    for channel in &color[..3] {
+        assert!((*channel - 0.2158605).abs() < 0.000001);
+    }
+    assert_eq!(color[3], 1.0);
+    assert_eq!(h.snapshot.paint.as_ref().unwrap().settings.color, original);
+    assert_eq!(h.runtime.paint_hex_color.as_ref().unwrap().1, "#7caacb");
+    assert!(h.replace_hex("#zz0080").is_empty());
+    assert!(h.replace_hex("#+08080").is_empty());
+    assert!(h.replace_hex("#80+080").is_empty());
+    assert!(h.replace_hex("#é0808").is_empty());
+    h.click("#7caacb");
+    assert!(
+        h.click("Round tip preview").is_empty(),
+        "untouched field must not quantize precise RGB"
+    );
+}
+
+#[test]
+fn saved_brush_selection_requires_use_and_displays_only_acknowledged_current_brush() {
+    for sculpt_mode in [false, true] {
+        let mut h = Harness::new();
+        if sculpt_mode {
+            h.sculpt();
+        } else {
+            h.paint();
+        }
+        h.snapshot.saved_brushes.available = true;
+        let entry = PaintBrushPresetInfo {
+            id: 19,
+            name: "Owned custom brush".into(),
+        };
+        if sculpt_mode {
+            h.snapshot.saved_brushes.sculpt = vec![entry];
+        } else {
+            h.snapshot.saved_brushes.paint = vec![entry];
+        }
+        h.click("Saved brushes");
+        assert!(h.click("Choose saved brush").is_empty());
+        assert!(
+            h.click("Owned custom brush").is_empty(),
+            "choosing must not recall"
+        );
+        let commands = h.click(if sculpt_mode {
+            "Use sculpt brush"
+        } else {
+            "Use paint brush"
+        });
+        assert!(commands.iter().any(|c| match c {
+            UiToBevy::SculptCommand(SculptCommand::SelectSavedBrushPreset { preset_id: 19 }) =>
+                sculpt_mode,
+            UiToBevy::PaintCommand(PaintCommand::SelectSavedBrushPreset { preset_id: 19 }) =>
+                !sculpt_mode,
+            _ => false,
+        }));
+        assert_eq!(h.snapshot.saved_brushes.selected_paint, None);
+        assert_eq!(h.snapshot.saved_brushes.selected_sculpt, None);
+        if sculpt_mode {
+            h.snapshot.saved_brushes.selected_sculpt = Some(19);
+        } else {
+            h.snapshot.saved_brushes.selected_paint = Some(19);
+        }
+        h.frame(vec![]);
+        assert!(
+            h.click("Current saved brush: Owned custom brush")
+                .is_empty()
+        );
+        h.snapshot.saved_brushes.active = true;
+        assert!(
+            h.click(if sculpt_mode {
+                "Use sculpt brush"
+            } else {
+                "Use paint brush"
+            })
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn canvas_settings_remain_editable_during_a_stroke_while_directuv_settings_are_locked() {
+    let mut h = Harness::new();
+    h.paint();
+    h.snapshot.paint.as_mut().unwrap().target.active = true;
+    h.snapshot.saved_brushes.active = true;
+    assert!(h.click("Eraser").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::SetBlendMode {
+            mode: BlendMode::Erase
+        })
+    )));
+    assert!(h.click("Undo canvas stroke").is_empty());
+    h.snapshot.paint.as_mut().unwrap().target.mode = PaintTarget::DirectUv;
+    assert!(h.click("Eraser").is_empty());
+    assert!(h.click("Undo surface stroke").is_empty());
+}
+
+#[test]
+fn hex_draft_is_discarded_on_project_change_and_round_preview_uses_accepted_settings() {
+    let mut h = Harness::new();
+    h.paint();
+    h.frame(vec![]);
+    h.runtime.paint_hex_color.as_mut().unwrap().1 = "#ff0000".into();
+    h.snapshot.project.generation = "another owned project".into();
+    let (output, _) = h.frame(vec![]);
+    assert_eq!(h.runtime.paint_hex_color.as_ref().unwrap().1, "#7caacb");
+    fn preview(shape: &egui::epaint::Shape) -> Option<&egui::epaint::Mesh> {
+        match shape {
+            egui::epaint::Shape::Mesh(mesh) if mesh.vertices.len() == 65 => Some(mesh),
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(preview),
+            _ => None,
+        }
+    }
+    let mesh = output
+        .shapes
+        .iter()
+        .find_map(|s| preview(&s.shape))
+        .expect("actual radial preview mesh");
+    let expected = egui::Color32::from(egui::Rgba::from_rgba_unmultiplied(0.2, 0.4, 0.6, 0.75));
+    assert_eq!(mesh.vertices[0].color, expected);
+    assert_eq!(mesh.vertices[33].color, egui::Color32::TRANSPARENT);
+    assert!(
+        ((mesh.vertices[1].pos - mesh.vertices[0].pos).length() - 24.0 * 0.9 * 0.8).abs() < 0.001
+    );
+}
 #[test]
 fn mount_requests_authoritative_brush_and_document_state_once() {
     let mut h = Harness::new();
@@ -172,12 +336,12 @@ fn actual_paint_widgets_route_history_tools_without_optimistic_state() {
     let mut h = Harness::new();
     h.paint();
     assert!(
-        h.click("Undo paint stroke")
+        h.click("Undo canvas stroke")
             .iter()
             .any(|c| matches!(c, UiToBevy::PaintCommand(PaintCommand::Undo)))
     );
     assert!(
-        h.click("Redo paint stroke")
+        h.click("Redo canvas stroke")
             .iter()
             .any(|c| matches!(c, UiToBevy::PaintCommand(PaintCommand::Redo)))
     );
@@ -207,7 +371,8 @@ fn active_paint_locks_history_and_target_but_can_cancel() {
     let mut h = Harness::new();
     h.paint();
     h.snapshot.paint.as_mut().unwrap().target.active = true;
-    assert!(h.click("Undo paint stroke").is_empty());
+    h.snapshot.paint.as_mut().unwrap().target.mode = PaintTarget::DirectUv;
+    assert!(h.click("Undo surface stroke").is_empty());
     assert!(h.click("DirectUV surface").is_empty());
     assert!(h.click("Eraser").is_empty());
     assert!(
@@ -240,7 +405,12 @@ fn actual_sculpt_widgets_use_backend_counts_and_active_lock() {
     h.snapshot.sculpt_history.active = true;
     assert!(h.click("Undo sculpt stroke").is_empty());
     assert!(h.click("Redo sculpt stroke").is_empty());
-    assert!(h.click("Grab").is_empty());
+    assert!(h.click("Grab").iter().any(|c| matches!(
+        c,
+        UiToBevy::SculptCommand(SculptCommand::SetTool {
+            tool: SculptTool::Grab
+        })
+    )));
     h.snapshot.sculpt_history.active = false;
     h.snapshot.sculpt_history.redo_strokes = 0;
     assert!(h.click("Redo sculpt stroke").is_empty());
@@ -371,7 +541,7 @@ fn uv_mask_and_history_controls_obey_preview_conflict_and_active_guards() {
             }
         })
     )));
-    assert!(h.click("Undo UV edit").iter().any(|c| matches!(
+    assert!(h.click("Undo UV layer edit").iter().any(|c| matches!(
         c,
         UiToBevy::PaintCommand(PaintCommand::UvLayers {
             command: UvLayerCommand::Undo
@@ -387,8 +557,14 @@ fn uv_mask_and_history_controls_obey_preview_conflict_and_active_guards() {
         .unwrap()
         .projection_preview = true;
     assert!(h.click("Paint mask").is_empty());
-    assert!(h.click("Undo UV edit").is_empty());
+    assert!(h.click("Undo UV layer edit").is_empty());
     assert!(h.click("DirectUV surface").is_empty());
+    h.snapshot.paint.as_mut().unwrap().target.active = true;
+    assert!(
+        h.click("Cancel UV preview")
+            .iter()
+            .any(|c| matches!(c, UiToBevy::PaintCommand(PaintCommand::CancelUvProjection)))
+    );
     let uv = h
         .snapshot
         .paint

@@ -19,6 +19,9 @@ pub struct EguiUiRuntime {
     pub(crate) last_mode: Option<EditMode>,
     pub(crate) paint_preset_name: String,
     pub(crate) sculpt_preset_name: String,
+    pub(crate) paint_saved_choice: Option<(Option<u32>, Option<u32>)>,
+    pub(crate) sculpt_saved_choice: Option<(Option<u32>, Option<u32>)>,
+    pub(crate) paint_hex_color: Option<([f32; 3], String)>,
     pub(crate) new_canvas_layer_name: String,
     pub(crate) new_uv_layer_name: String,
     pub(crate) canvas_layer_names: BTreeMap<u32, (String, String)>,
@@ -45,6 +48,9 @@ impl Default for EguiUiRuntime {
             last_mode: None,
             paint_preset_name: String::new(),
             sculpt_preset_name: String::new(),
+            paint_saved_choice: None,
+            sculpt_saved_choice: None,
+            paint_hex_color: None,
             new_canvas_layer_name: String::new(),
             new_uv_layer_name: String::new(),
             canvas_layer_names: BTreeMap::new(),
@@ -71,7 +77,15 @@ impl EguiUiRuntime {
         if self.last_generation.as_ref() != Some(&snapshot.project.generation) {
             self.canvas_layer_names.clear();
             self.uv_layer_names.clear();
+            self.paint_saved_choice = None;
+            self.sculpt_saved_choice = None;
+            self.paint_hex_color = None;
             self.last_generation = Some(snapshot.project.generation.clone());
+        }
+        if self.last_mode != Some(snapshot.edit_mode) {
+            self.paint_saved_choice = None;
+            self.sculpt_saved_choice = None;
+            self.paint_hex_color = None;
         }
         let layers = snapshot
             .paint

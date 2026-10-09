@@ -3763,7 +3763,7 @@ fn egui_widgets_restore_real_directuv_pixels_and_redo_via_shared_backend() {
         &ctx,
         &mut snapshot,
         &mut runtime,
-        "Undo paint stroke",
+        "Undo surface stroke",
     );
     assert!(same(&before, &f.raw()));
     assert_eq!(counts(&f), (0, 1));
@@ -3773,10 +3773,226 @@ fn egui_widgets_restore_real_directuv_pixels_and_redo_via_shared_backend() {
         &ctx,
         &mut snapshot,
         &mut runtime,
-        "Redo paint stroke",
+        "Redo surface stroke",
     );
     assert!(same(&accepted, &f.raw()));
     assert_eq!(counts(&f), (1, 0));
+}
+
+#[test]
+fn egui_hex_color_reaches_real_directuv_stroke_and_history_restores_pixels() {
+    use pentimento_egui_ui::egui;
+    let mut f = Fixture::new();
+    f.direct();
+    f.command(PaintCommand::SetBrushSize { size: 8. });
+    f.app
+        .world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Egui;
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    let color = snapshot.paint.as_ref().unwrap().settings.color;
+    let [r, g, b] = [color[0], color[1], color[2]].map(egui::ecolor::gamma_u8_from_linear_f32);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        &format!("#{r:02x}{g:02x}{b:02x}"),
+    );
+    assert!(ctx.egui_wants_keyboard_input());
+    let key = |key, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let (_, commands) = egui_frame(
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        vec![
+            key(
+                egui::Key::A,
+                egui::Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..default()
+                },
+            ),
+            egui::Event::Text("#808080".into()),
+            key(egui::Key::Enter, default()),
+        ],
+    );
+    assert!(commands.iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::SetBrushColor { .. })
+    )));
+    crate::render::dispatch_ui_commands(f.app.world_mut(), commands);
+    f.settle();
+    snapshot = egui_snapshot(&mut f);
+    let accepted_color = snapshot.paint.as_ref().unwrap().settings.color;
+    for channel in &accepted_color[..3] {
+        assert!((*channel - 0.2158605).abs() < 0.000001);
+    }
+    let before = f.image();
+    pen_stroke(&mut f, 92, 1.0);
+    f.settle();
+    let painted = f.image();
+    assert_ne!(painted, before, "must paint real mesh image pixels");
+    snapshot = egui_snapshot(&mut f);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Undo surface stroke",
+    );
+    assert_eq!(f.image(), before);
+    snapshot = egui_snapshot(&mut f);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Redo surface stroke",
+    );
+    assert_eq!(f.image(), painted);
+    assert_eq!(counts(&f), (1, 0));
+}
+
+#[test]
+fn egui_uv_mask_controls_roundtrip_actual_document_and_composited_image() {
+    let mut f = Fixture::new();
+    f.direct();
+    f.enable_layers();
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    let before = f.layers();
+    let pixels_before = f.image();
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Add mask");
+    let masked = f.layers();
+    assert_ne!(masked, before);
+    assert!(masked.layers[0].mask.is_some());
+    let pixels_masked = f.image();
+    snapshot = egui_snapshot(&mut f);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Undo UV layer edit",
+    );
+    assert_eq!(f.layers(), before);
+    assert_eq!(f.image(), pixels_before);
+    snapshot = egui_snapshot(&mut f);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Redo UV layer edit",
+    );
+    assert_eq!(f.layers(), masked);
+    assert_eq!(f.image(), pixels_masked);
+    snapshot = egui_snapshot(&mut f);
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Paint mask");
+    assert_eq!(
+        f.layers().layers[0].meta.paint_target,
+        painting::uv_layers::UvPaintTarget::Mask
+    );
+    snapshot = egui_snapshot(&mut f);
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Remove mask");
+    assert!(f.layers().layers[0].mask.is_none());
+}
+
+#[test]
+fn egui_cancel_live_uv_preview_during_canvas_stroke_preserves_source_owner() {
+    let mut f = Fixture::new_with_projection(true);
+    f.enable_layers();
+    f.command(PaintCommand::SetLiveProjection { enabled: true });
+    f.settle();
+    let source_before = f.source();
+    let raw_before = f.raw();
+    let document_before = f.layers();
+    f.batch(vec![movement(f.window, 500.), button(f.window, true)]);
+    f.settle();
+    let source_pending = f.source();
+    assert_ne!(source_pending, source_before);
+    assert_ne!(f.raw(), raw_before);
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    assert!(snapshot.paint.as_ref().unwrap().target.active);
+    assert!(
+        snapshot
+            .paint
+            .as_ref()
+            .unwrap()
+            .target
+            .uv_layers
+            .as_ref()
+            .unwrap()
+            .projection_preview
+    );
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Cancel UV preview",
+    );
+    assert!(!f.app.world().resource::<ProjectionMode>().live_projection);
+    assert_eq!(f.raw(), raw_before);
+    assert_eq!(f.layers(), document_before);
+    assert_eq!(counts(&f), (0, 0));
+    assert_eq!(f.source(), source_pending);
+    assert!(egui_snapshot(&mut f).paint.as_ref().unwrap().target.active);
+    f.command(PaintCommand::CancelStroke);
+    f.settle();
+    assert_eq!(f.source(), source_before);
+}
+
+#[test]
+fn egui_sculpt_settings_during_active_stroke_preserve_cancel_and_history_ownership() {
+    let (mut f, entity) = egui_sculpt_fixture();
+    let before = sculpt_mesh(&f, entity);
+    f.app.world_mut().write_message(SculptEvent::StrokeStart {
+        world_pos: Vec3::Z,
+        normal: Vec3::Z,
+        stroke_id: 811,
+    });
+    f.app.update();
+    let ctx = pentimento_egui_ui::egui::Context::default();
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
+    let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
+    let mut snapshot = egui_snapshot(&mut f);
+    assert!(snapshot.sculpt_history.active);
+    egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Flatten");
+    snapshot = egui_snapshot(&mut f);
+    assert_eq!(
+        snapshot.sculpt.as_ref().unwrap().tool,
+        pentimento_ipc::SculptTool::Flatten
+    );
+    assert!(snapshot.sculpt_history.active);
+    egui_click(
+        &mut f,
+        &ctx,
+        &mut snapshot,
+        &mut runtime,
+        "Undo sculpt stroke",
+    );
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
+    f.app.world_mut().write_message(SculptEvent::StrokeCancel);
+    f.settle();
+    assert_eq!(sculpt_mesh(&f, entity), before);
+    assert_eq!(sculpt_counts(&mut f), (1, 0));
 }
 #[test]
 fn egui_actual_panel_regions_capture_stationary_press_and_drag_origin() {
@@ -4297,12 +4513,11 @@ fn egui_sculpt_field(f: &mut Fixture) -> pentimento_egui_ui::egui::Pos2 {
         }
     }
     let (output, _) = egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
-    let combo = output
+    let point = output
         .shapes
         .iter()
-        .find_map(|s| text(&s.shape, "Choose saved brush"))
-        .expect("actual Sculpt saved-brush combo");
-    let point = combo + egui::vec2(0., 22.);
+        .find_map(|s| text(&s.shape, "Sculpt preset name"))
+        .expect("actual Sculpt saved-brush TextEdit");
     egui_frame(
         &ctx,
         &mut snapshot,
