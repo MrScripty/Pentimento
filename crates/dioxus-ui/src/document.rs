@@ -18,7 +18,7 @@
 use std::rc::Rc;
 
 use anyrender_vello::VelloScenePainter;
-use blitz_dom::{Document, DocumentConfig};
+use blitz_dom::{Document, DocumentConfig, NodeId};
 use blitz_traits::shell::{ColorScheme, Viewport};
 use crossbeam_channel::Receiver;
 use dioxus::prelude::*;
@@ -231,7 +231,7 @@ impl BlitzDocument {
     }
 
     /// Find the main element ID by traversing the DOM (html → body → main).
-    fn find_main_element_id(doc: &blitz_dom::BaseDocument) -> Option<usize> {
+    fn find_main_element_id(doc: &blitz_dom::BaseDocument) -> Option<NodeId> {
         let root = doc.root_node();
         for &child_id in &root.children {
             if let Some(child) = doc.get_node(child_id) {
@@ -294,7 +294,7 @@ impl BlitzDocument {
         // This converts the styled/laid-out DOM tree to draw commands
         blitz_paint::paint_scene(
             &mut painter,
-            &*self.doc.inner.borrow(),
+            &mut self.doc.inner.borrow_mut(),
             self.scale,
             self.width,
             self.height,
@@ -408,7 +408,7 @@ impl BlitzDocument {
 
     /// Custom hit testing that finds the deepest element at the given position.
     /// This traverses the tree depth-first and returns the most specific (deepest) hit.
-    fn deepest_hit(&self, doc: &blitz_dom::BaseDocument, x: f32, y: f32) -> Option<usize> {
+    fn deepest_hit(&self, doc: &blitz_dom::BaseDocument, x: f32, y: f32) -> Option<NodeId> {
         let root = doc.root_node();
         self.deepest_hit_recursive(doc, &root, x, y, 0.0, 0.0)
     }
@@ -423,8 +423,8 @@ impl BlitzDocument {
         y: f32,
         parent_abs_x: f32,
         parent_abs_y: f32,
-    ) -> Option<usize> {
-        let layout = node.final_layout;
+    ) -> Option<NodeId> {
+        let layout = node.final_layout();
 
         // Calculate absolute position of this node
         // For position:fixed elements, the position is relative to viewport (0,0)
@@ -460,7 +460,7 @@ impl BlitzDocument {
         // Skip elements with zero size (like style elements)
         let has_size = width > 0.0 && height > 0.0;
 
-        let mut deepest_hit: Option<usize> = None;
+        let mut deepest_hit: Option<NodeId> = None;
 
         // Check children first (they're on top)
         for child_id in node.children.iter() {
@@ -476,7 +476,7 @@ impl BlitzDocument {
         if deepest_hit.is_none() && in_bounds && has_size {
             // Only return element nodes, not text nodes
             if node.element_data().is_some() {
-                deepest_hit = Some(node.id.into());
+                deepest_hit = Some(node.id);
             }
         }
 
@@ -485,12 +485,12 @@ impl BlitzDocument {
 
     /// Find the first focusable element in the document.
     /// Traverses the DOM tree looking for elements with is_focussable() == true.
-    fn find_first_focusable(doc: &blitz_dom::BaseDocument) -> Option<usize> {
+    fn find_first_focusable(doc: &blitz_dom::BaseDocument) -> Option<NodeId> {
         Self::find_focusable_recursive(doc, doc.root_node().id)
     }
 
     /// Recursively search for a focusable element.
-    fn find_focusable_recursive(doc: &blitz_dom::BaseDocument, node_id: usize) -> Option<usize> {
+    fn find_focusable_recursive(doc: &blitz_dom::BaseDocument, node_id: NodeId) -> Option<NodeId> {
         let node = doc.get_node(node_id)?;
 
         // Check if this node is focusable
