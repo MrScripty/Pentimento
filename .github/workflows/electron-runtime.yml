@@ -12,6 +12,7 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
+      PENTIMENTO_CI_ELECTRON: /opt/pentimento-ci/electron-44.5.1/electron
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,24 +39,32 @@ jobs:
           sha256sum --check "$RUNNER_TEMP/electron-locks.sha256"
           node --test tests/contracts/electron-bootstrap.test.mjs tests/contracts/electron-render.test.mjs
           python3 tests/electron/test_supervise.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/electron/test_provision_ci_runtime.py
       - name: Audit complete runtime and tooling graphs
         run: |
           mkdir -p electron-runtime-evidence
           npm audit --json > electron-runtime-evidence/root-audit.json
           npm --prefix src-electron audit --json > electron-runtime-evidence/electron-audit.json
+      - name: Provision verified official runtime and Linux sandbox helper
+        timeout-minutes: 6
+        run: |
+          test "$(id -u)" -ne 0
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/electron/provision_ci_runtime.py --evidence "$RUNNER_TEMP/electron-sandbox-provision.json"
       - name: Check ordinary Linux renderer sandbox
-        run: env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py environment ./src-electron/node_modules/electron/dist/electron tests/electron/runtime-smoke.cjs --preflight
+        run: env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py environment "$PENTIMENTO_CI_ELECTRON" tests/electron/runtime-smoke.cjs --preflight
       - name: Build genuine production UI and Bevy WASM
         run: ./launcher.sh --build --frontend electron
       - name: Qualify production rendering and shutdown
         run: |
-          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py production ./src-electron/node_modules/electron/dist/electron tests/electron/runtime-smoke.cjs
+          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a python3 tests/electron/supervise.py production "$PENTIMENTO_CI_ELECTRON" tests/electron/runtime-smoke.cjs
           sha256sum --check "$RUNNER_TEMP/electron-locks.sha256"
       - name: Preserve runtime qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: electron-runtime-evidence
-          path: electron-runtime-evidence/
+          path: |
+            electron-runtime-evidence/
+            ${{ runner.temp }}/electron-sandbox-provision.json
           if-no-files-found: warn
           retention-days: 7
