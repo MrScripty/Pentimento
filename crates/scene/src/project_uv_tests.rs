@@ -627,7 +627,7 @@ fn external_derived_descriptors_and_original_bytes_refuse_save_and_history() {
             texture.image_handle.clone()
         };
         let mut images = app.world_mut().resource_mut::<Assets<Image>>();
-        let i = images.get_mut(&h).unwrap();
+        let mut i = images.get_mut(&h).unwrap();
         match case {
             0 => i.texture_descriptor.format = TextureFormat::Bgra8UnormSrgb,
             1 => i.sampler = bevy::image::ImageSampler::nearest(),
@@ -636,6 +636,8 @@ fn external_derived_descriptors_and_original_bytes_refuse_save_and_history() {
             4 => i.data = None,
             _ => i.data.as_mut().unwrap()[0] = 250,
         }
+        drop(i);
+        drop(images);
         settle(&mut app);
         assert!(!save(&mut app, &path), "case{case}");
         assert_eq!(std::fs::read(&path).unwrap(), saved);

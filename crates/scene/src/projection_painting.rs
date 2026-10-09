@@ -6,8 +6,8 @@
 use bevy::asset::{AssetEventSystems, RenderAssetUsages};
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::ecs::system::SystemParam;
-use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::mesh::UvChannel;
+use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     Extent3d, Face, PrimitiveTopology, TextureDimension, TextureFormat,
@@ -2542,7 +2542,7 @@ pub(crate) mod tests {
         let mesh = app.world().get::<Mesh3d>(target).unwrap().0.clone();
         {
             let mut assets = app.world_mut().resource_mut::<Assets<Mesh>>();
-            let mesh = assets.get_mut(&mesh).unwrap();
+            let mut mesh = assets.get_mut(&mesh).unwrap();
             let VertexAttributeValues::Float32x3(positions) =
                 mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).unwrap()
             else {

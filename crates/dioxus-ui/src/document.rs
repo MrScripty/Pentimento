@@ -236,11 +236,11 @@ impl BlitzDocument {
         for &child_id in &root.children {
             if let Some(child) = doc.get_node(child_id) {
                 if let Some(el) = child.element_data() {
-                    if el.name.local.as_ref() == "body" {
+                    if el.name.local == blitz_dom::local_name!("body") {
                         for &body_child_id in &child.children {
                             if let Some(body_child) = doc.get_node(body_child_id) {
                                 if let Some(el) = body_child.element_data() {
-                                    if el.name.local.as_ref() == "main" {
+                                    if el.name.local == blitz_dom::local_name!("main") {
                                         return Some(body_child_id);
                                     }
                                 }
@@ -358,7 +358,7 @@ impl BlitzDocument {
             if let Some(hit_node_id) = self.deepest_hit(&doc_ref, x, y) {
                 if let Some(node) = doc_ref.get_node(hit_node_id) {
                     if let Some(el) = node.element_data() {
-                        let tag = el.name.local.as_ref();
+                        let tag: &str = el.name.local.as_ref();
                         let class = el.attr(blitz_dom::local_name!("class")).unwrap_or("");
                         info!(
                             "  -> Custom HIT: <{}> class='{}' node_id={}",
@@ -374,7 +374,7 @@ impl BlitzDocument {
             let hit_ui = if let Some(blitz_hit) = doc_ref.hit(x, y) {
                 if let Some(node) = doc_ref.get_node(blitz_hit.node_id) {
                     if let Some(el) = node.element_data() {
-                        let tag = el.name.local.as_ref();
+                        let tag: &str = el.name.local.as_ref();
                         let class = el.attr(blitz_dom::local_name!("class")).unwrap_or("");
                         let style = el.attr(blitz_dom::local_name!("style")).unwrap_or("");
                         info!(

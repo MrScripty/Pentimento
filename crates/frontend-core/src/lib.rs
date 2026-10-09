@@ -10,8 +10,8 @@ use std::sync::Arc;
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
 
 pub use native_state::{
-    apply_native_ui_message, NativeColorSampling, NativePaintState, NativeProjectReceipt,
-    NativeProjectState, NativeSavedBrushState, NativeSculptHistory, NativeUiState,
+    NativeColorSampling, NativePaintState, NativeProjectReceipt, NativeProjectState,
+    NativeSavedBrushState, NativeSculptHistory, NativeUiState, apply_native_ui_message,
 };
 
 /// Result of capturing the UI framebuffer

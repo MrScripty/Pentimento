@@ -55,6 +55,7 @@ impl Fixture {
             std::time::Duration::from_millis(20),
         ))
         .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
         .init_resource::<Assets<Image>>()
         .init_resource::<Assets<StandardMaterial>>()
         .init_resource::<OutboundUiMessages>()
@@ -92,7 +93,7 @@ impl Fixture {
                 PreUpdate,
                 apply_queued_ui.after(super::mouse::forward_native_input),
             );
-        app.insert_non_send_resource(crate::render::FrontendResource {
+        app.insert_non_send(crate::render::FrontendResource {
             backend: Box::new(RecordingBackend(recorded.clone())),
             texture_format: TextureFormat::Rgba8Unorm,
         });
@@ -1747,7 +1748,8 @@ fn shared_layers_actual_pending_authoring_blocks_selection_and_external_image_co
         .clone();
     let edited = {
         let mut images = f.app.world_mut().resource_mut::<Assets<Image>>();
-        let data = images.get_mut(&handle).unwrap().data.as_mut().unwrap();
+        let mut image = images.get_mut(&handle).unwrap();
+        let data = image.data.as_mut().unwrap();
         data[0] ^= 127;
         data.clone()
     };
@@ -2095,7 +2097,7 @@ fn shared_layers_actual_apply_refuses_changed_object_mapping_and_mesh_asset() {
         if asset_change {
             let h = f.app.world().get::<Mesh3d>(f.a).unwrap().0.clone();
             let mut assets = f.app.world_mut().resource_mut::<Assets<Mesh>>();
-            let mesh = assets.get_mut(&h).unwrap();
+            let mut mesh = assets.get_mut(&h).unwrap();
             let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
                 mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).unwrap()
             else {
@@ -2281,7 +2283,8 @@ fn shared_layers_actual_migration_refuses_external_original_direct_and_projectio
         };
         let changed = {
             let mut images = f.app.world_mut().resource_mut::<Assets<Image>>();
-            let data = images.get_mut(&handle).unwrap().data.as_mut().unwrap();
+            let mut image = images.get_mut(&handle).unwrap();
+            let data = image.data.as_mut().unwrap();
             data[0] ^= 127;
             data.clone()
         };
@@ -2696,7 +2699,8 @@ fn shared_live_actual_external_image_and_mapping_changes_abort_without_commit() 
             .clone();
         let foreign = if external {
             let mut images = f.app.world_mut().resource_mut::<Assets<Image>>();
-            let bytes = images.get_mut(&h).unwrap().data.as_mut().unwrap();
+            let mut image = images.get_mut(&h).unwrap();
+            let bytes = image.data.as_mut().unwrap();
             bytes[0] ^= 127;
             Some(bytes.clone())
         } else {
@@ -3467,7 +3471,8 @@ fn shared_masks_actual_external_display_conflict_keeps_foreign_pixels_and_refuse
         .clone();
     let foreign = {
         let mut images = f.app.world_mut().resource_mut::<Assets<Image>>();
-        let data = images.get_mut(&handle).unwrap().data.as_mut().unwrap();
+        let mut image = images.get_mut(&handle).unwrap();
+        let data = image.data.as_mut().unwrap();
         data[0] ^= 127;
         data.clone()
     };
@@ -3661,7 +3666,7 @@ fn egui_frame(
 ) -> (pentimento_egui_ui::egui::FullOutput, Vec<UiToBevy>) {
     use pentimento_egui_ui::egui;
     let mut commands = Vec::new();
-    let output = context.run(
+    let mut output = context.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -3670,8 +3675,15 @@ fn egui_frame(
             events,
             ..default()
         },
-        |ctx| commands.extend(pentimento_egui_ui::show_root_ui(ctx, snapshot, runtime)),
+        |ui| {
+            commands.extend(pentimento_egui_ui::show_root_ui(
+                ui.ctx(),
+                snapshot,
+                runtime,
+            ))
+        },
     );
+    output.textures_delta.clear();
     (output, commands)
 }
 fn egui_click(
@@ -3743,7 +3755,7 @@ fn egui_widgets_restore_real_directuv_pixels_and_redo_via_shared_backend() {
     let accepted = f.raw();
     assert!(!same(&before, &accepted));
     let ctx = pentimento_egui_ui::egui::Context::default();
-    ctx.style_mut(|s| s.animation_time = 0.);
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
     let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
     let mut snapshot = egui_snapshot(&mut f);
     egui_click(
@@ -3817,7 +3829,7 @@ fn egui_widgets_select_and_remove_the_real_uv_mask() {
     let layer = f.layers().layers[0].meta.id;
     f.uv(UvLayerCommand::AddMask { layer_id: layer });
     let ctx = pentimento_egui_ui::egui::Context::default();
-    ctx.style_mut(|s| s.animation_time = 0.);
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
     let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
     let mut snapshot = egui_snapshot(&mut f);
     egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "Paint mask");
@@ -3838,7 +3850,7 @@ fn egui_actual_file_popup_captures_a_stationary_native_press() {
         .resource_mut::<crate::config::PentimentoConfig>()
         .composite_mode = crate::config::CompositeMode::Egui;
     let ctx = pentimento_egui_ui::egui::Context::default();
-    ctx.style_mut(|s| s.animation_time = 0.);
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
     let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
     let mut snapshot = egui_snapshot(&mut f);
     egui_click(&mut f, &ctx, &mut snapshot, &mut runtime, "File");
@@ -3898,7 +3910,7 @@ fn egui_actual_file_popup_captures_a_stationary_native_press() {
 fn egui_rename_field(f: &mut Fixture, direct: bool) -> pentimento_egui_ui::egui::Pos2 {
     use pentimento_egui_ui::egui;
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.);
+    ctx.all_styles_mut(|style| style.animation_time = 0.);
     let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
     let mut snapshot = egui_snapshot(f);
     let name = if direct {
@@ -3937,7 +3949,7 @@ fn egui_rename_field(f: &mut Fixture, direct: bool) -> pentimento_egui_ui::egui:
         matching_text(&shape.shape, &name, &mut points);
     }
     let point = *points.last().expect("actual layer rename TextEdit");
-    assert!(!ctx.wants_keyboard_input());
+    assert!(!ctx.egui_wants_keyboard_input());
     egui_frame(
         &ctx,
         &mut snapshot,
@@ -3953,7 +3965,7 @@ fn egui_rename_field(f: &mut Fixture, direct: bool) -> pentimento_egui_ui::egui:
         ],
     );
     assert!(
-        ctx.wants_keyboard_input(),
+        ctx.egui_wants_keyboard_input(),
         "hit must focus the real TextEdit"
     );
     let regions = runtime
@@ -4271,7 +4283,7 @@ fn sculpt_mesh(f: &Fixture, entity: Entity) -> String {
 fn egui_sculpt_field(f: &mut Fixture) -> pentimento_egui_ui::egui::Pos2 {
     use pentimento_egui_ui::egui;
     let ctx = egui::Context::default();
-    ctx.style_mut(|s| s.animation_time = 0.);
+    ctx.all_styles_mut(|s| s.animation_time = 0.);
     let mut runtime = pentimento_egui_ui::EguiUiRuntime::default();
     let mut snapshot = egui_snapshot(f);
     egui_click(f, &ctx, &mut snapshot, &mut runtime, "Saved brushes");
@@ -4320,7 +4332,7 @@ fn egui_sculpt_field(f: &mut Fixture) -> pentimento_egui_ui::egui::Pos2 {
         ],
     );
     assert!(
-        ctx.wants_keyboard_input(),
+        ctx.egui_wants_keyboard_input(),
         "real Sculpt TextEdit must gain focus"
     );
     let (output, _) = egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
@@ -4335,7 +4347,7 @@ fn egui_sculpt_field(f: &mut Fixture) -> pentimento_egui_ui::egui::Pos2 {
         }
     });
     egui_frame(&ctx, &mut snapshot, &mut runtime, vec![]);
-    assert!(!ctx.wants_keyboard_input());
+    assert!(!ctx.egui_wants_keyboard_input());
     egui_frame(
         &ctx,
         &mut snapshot,
@@ -4350,7 +4362,7 @@ fn egui_sculpt_field(f: &mut Fixture) -> pentimento_egui_ui::egui::Pos2 {
             },
         ],
     );
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     let regions = runtime
         .ui_regions()
         .iter()

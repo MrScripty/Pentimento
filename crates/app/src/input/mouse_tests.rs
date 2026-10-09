@@ -72,7 +72,7 @@ fn fixture() -> (App, Entity, Rc<RefCell<Vec<Recorded>>>) {
         .add_plugins(super::super::InputPlugin);
     let window = app.world_mut().spawn(Window::default()).id();
     let recorded = Rc::new(RefCell::new(Vec::new()));
-    app.insert_non_send_resource(crate::render::FrontendResource {
+    app.insert_non_send(crate::render::FrontendResource {
         backend: Box::new(RecordingBackend(recorded.clone())),
         texture_format: TextureFormat::Rgba8Unorm,
     });
@@ -346,6 +346,7 @@ fn wheel_events_use_their_chronological_positions_and_existing_sign() {
         WindowEvent::MouseWheel(MouseWheel {
             window,
             unit: bevy::input::mouse::MouseScrollUnit::Line,
+            phase: bevy::input::touch::TouchPhase::Moved,
             x: 1.,
             y: 2.,
         })
@@ -414,7 +415,7 @@ fn coordinates_follow_capture_overlay_and_cef_dpi_contracts() {
 }
 
 #[test]
-fn browser_producer_preserves_egui_owned_input_flags() {
+fn egui_region_arbitration_updates_pointer_and_preserves_keyboard_flag() {
     let (mut app, window, _) = fixture();
     app.world_mut()
         .resource_mut::<crate::config::PentimentoConfig>()
@@ -427,6 +428,16 @@ fn browser_producer_preserves_egui_owned_input_flags() {
         &mut app,
         &[
             moved(window, 400., 250.),
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+        ],
+    );
+    let flags = app.world().resource::<FrontendInputBlockState>();
+    assert!(!flags.block_pointer && flags.block_keyboard);
+    native_batch(
+        &mut app,
+        &[
+            button(window, bevy::input::mouse::MouseButton::Left, false),
+            moved(window, 700., 180.),
             button(window, bevy::input::mouse::MouseButton::Left, true),
         ],
     );
@@ -578,7 +589,7 @@ fn window_focus_loss_also_releases_a_held_pointer() {
 }
 
 #[test]
-fn browser_waits_for_layout_but_dioxus_and_egui_do_not_wait_for_svelte() {
+fn browser_and_egui_wait_for_owned_layout_while_dioxus_does_not() {
     for mode in [
         crate::config::CompositeMode::Capture,
         crate::config::CompositeMode::Overlay,
@@ -597,6 +608,7 @@ fn browser_waits_for_layout_but_dioxus_and_egui_do_not_wait_for_svelte() {
             crate::config::CompositeMode::Capture
                 | crate::config::CompositeMode::Overlay
                 | crate::config::CompositeMode::Cef
+                | crate::config::CompositeMode::Egui
         );
         assert_eq!(
             app.world()

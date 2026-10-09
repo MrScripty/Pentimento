@@ -22,14 +22,14 @@ pub fn build_ui_scene(world: &mut World) {
     // Process network and document messages first (asset loading, head elements)
     // This ensures resources are loaded before the UI tries to use them
     {
-        if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
+        if let Some(mut doc_resource) = world.get_non_send_mut::<BlitzDocumentResource>() {
             doc_resource.document.process_messages();
         }
     }
 
     // Drain queued input events from the channel receiver
     let events: Vec<UiEvent> = {
-        if let Some(receiver) = world.get_non_send_resource::<DioxusEventReceiver>() {
+        if let Some(receiver) = world.get_non_send::<DioxusEventReceiver>() {
             receiver.0.try_iter().collect()
         } else {
             // This shouldn't happen since we check setup_done above
@@ -39,7 +39,7 @@ pub fn build_ui_scene(world: &mut World) {
 
     // Process input events and poll the document (needs mutable access, separate scope)
     let viewport_clicked = {
-        let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>()
+        let Some(mut doc_resource) = world.get_non_send_mut::<BlitzDocumentResource>()
         else {
             return;
         };
@@ -74,7 +74,7 @@ pub fn build_ui_scene(world: &mut World) {
     // SAFETY: We only hold an immutable reference to the document while mutating the scene buffer.
     // The document and scene buffer are independent resources with no aliasing.
     let doc_ptr = {
-        let Some(doc_resource) = world.get_non_send_resource::<BlitzDocumentResource>() else {
+        let Some(doc_resource) = world.get_non_send::<BlitzDocumentResource>() else {
             return;
         };
         &doc_resource.document as *const BlitzDocument
@@ -137,7 +137,7 @@ pub fn handle_window_resize(world: &mut World) {
     }
 
     // Resize the BlitzDocument
-    if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
+    if let Some(mut doc_resource) = world.get_non_send_mut::<BlitzDocumentResource>() {
         doc_resource.document.resize(width, height);
     }
 
@@ -147,7 +147,7 @@ pub fn handle_window_resize(world: &mut World) {
         .map(|rt| rt.handle.clone());
     if let Some(handle) = handle {
         if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
-            if let Some(image) = images.get_mut(&handle) {
+            if let Some(mut image) = images.get_mut(&handle) {
                 image.resize(Extent3d {
                     width,
                     height,

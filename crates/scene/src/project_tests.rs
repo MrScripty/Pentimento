@@ -251,7 +251,7 @@ fn raw_attributes_index_width_order_and_missing_assets_are_explicit() {
     let handle = app.world().get::<Mesh3d>(target).unwrap().0.clone();
     {
         let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
-        let mesh = meshes.get_mut(&handle).unwrap();
+        let mut mesh = meshes.get_mut(&handle).unwrap();
         mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, vec![[1., 0., 0., -1.]; 4]);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.1, 0.2, 0.3, 0.4]; 4]);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.25, 0.75]; 4]);
@@ -650,7 +650,7 @@ fn live_mapping_changes_refuse_save_until_projection_matches_current_authoring_i
             "vertices" | "uv" => {
                 let handle = app.world().get::<Mesh3d>(target).unwrap().0.clone();
                 let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
-                let mesh = meshes.get_mut(&handle).unwrap();
+                let mut mesh = meshes.get_mut(&handle).unwrap();
                 if change == "vertices" {
                     let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
                         mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)

@@ -35,7 +35,7 @@ anyrender = "=0.14.0"
 anyrender_vello = "=0.15.0"
 
 # Layout (used by blitz-dom)
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "2d936b7701f64b0fe95e50f1bfdcfc65a9f88f6f" }
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "2d936b7701f64b0fe95e50f1bfdcfc65a9f88f6f", default-features = false }
 
 # Curve/path types
 peniko = "=0.6.1"

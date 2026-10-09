@@ -1,40 +1,69 @@
 # Bevy 20 development candidate
 
 This branch uses official Bevy 0.20.0, official bevy_egui 0.43.0-rc.1
-(prerelease), and egui 0.36.2. The checked dependency graph is committed in
-Cargo.lock. Qualification used Rust 1.97.1.
+(prerelease), and egui 0.36.2. Cargo.lock records the tested dependency graph.
+Qualification uses Rust 1.97.1. Frontend selection routes remain available.
 
 The candidate carries the native painting/sculpting panels and the chronological
 Canvas, Direct UV, and Sculpt input/history integration from cloud/egui-parity
-commit c825e0a2e49f704611c5ff261898561971b85b53. The Bevy migration changes
-render scheduling, WESL imports, and required API bindings. Geometry algorithms,
+commit c825e0a2e49f704611c5ff261898561971b85b53. The migration updates render
+scheduling, WESL imports, and required public API bindings. Geometry algorithms,
 safety tolerances, and history restoration/replay bodies are preserved.
 
-## Completed checks
+## Sculpt history
 
-- Production Scene: `cargo check -p pentimento-scene --features selection,mesh_painting,mesh_editing,sculpting,atmosphere --locked --offline`.
-- Production native App: `cargo check -p pentimento --features egui --locked --offline`.
-- Production egui presentation widgets: 14 tests passed with egui 0.36.2.
-- Independent source review: the final 56-file source/lock freeze and the narrow
-  App/geometry API whitelist matched; required public exports and Bevy UI
-  features were corrected before the successful App check.
+Accepted, changed strokes record complete endpoint snapshots after the native
+safety acceptance gate. Undo/redo uses the safety owner's validated atomic
+replacement operation, restoring topology, positions, UV corners, global identities
+and counters together. Rejected/no-op strokes preserve redo; a new accepted stroke
+clears redo. External edits produce a conflict rather than overwriting geometry.
+Undo/redo emits no synthetic stroke replay packets.
 
-The 303 passing controller/Scene/widget tests on c825e0a were run with Bevy 0.18
-and egui 0.33. Those results support the carried input/history integration, but
-are not Bevy 20 runtime qualification.
+The default retention limits are 64 strokes and 128 MiB of accounted retained
+snapshot allocation capacities. This is not a process RSS bound: live geometry,
+validation/capture scratch, a temporary restore clone, and collection overhead are
+outside the snapshot byte limit. Old entries expire within the limits. An accepted
+stroke too large to retain remains live and clears both stacks; the editor reports
+that it cannot be undone, preventing a jump across an unrecorded transition.
 
-## Remaining validation
+## Native migration repairs
 
-The full native executable has not yet been linked or launched. GPU/WESL
-execution, depth/outline behavior, device recovery, physical input, and complete
-Bevy 20 history/pipeline execution remain unqualified. Dioxus/CEF feature builds
-and frontend runtime parity also remain unqualified. Frontend selection routes
-are retained.
+Bevy 20 maintains separate mesh and wireframe view-specialization invalidation.
+The Scene render bridge forwards changed mesh views to wireframe specialization
+after view-key updates and before official wireframe specialization. This prevents
+stale bind-group layouts when Depth View changes the depth prepass. It preserves
+on-demand prepasses and the official renderer implementation.
 
-At the initial handoff the build filesystem had only about 3.4 MiB above its
-32 MiB reserve. Dioxus also needed official accesskit 0.25.1 and additional
-AnyRender/Vello packages. Further qualification requires reclaiming obsolete
-build outputs or more build capacity and acquiring missing official dependencies.
+The egui adapter mirrors authoritative Scene depth settings before drawing the
+next toolbar frame. The toolbar can consequently enable and disable Depth View,
+including after another controller changes the setting. A real-widget test covers
+the widget, shared dispatcher, Scene resource, and acknowledged snapshot roundtrip.
 
-Generated build outputs, logs, source snapshots and qualification archives are
-kept outside Git. Main is unchanged; this is a reviewable development candidate.
+## Qualification
+
+- Production native executable: `cargo build -p pentimento --features egui --locked --offline` linked successfully.
+- Production App, Scene, and Sculpt unit/integration suites: **429 passed, zero failed, four manual tests ignored** with `cargo test -p pentimento -p pentimento-scene -p sculpting --features pentimento/egui,sculpting/bevy --lib --tests --locked --offline -- --test-threads=2`.
+- Production egui presentation widgets: **14 passed** separately with egui 0.36.2.
+- The seven actual sculpt history pipeline tests and 21 history state-machine tests cover complete geometry/UV/identity restoration, admission, conflicts, invalid restore rejection, redo branching, and retention limits.
+- Actual native GUI on Xvfb/Mesa 25.0.7 llvmpipe Vulkan: accepted Grab stroke changed the sphere from 1088 to 1096 faces; the Undo button restored 1088, Ctrl+Shift+Z restored 1096, Ctrl+Z plus an off-target gesture preserved redo, and a new accepted stroke cleared redo. Displayed history counts agreed with each operation.
+- Actual native Depth View Off → On → Off → On → Off rendered the corresponding scene and toolbar labels without a GPU validation error.
+- Combined selectable adapters: `cargo check -p pentimento --features egui,dioxus --locked --offline` passed. The missing official packages were acquired normally and checked against Cargo.lock checksums. Direct Taffy defaults now match official Blitz's layout feature selection. Dioxus Atom typing, required mouse event fields, and Bevy non-Send/AssetMut API bindings were updated without changing existing dispatch or input thresholds.
+- Independent source reviews approved the migration, depth invalidation/snapshot repairs, and optional Dioxus API followup.
+
+The production suite and GUI smoke used the frozen native source before the final
+Dioxus-only API followup. The final native executable was rebuilt from the complete
+delivery source and is byte-identical to the GUI-qualified executable
+(SHA-256 1f4a38d0b54a3144db680e089cdc524680e60598688bb232123277e552de2fbd).
+The lockfile and active native egui Rust/WESL paths are unchanged by that optional
+Dioxus followup.
+
+Physical GPU/stylus behavior, device recovery, lighting/atmosphere pixel parity,
+and Dioxus/CEF executable runtime parity remain unqualified. The normal scene is
+dark with visible geometry/wireframes on this software adapter; the native smoke
+establishes editor/history and depth behavior, not lighting parity. The combined
+Dioxus result is a compile check, not a claim that its executable was linked or run.
+
+Generated build outputs, logs, source snapshots and JPEG85 runtime screenshots
+remain outside Git. Unique qualification evidence was preserved before removing
+obsolete reproducible outputs to make build space. Main and Pantograph are
+unchanged. This is a development candidate for review; there is no main merge.

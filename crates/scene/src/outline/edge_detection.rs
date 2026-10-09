@@ -252,7 +252,10 @@ fn prepare_edge_detection(
             1.0,
         ),
         thickness: settings.thickness,
-        texture_size: Vec2::new(id_texture.texture_descriptor.size.width as f32, id_texture.texture_descriptor.size.height as f32),
+        texture_size: Vec2::new(
+            id_texture.texture_descriptor.size.width as f32,
+            id_texture.texture_descriptor.size.height as f32,
+        ),
         _padding: 0.0,
     };
 

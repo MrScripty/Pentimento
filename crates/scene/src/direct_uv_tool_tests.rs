@@ -43,6 +43,7 @@ impl Fixture {
             std::time::Duration::from_millis(20),
         ))
         .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
         .init_resource::<Assets<Image>>()
         .init_resource::<Assets<StandardMaterial>>()
         .init_resource::<OutboundUiMessages>()
