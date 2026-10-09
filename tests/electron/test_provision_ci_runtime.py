@@ -42,7 +42,10 @@ class ProvisionTests(unittest.TestCase):
                 archive.writestr(*extra)
 
     def test_complete_tree_matches_and_requires_every_official_file(self):
-        provision.verify_tree(self.source, self.manifest, os.getuid())
+        receipt = provision.verify_tree(self.source, self.manifest, os.getuid())
+        self.assertEqual(receipt['chrome-sandbox']['mode'], '0755')
+        self.assertEqual(receipt['chrome-sandbox']['uid'], os.getuid())
+        self.assertEqual(receipt['chrome-sandbox']['sha256'], hashlib.sha256(self.files['chrome-sandbox']).hexdigest())
         (self.source / 'locales/en.pak').unlink()
         with self.assertRaisesRegex(ValueError, 'file set'):
             provision.verify_tree(self.source, self.manifest, os.getuid())

@@ -136,7 +136,7 @@ def source_parents(path, owner):
 def verify_tree(root, manifest, owner, *, privileged=False):
     validate_metadata(root.lstat(), owner, directory=True)
     entries = list(root.rglob('*'))
-    actual_files, actual_directories = set(), set()
+    actual_files, actual_directories, verified = set(), set(), {}
     for item in entries:
         name = item.relative_to(root).as_posix()
         metadata = item.lstat()
@@ -148,11 +148,16 @@ def verify_tree(root, manifest, owner, *, privileged=False):
             require(expected is not None, f'Unexpected runtime file: {name}')
             mode = 0o4755 if privileged and name == 'chrome-sandbox' else expected['mode']
             validate_metadata(metadata, owner, expected_mode=mode)
-            require(metadata.st_size == expected['size'] and digest_file(item) == expected['sha256'],
+            checksum = digest_file(item)
+            require(metadata.st_size == expected['size'] and checksum == expected['sha256'],
                     f'Runtime file content mismatch: {name}')
             actual_files.add(name)
+            verified[name] = {'sha256': checksum, 'size': metadata.st_size,
+                              'uid': metadata.st_uid, 'gid': metadata.st_gid,
+                              'mode': f'{stat.S_IMODE(metadata.st_mode):04o}'}
     require(actual_files == manifest['files'].keys(), 'Runtime file set differs from official archive')
     require(actual_directories == set(manifest['directories']), 'Runtime directory set differs from official archive')
+    return verified
 
 
 def install_runtime(manifest, run=subprocess.run):
@@ -178,7 +183,7 @@ def install_runtime(manifest, run=subprocess.run):
     protected_parent(DESTINATION)
     verify_tree(DESTINATION, manifest, 0)
     run(['/usr/bin/sudo', '-n', '/usr/bin/chmod', '4755', '--', str(DESTINATION / 'chrome-sandbox')], check=True)
-    verify_tree(DESTINATION, manifest, 0, privileged=True)
+    return verify_tree(DESTINATION, manifest, 0, privileged=True)
 
 
 def check_lock(project):
@@ -216,16 +221,16 @@ def main():
         release_checksum(sums.read_text())
         download(f'{RELEASE_URL}/{ARCHIVE_NAME}', archive, MAX_ARCHIVE)
         manifest = archive_manifest(archive)
-        verify_tree(installed, manifest, os.getuid())
+        verified = verify_tree(installed, manifest, os.getuid())
         if not args.verify_only:
-            install_runtime(manifest)
+            verified = install_runtime(manifest)
         args.evidence.parent.mkdir(parents=True, exist_ok=True)
         args.evidence.write_text(json.dumps({
             'version': VERSION, 'release': RELEASE_URL, 'archive_sha256': ARCHIVE_SHA256,
             'installed_tree_verified': True, 'protected_copy_verified': not args.verify_only,
             'runtime': str(DESTINATION / 'electron') if not args.verify_only else str(installed / 'electron'),
             'privileged_helper': not args.verify_only, 'provisioning_uid': os.getuid(),
-            'files': manifest['files'], 'directories': manifest['directories'],
+            'files': verified, 'directories': manifest['directories'],
         }, indent=2) + '\n')
 
 
