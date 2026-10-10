@@ -17,23 +17,42 @@
 //! - **Egui**: Native Rust UI integrated directly into Bevy via `bevy_egui`
 //! - **Tauri**: Bevy WASM in Tauri webview (requires separate build)
 
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use std::sync::Arc;
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use std::time::{Duration, Instant};
 
 use crate::config::{CompositeMode, PentimentoConfig};
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use crate::embedded_ui::UiAssets;
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use bevy::asset::RenderAssetUsages;
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+use bevy::render::render_resource::TextureFormat;
+#[cfg(any(feature = "webkit", feature = "cef"))]
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureUsages};
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use bevy::window::RawHandleWrapper;
-use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
+use pentimento_frontend_core::CompositeBackend;
+#[cfg(any(feature = "webkit", feature = "cef"))]
+use pentimento_frontend_core::{CaptureResult, FrontendError};
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use pentimento_ipc::UiToBevy;
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use pentimento_scene::OutboundUiMessages;
 
 // Keep submodules for mode-specific initialization helpers
 #[cfg(feature = "dioxus")]
 mod ui_blend_material;
+#[cfg(any(
+    test,
+    feature = "webkit",
+    feature = "cef",
+    feature = "dioxus",
+    feature = "egui"
+))]
 mod ui_commands;
 #[cfg(test)]
 pub(crate) use ui_commands::dispatch_ui_commands;
@@ -58,20 +77,24 @@ pub struct FrontendResource {
     /// The backend implementation (boxed trait object for dynamic dispatch)
     pub backend: Box<dyn CompositeBackend>,
     /// Texture format used by this backend (RGBA or BGRA)
+    #[cfg_attr(not(any(feature = "webkit", feature = "cef")), allow(dead_code))]
     pub texture_format: TextureFormat,
 }
 
 /// Resource holding the UI texture handle for capture-based modes.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 #[derive(Resource)]
 pub struct UiTextureHandle {
     pub handle: Handle<Image>,
 }
 
 /// Marker component for the UI overlay node.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 #[derive(Component)]
 pub struct UiOverlay;
 
 /// Track frontend initialization and capture state.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 #[derive(Resource)]
 pub struct FrontendStatus {
     pub initialized: bool,
@@ -82,6 +105,7 @@ pub struct FrontendStatus {
     pub mode: CompositeMode,
 }
 
+#[cfg(any(feature = "webkit", feature = "cef"))]
 impl Default for FrontendStatus {
     fn default() -> Self {
         Self {
@@ -95,6 +119,7 @@ impl Default for FrontendStatus {
 }
 
 /// Track the last known window size for resize detection.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 #[derive(Resource, Default)]
 pub struct LastWindowSize {
     pub width: u32,
@@ -103,6 +128,7 @@ pub struct LastWindowSize {
 }
 
 /// Heartbeat interval for marking the UI dirty (forces periodic capture).
+#[cfg(any(feature = "webkit", feature = "cef"))]
 const CAPTURE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(16);
 
 // ============================================================================
@@ -110,14 +136,17 @@ const CAPTURE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(16);
 // ============================================================================
 
 /// Configuration needed to create a frontend backend.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 pub struct FrontendConfig {
     /// HTML content to load in the webview
     pub html: String,
     /// Initial viewport dimensions (width, height)
     pub size: (u32, u32),
     /// Scale factor for HiDPI displays
+    #[cfg_attr(not(feature = "webkit"), allow(dead_code))]
     pub scale_factor: f64,
     /// Raw window handle (needed for overlay mode)
+    #[cfg_attr(not(feature = "webkit"), allow(dead_code))]
     pub window_handle: Option<raw_window_handle::RawWindowHandle>,
 }
 
@@ -134,11 +163,13 @@ pub struct FrontendConfig {
 /// # Errors
 ///
 /// Returns `FrontendError` if the backend fails to initialize.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 pub fn create_frontend(
     mode: CompositeMode,
     config: FrontendConfig,
 ) -> Result<FrontendResource, FrontendError> {
     match mode {
+        #[cfg(feature = "webkit")]
         CompositeMode::Capture => {
             // WebKit capture mode - RGBA format
             let mut webview = pentimento_webview::OffscreenWebview::new(&config.html, config.size)
@@ -151,6 +182,7 @@ pub fn create_frontend(
             })
         }
 
+        #[cfg(feature = "webkit")]
         CompositeMode::Overlay => {
             // Overlay mode - compositor-managed (no texture capture needed)
             let window_handle = config.window_handle.ok_or_else(|| {
@@ -167,6 +199,11 @@ pub fn create_frontend(
                 texture_format: TextureFormat::Rgba8UnormSrgb,
             })
         }
+
+        #[cfg(not(feature = "webkit"))]
+        CompositeMode::Capture | CompositeMode::Overlay => Err(FrontendError::Backend(
+            "Capture/Overlay modes require the 'webkit' feature. Build with: cargo build --features webkit".into(),
+        )),
 
         #[cfg(feature = "cef")]
         CompositeMode::Cef => {
@@ -211,6 +248,7 @@ pub fn create_frontend(
 // ============================================================================
 
 /// Initialize the frontend backend and UI overlay (startup system).
+#[cfg(any(feature = "webkit", feature = "cef"))]
 pub fn setup_frontend(world: &mut World) {
     let config = world.resource::<PentimentoConfig>();
     let mode = config.composite_mode;
@@ -342,6 +380,7 @@ pub fn setup_frontend(world: &mut World) {
 /// - `Rgba`: Upload RGBA data directly
 /// - `Bgra`: Upload BGRA data (Arc-wrapped for zero-copy when possible)
 /// - `CompositorManaged`: No texture update needed (compositor handles blending)
+#[cfg(any(feature = "webkit", feature = "cef"))]
 pub fn update_ui_texture(
     frontend_res: Option<NonSendMut<FrontendResource>>,
     ui_texture: Option<Res<UiTextureHandle>>,
@@ -412,6 +451,7 @@ pub fn update_ui_texture(
 }
 
 /// Upload captured data to the Bevy texture.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 fn upload_texture_data(
     images: &mut Assets<Image>,
     handle: &Handle<Image>,
@@ -471,6 +511,7 @@ fn upload_texture_data(
 }
 
 /// Handle window resize for the frontend.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 pub fn handle_frontend_resize(
     frontend_res: Option<NonSendMut<FrontendResource>>,
     ui_texture: Option<Res<UiTextureHandle>>,
@@ -541,6 +582,7 @@ pub fn handle_frontend_resize(
 /// This system forwards outbound messages (Bevy→UI) and processes inbound
 /// messages (UI→Bevy) using the unified `FrontendResource` / `CompositeBackend`
 /// trait, so it works identically for all capture-based backends.
+#[cfg(any(feature = "webkit", feature = "cef"))]
 fn handle_frontend_ipc_messages(world: &mut World) {
     // Send outbound messages to the UI first
     let outbound_msgs = {
@@ -587,6 +629,7 @@ impl Plugin for RenderPlugin {
         let mode = config.composite_mode;
 
         match mode {
+            #[cfg(feature = "webkit")]
             CompositeMode::Capture | CompositeMode::Overlay => {
                 // Unified capture-based pipeline
                 app.init_resource::<FrontendStatus>()
@@ -600,6 +643,14 @@ impl Plugin for RenderPlugin {
                     "Render plugin initialized with {:?} mode (unified pipeline)",
                     mode
                 );
+            }
+
+            #[cfg(not(feature = "webkit"))]
+            CompositeMode::Capture | CompositeMode::Overlay => {
+                error!(
+                    "Capture/Overlay modes require the 'webkit' feature. Build with: cargo build --features webkit"
+                );
+                panic!("Capture/Overlay modes not available - rebuild with --features webkit");
             }
 
             #[cfg(feature = "cef")]
@@ -661,7 +712,7 @@ impl Plugin for RenderPlugin {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "webkit", feature = "cef")))]
 mod framebuffer_receipt_tests {
     use super::*;
 

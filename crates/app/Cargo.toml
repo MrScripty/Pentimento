@@ -6,17 +6,13 @@ license.workspace = true
 
 [dependencies]
 pentimento-config = { path = "../config", features = ["bevy"] }
-pentimento-webview = { path = "../webview" }
+pentimento-webview = { path = "../webview", default-features = false, optional = true }
 pentimento-frontend-core = { path = "../frontend-core" }
 pentimento-scene = { path = "../scene" }
 pentimento-ipc = { path = "../ipc" }
-pentimento-diffusion = { path = "../diffusion", optional = true }
 pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
 pentimento-egui-ui = { path = "../egui-ui", optional = true }
 painting = { path = "../painting", features = ["bevy"], optional = true }
-
-# Dioxus mode dependencies
-pollster = { version = "0.4", optional = true }
 
 bevy = { workspace = true, features = [
     "3d",
@@ -27,30 +23,38 @@ bevy = { workspace = true, features = [
 ] }
 bevy_egui = { workspace = true, optional = true }
 
-tokio = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
-image = { workspace = true }
-bytemuck = { workspace = true }
 raw-window-handle = { workspace = true }
 
-# Embed UI assets
-rust-embed = { version = "8.7", features = ["debug-embed", "compression"] }
+# Embed UI assets (web-backed frontends only)
+rust-embed = { version = "8.7", features = ["debug-embed", "compression"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
+gtk = { version = "0.18", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [features]
 default = ["wayland", "wireframe", "selection", "mesh_painting", "mesh_editing", "sculpting", "atmosphere"]
 sculpting = ["pentimento-scene/sculpting"]
 wayland = []
 x11 = []
+# WebKit capture/overlay backend for the legacy web UI modes.
+webkit = [
+    "dep:pentimento-webview",
+    "pentimento-webview/webkit",
+    "dep:rust-embed",
+    "dep:gtk",
+]
 # The shared UI command dispatcher uses painting directly in every active frontend.
-cef = ["pentimento-webview/cef", "dep:painting"]
-dioxus = ["pentimento-webview/dioxus", "dep:pentimento-dioxus-ui", "dep:pollster", "dep:painting"]
+cef = [
+    "dep:pentimento-webview",
+    "pentimento-webview/cef",
+    "dep:rust-embed",
+    "dep:painting",
+]
+dioxus = ["dep:pentimento-dioxus-ui", "dep:painting"]
 egui = ["dep:bevy_egui", "dep:pentimento-egui-ui", "dep:painting"]
-local-diffusion = ["pentimento-diffusion/local"]
 wireframe = ["pentimento-scene/wireframe"]
 selection = ["pentimento-scene/selection"]
 mesh_painting = ["pentimento-scene/mesh_painting"]

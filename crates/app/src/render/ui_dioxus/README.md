@@ -36,7 +36,7 @@ Keep all Dioxus-specific app wiring in this subdirectory and let `crates/dioxus-
 
 ## Dependencies
 **Internal:** `crates/app/src/render`, `crates/dioxus-ui`, `crates/ipc`  
-**External:** Bevy render graph, pollster
+**External:** Bevy render graph
 
 ## Related ADRs
 - `ADR-001` active frontends and contract ownership.

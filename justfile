@@ -18,7 +18,7 @@ dev:
     trap "kill $VITE_PID 2>/dev/null" EXIT
     sleep 2
     # Run Bevy app in dev mode
-    PENTIMENTO_DEV=1 cargo run -p pentimento
+    PENTIMENTO_DEV=1 cargo run -p pentimento --features webkit
 
 # Build UI only
 build-ui:
@@ -26,7 +26,7 @@ build-ui:
 
 # Build Rust only
 build-rust:
-    cargo build --release -p pentimento
+    cargo build --release -p pentimento --features webkit
 
 # Build everything for release
 build: build-ui build-rust
@@ -34,11 +34,11 @@ build: build-ui build-rust
 # Build for Windows (cross-compilation)
 build-windows:
     npm run build
-    cross build --release -p pentimento --target x86_64-pc-windows-gnu
+    cross build --release -p pentimento --features webkit --target x86_64-pc-windows-gnu
 
 # Run the release build
 run:
-    cargo run --release -p pentimento
+    cargo run --release -p pentimento --features webkit
 
 # Run tests
 test:

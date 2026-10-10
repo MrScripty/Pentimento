@@ -12,6 +12,7 @@ use bevy::render::{
 };
 
 mod config;
+#[cfg(any(feature = "webkit", feature = "cef"))]
 mod embedded_ui;
 mod input;
 mod render;
@@ -28,10 +29,9 @@ fn main() {
         config.composite_mode
     );
 
-    // Initialize GTK for webview on Linux (needed for both modes)
-    // Note: For CEF mode, GTK is not strictly required, but we initialize it
-    // anyway for compatibility with non-CEF code paths
-    #[cfg(target_os = "linux")]
+    // Initialize GTK for the WebKit capture/overlay backends on Linux.
+    // CEF mode does not use GTK.
+    #[cfg(all(target_os = "linux", feature = "webkit"))]
     {
         gtk::init().expect("Failed to initialize GTK");
     }
