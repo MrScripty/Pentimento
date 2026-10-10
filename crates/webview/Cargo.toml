@@ -6,18 +6,24 @@ license.workspace = true
 
 [features]
 default = ["webkit"]
-webkit = []
+webkit = [
+    "dep:wry",
+    "dep:gtk",
+    "dep:gdk",
+    "dep:gdkx11",
+    "dep:webkit2gtk",
+    "dep:cairo-rs",
+    "dep:gio",
+]
 cef = ["dep:cef", "dep:urlencoding"]
 dioxus = ["dep:pentimento-dioxus-ui"]
 
 [dependencies]
-pentimento-config = { path = "../config" }
 pentimento-ipc = { path = "../ipc" }
 pentimento-frontend-core = { path = "../frontend-core" }
 
-wry = { workspace = true }
+wry = { workspace = true, optional = true }
 tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 image = { workspace = true }
@@ -25,13 +31,12 @@ thiserror = { workspace = true }
 raw-window-handle = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
-gdk = "0.18"
-gdkx11 = "0.18"
-webkit2gtk = { version = "2.0", features = ["v2_40"] }
-cairo-rs = { version = "0.18", features = ["png", "use_glib"] }
-glib = "0.18"
-gio = "0.18"
+gtk = { version = "0.18", optional = true }
+gdk = { version = "0.18", optional = true }
+gdkx11 = { version = "0.18", optional = true }
+webkit2gtk = { version = "2.0", features = ["v2_40"], optional = true }
+cairo-rs = { version = "0.18", features = ["png", "use_glib"], optional = true }
+gio = { version = "0.18", optional = true }
 
 # CEF (Chromium Embedded Framework) bindings - optional dependency for cef feature
 cef = { version = "143.7", optional = true }
@@ -40,17 +45,6 @@ urlencoding = { version = "2.1", optional = true }
 # Dioxus (native Rust UI) - optional dependency for dioxus feature
 pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Dxgi_Common",
-] }
-
 [[example]]
 name = "capture_test"
-
-[dev-dependencies]
-image = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-gtk = "0.18"
+required-features = ["webkit"]

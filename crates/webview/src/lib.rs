@@ -8,13 +8,13 @@
 
 mod error;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "webkit"))]
 mod platform_linux;
 #[cfg(all(target_os = "linux", feature = "cef"))]
 mod platform_linux_cef;
 #[cfg(all(target_os = "linux", feature = "dioxus"))]
 mod platform_linux_dioxus;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "webkit"))]
 mod platform_linux_overlay;
 #[cfg(target_os = "windows")]
 mod platform_windows;
@@ -25,7 +25,7 @@ pub use error::WebviewError;
 pub use platform_linux_cef::LinuxCefWebview;
 #[cfg(all(target_os = "linux", feature = "dioxus"))]
 pub use platform_linux_dioxus::LinuxDioxusRenderer;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "webkit"))]
 pub use platform_linux_overlay::LinuxOverlayWebview;
 
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
@@ -35,8 +35,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 /// Offscreen webview that can be captured as a texture
+#[cfg(any(target_os = "windows", feature = "webkit"))]
 pub struct OffscreenWebview {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "webkit"))]
     inner: platform_linux::LinuxWebview,
     #[cfg(target_os = "windows")]
     inner: platform_windows::WindowsWebview,
@@ -49,6 +50,7 @@ pub struct OffscreenWebview {
     from_ui_rx: mpsc::UnboundedReceiver<UiToBevy>,
 }
 
+#[cfg(any(target_os = "windows", feature = "webkit"))]
 impl OffscreenWebview {
     /// Create a new offscreen webview with the given HTML content
     pub fn new(html_content: &str, size: (u32, u32)) -> Result<Self, WebviewError> {
@@ -57,7 +59,7 @@ impl OffscreenWebview {
         let (to_ui_tx, _to_ui_rx) = mpsc::unbounded_channel();
         let (from_ui_tx, from_ui_rx) = mpsc::unbounded_channel();
 
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "webkit"))]
         let inner =
             platform_linux::LinuxWebview::new(html_content, size, dirty.clone(), from_ui_tx)?;
 
@@ -162,8 +164,9 @@ impl OffscreenWebview {
 
 /// Overlay webview that composites via transparent child window
 /// This mode uses the desktop compositor for blending, avoiding framebuffer capture
+#[cfg(all(target_os = "linux", feature = "webkit"))]
 pub struct OverlayWebview {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "webkit"))]
     inner: platform_linux_overlay::LinuxOverlayWebview,
 
     size: (u32, u32),
@@ -173,6 +176,7 @@ pub struct OverlayWebview {
     from_ui_rx: mpsc::UnboundedReceiver<UiToBevy>,
 }
 
+#[cfg(all(target_os = "linux", feature = "webkit"))]
 impl OverlayWebview {
     /// Create a new overlay webview as a child of the given window
     ///
@@ -180,7 +184,7 @@ impl OverlayWebview {
     /// * `parent_window` - Raw window handle from Bevy's primary window
     /// * `html_content` - HTML content to load
     /// * `size` - Initial size (width, height)
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "webkit"))]
     pub fn new(
         parent_window: raw_window_handle::RawWindowHandle,
         html_content: &str,
@@ -509,6 +513,7 @@ impl DioxusWebview {
 // CompositeBackend trait implementations
 // ============================================================================
 
+#[cfg(any(target_os = "windows", feature = "webkit"))]
 impl CompositeBackend for OffscreenWebview {
     fn poll(&mut self) {
         self.poll();
@@ -551,6 +556,7 @@ impl CompositeBackend for OffscreenWebview {
     }
 }
 
+#[cfg(all(target_os = "linux", feature = "webkit"))]
 impl CompositeBackend for OverlayWebview {
     fn poll(&mut self) {
         self.poll();
