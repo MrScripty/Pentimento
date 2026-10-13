@@ -207,3 +207,39 @@ new baseline is compatible with the observed native defaults, not a replacement
 for the harness's uncompressed readback. A single-line negative is also rejected.
 The depth oracle establishes broad varying grayscale output and reversible
 presentation; it does not claim a quantitative near/far depth-accuracy proof.
+
+## Confirmed native qualification at `713653f`
+
+[Run 38410829970](https://github.com/MrScripty/Pentimento/actions/runs/38410829970)
+passed on 2026-10-13 at 14:26 UTC for source head
+`713653f0804255636af5b89e6e6eb1cc12f6e311`. The inspected
+[artifact 11821199796](https://github.com/MrScripty/Pentimento/actions/runs/38410829970/artifacts/11821199796)
+records tested PR merge checkout `ed01a0a1b6c0b8679e38c3819c32aba39010fa4c`.
+Its lockfile resolves both CEF crates to `154.5.0+154.0.34`; the canonical
+app/helper build and native input/capture regression tests passed.
+
+The retained `result.json` reports all 26 native checks passed:
+
+- The presented toolbar contains 92,160/92,160 painted pixels.
+- Two physical depth on/off cycles receive backend acknowledgements and render
+  1,111,981 gray scene pixels across nine populated intensity bins, with zero
+  chromatic pixels. Each changes 1,109,604 pixels from the stable baseline and
+  restores all those pixels with measured residual mean zero when disabled.
+  Inspected depth screenshots visibly show the cube, sphere, torus, and ground
+  in varying grayscale, followed by restoration of the ordinary native scene.
+- Eighteen retained trusted DOM wheel events have `deltaY: 40`; the formerly
+  blocked scroll-to-history route completes. Sculpting changes 19,694 pixels
+  with an accepted 1,216-face transaction. Undo, redo, cancellation, new-history
+  branch, mode ownership, and widget capture checks pass; undo/redo restoration
+  has residual mean zero.
+- Painting changes 6,511 pixels and covers all 25 sampled stroke-path points.
+  Paint undo/UI capture, projection controls, receiver pixels, cancellation,
+  undo, redo, and redo shortcut pass. The first projection receipt reports
+  4,795 painted receiver texels and 291 changed magenta receiver pixels.
+
+`app.log` identifies Vulkan with Mesa 25.2.8 llvmpipe (LLVM 20.1.2); CEF uses
+software compositing under Xvfb. This establishes actual native Vulkan depth
+rendering and reversible presentation in that software-rendered environment.
+It does not qualify hardware GPU drivers, quantitative depth accuracy, broader
+material/lighting correctness, or a later source head. Screenshots inspected
+include depth enabled/disabled, sculpted/undone, painted, and projected states.

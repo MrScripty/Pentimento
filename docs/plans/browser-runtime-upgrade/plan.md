@@ -4,7 +4,7 @@
 - Objective: update the supported Linux x86_64 CEF and Electron frontends to the latest stable releases available on 2026-10-13, preserving Bevy 0.20 and existing paint/sculpt behavior.
 - Base: PR #27, `93f67c7d86c045cf298395b172acb0aa1ece14a6` (`perf/native-brush-workspace`). Work is isolated on `chore/browser-runtime-upgrades`; no merge or deployment.
 - Current phase: independent review and representative runtime qualification.
-- Next slice: repair the observed Electron/Bevy WebGL view-format incompatibility with a capability-correct path, then rerun exact-head qualification.
+- Next slice: rerun exact-head qualification after evidence-backed corrections to the rendered status locator and shaded-object geometry oracle; retain every production rendering and input assertion.
 
 ## Binding decisions
 
@@ -21,9 +21,9 @@ Composed-design review: re-opened after representative Electron CI exposed Bevy 
 | ID | Observable criterion | Evidence | Environment/mode | Status |
 | --- | --- | --- | --- | --- |
 | BR1 | Pins resolve to verified latest stable identities, with unchanged Bevy 0.20 | registry metadata, generated lockfiles, dependency graph | representative/automated | satisfied |
-| BR2 | CEF host/helper and standalone adapter compile against matching 154 APIs; launcher selects the matching runtime | real local distribution checks plus first-head native CI build | representative/automated | satisfied on first head; final repair recheck pending |
+| BR2 | CEF host/helper and standalone adapter compile against matching 154 APIs; launcher selects the matching runtime | real local distribution checks plus first-head native CI build | representative/automated | satisfied, including repaired native head713653f |
 | BR3 | Electron explicit install produces the pinned executable; production assets load from launcher output; IPC/preload remains isolated | shell contract tests, TypeScript, production/runtime smoke | representative/automated | pending |
-| BR4 | Actual CEF app visibly renders toolbar and preserves strict native paint/sculpt assertions | existing native qualification | representative/automated | pending |
+| BR4 | Actual CEF app visibly renders toolbar and preserves strict native paint/sculpt assertions | native run38410829970 on713653f | representative/automated | satisfied; final test-only head rerun tracked in PR |
 | BR5 | Existing frontend and engine gates pass; independent review finds no unresolved introduced defect | launcher and focused suites, review | representative/automated | pending |
 | BR6 | WebGL renders the real scene with lossless outline IDs; browser depth reports its existing limitation, and native supported depth enables/disables without breaking scene restoration | descriptor/ID/capability tests plus real browser/native interaction evidence | representative/automated | implementation and CPU tests pass; rendered requalification pending |
 
@@ -38,7 +38,7 @@ Hardware/stylus responsiveness and unsupported Windows/macOS support remain outs
 
 ## Blockers and re-plan triggers
 
-Local executor currently lacks GTK/WebKitGTK/ALSA/udev development packages and display qualification. Prior PR #27 CEF startup readiness was corrected and first-head CEF154 runtime evidence confirms visible native toolbar/sculpt output. That run exposed a reversed vertical wheel sign, now repaired at the adapter boundary. First Electron production CI on PR #28 exposed unsupported WebGL VIEW_FORMATS, postprocess target format mismatch, and unsupported depth shader generation. The bounded renderer repair and truthful depth contract are implemented; exact-head rendered acceptance remains pending. Resolve through permitted native CI or a supported host. Re-plan if the pinned stable bindings cannot be acquired, changed APIs require a different architecture, sandbox operation requires new authority, the stack base changes, or required hosted jobs cannot run.
+Local executor currently lacks GTK/WebKitGTK/ALSA/udev development packages and display qualification. Prior PR #27 CEF startup readiness was corrected and first-head CEF154 runtime evidence confirms visible native toolbar/sculpt output. That run exposed a reversed vertical wheel sign, now repaired at the adapter boundary. First Electron production CI on PR #28 exposed unsupported WebGL VIEW_FORMATS, postprocess target format mismatch, and unsupported depth shader generation. The bounded renderer repair and truthful depth contract are implemented; CEF rendered acceptance now passes on713653f; corrected Electron oracle, graceful shutdown and final aggregate acceptance require the final exact-head rerun. Resolve through permitted native CI or a supported host. Re-plan if the pinned stable bindings cannot be acquired, changed APIs require a different architecture, sandbox operation requires new authority, the stack base changes, or required hosted jobs cannot run.
 
 ## Tracking
 

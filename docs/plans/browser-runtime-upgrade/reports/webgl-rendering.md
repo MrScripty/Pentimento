@@ -1,7 +1,10 @@
 # WebGL rendering repair
 
-Status: implemented; exact-head runtime requalification is pending. The strict
-scene-pixel acceptance criteria and Electron security settings are unchanged.
+Status: the repaired renderer produced the genuine scene and a visible selection
+outline in hosted CI; a shadowed-face segmentation mistake in the new outline
+oracle blocked completion. The bounded test correction is implemented; a new
+hosted run must still qualify stable selection and graceful shutdown. The strict
+scene-pixel criteria and Electron security settings are unchanged.
 
 ## Observed failure
 
@@ -83,7 +86,8 @@ both sides of the observed material edge. An orange fill, unrelated changed
 scene, wrong-object/color outline, or unchanged/hover-only frame cannot pass.
 Before/after PNGs and coordinate/pixel metrics are retained. This is a real GPU
 ID-pass/outline check; it complements, rather than replaces, the all-channel
-ID math regression. Hosted execution of the new interaction remains pending.
+ID math regression. The first hosted interaction and its oracle correction are
+recorded below.
 
 Production qualification also requires the real WASM capability response to
 reach the depth control. It records the disabled/unpressed state and matching
@@ -96,11 +100,51 @@ test uses the observed render-error shape, and a negative case keeps ordinary
 software-renderer warnings distinct from fatal evidence. The pixel oracle's
 detail/color thresholds and genuine-WASM requirements have not been relaxed.
 
+## Hosted repair evidence and oracle correction
+
+[Run 38410829861, job 115342390453](https://github.com/MrScripty/Pentimento/actions/runs/38410829861/job/115342390453)
+used source head `713653f0804255636af5b89e6e6eb1cc12f6e311`. The retained
+`environment.log` records PR merge commit `ed01a0a1b6c0b8679e38c3819c32aba39010fa4c`;
+GitHub's commit metadata verifies that its tree `a824de470481cde6cde3611bcf8e687c7014fa96`
+equals the source head's tree. The
+[artifact 11822966280](https://github.com/MrScripty/Pentimento/actions/runs/38410829861/artifacts/11822966280)
+contains the real pre/post-selection PNGs and complete JSON/log evidence.
+
+The build and ordinary sandbox probe passed. Both strict scene captures contain
+the red cube, green torus, blue sphere and ground. The depth control received the
+authoritative disabled OpenGL/WebGL reason, and no Bevy ERROR was observed.
+A real click at DIP `(960,457)` selected entity `297`; the retained after image
+shows a thin orange outline around that cube with no unrelated scene changes.
+
+The test failed because it reused the bright-red scene-population predicate as
+a geometric silhouette mask. Shadowed metallic-face pixels such as RGB
+`(71,32,49)` failed its red/blue ratio, fragmenting the baseline component into
+4,799 artificial boundary pixels. Of 1,842 new exact-orange pixels, 512 legitimate
+side/bottom outline pixels lay outside that fragmented mask's narrow band.
+
+The correction is only to this canonical red object's geometry predicate:
+retain strong red/green dominance and admit the observed red-dominant shadow
+against blue (`r > b * 1.1 + 8`). The original `inspectScene` palette predicate,
+four-pixel boundary band, 80% localization requirement, fill rejection, and
+outside-change limit are unchanged. The baseline then has one coherent
+39,750-pixel silhouette and 682 boundary pixels. Local and independent-review
+replay of the exact retained images places all 1,842 new orange pixels in that
+band, with zero orange interior pixels and zero meaningful outside changes
+among 1,225,275 outside pixels. A regression fixture uses that actual shadowed
+color; neutral, green, blue, wrong-object/color, fill and global-tint negatives
+remain rejected.
+
+This replay establishes the bounded oracle diagnosis, not a successful hosted
+job. The failed assertion prevented the production shutdown handshake; the
+process family exited without forced cleanup, but graceful production shutdown
+and two accepted consecutive selection frames still require the corrected run.
+
 ## Verification
 
-- Twenty shell/render JavaScript tests passed after these changes, including
+- Twenty-one shell/render JavaScript tests passed after these changes, including
   formatted Bevy errors, rejected pending depth bootstrap, the unchanged
-  scene-pixel fixtures, and positive/negative selection-boundary fixtures.
+  scene-pixel fixtures, shaded-face geometry, and positive/negative selection
+  boundary fixtures. JavaScript syntax and whitespace checks also pass.
 - Four format descriptor/view-association tests, four depth capability tests,
   and the all-channel ID roundtrip test are present for native Rust execution.
 - Final canonical WASM rebuilds and native Rust test runs precede exact-head

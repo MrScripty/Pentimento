@@ -30,7 +30,12 @@ function redObject(bitmap, width, height) {
     const red = new Uint8Array(width * height);
     for (let pixel = 0; pixel < red.length; pixel++) {
         const [b, g, r, a] = bitmap.subarray(pixel * 4, pixel * 4 + 4);
-        red[pixel] = a >= 240 && r > g * 1.3 + 8 && r > b * 1.3 + 8 ? 1 : 0;
+        // Geometry needs the canonical red cube's shadowed faces as well as its
+        // bright material. Real metallic-face pixels such as RGB(71,32,49) are
+        // still red-dominant but fail the stricter scene-population blue ratio.
+        // Keep strong red/green separation; neutral, blue and green remain out.
+        // inspectScene's original material-population predicate is unchanged.
+        red[pixel] = a >= 240 && r > g * 1.3 + 8 && r > b * 1.1 + 8 ? 1 : 0;
     }
     const queue = new Int32Array(red.length);
     let largest = [];

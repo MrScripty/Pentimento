@@ -1,8 +1,10 @@
 # Electron production qualification
 
-Status on 2026-10-13: the first hosted sandbox probe and real WASM build passed,
-but production rendering failed. The diagnosed WebGL repairs and pending
-requalification are recorded in [WebGL rendering](webgl-rendering.md).
+Status on 2026-10-13: the repaired renderer now produces the real scene and a
+visible selection outline in hosted CI. A shadowed-face geometry mistake in
+the new outline test blocked completion; its bounded correction and exact
+artifact replay are recorded in [WebGL rendering](webgl-rendering.md).
+The corrected full run, including graceful production shutdown, remains pending.
 This report does not mark BR3 accepted.
 
 ## Source lineage
@@ -48,7 +50,7 @@ preload plus real `dist/ui/wasm/pentimento_wasm.js` and
   from the native capture, send an Electron mouse click, park the pointer away,
   and require two stable orange-boundary frames. Keep before/after PNGs and
   input/pixel metrics; reject fills, unrelated scene changes, unchanged frames,
-  and wrong-object/color borders. The combined focused suite now has 20 passing
+  and wrong-object/color borders. The combined focused suite now has 21 passing
   tests. Exact-head hosted execution remains pending.
 - Preserve process ownership, shutdown handshake, orphan rejection, and
   PID/start-time tracking. Give each supervisor fixture its own evidence path,

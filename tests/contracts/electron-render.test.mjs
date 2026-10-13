@@ -90,6 +90,27 @@ test('selection evidence locates a real red interior and accepts the inside-silh
     assert.equal(result.outsideChangedPixels, 0);
 });
 
+test('selection geometry retains the shadowed red cube face without accepting neutral or other canonical materials', () => {
+    const { bitmap, width, height } = selectionFixture();
+    // The retained Electron frame has shadowed metallic cube pixels of exactly
+    // RGB(71,32,49). A strict bright-red population mask fragments this face and
+    // incorrectly excludes its valid orange silhouette from the boundary band.
+    for (let y = 40; y < 70; y++) for (let x = 30; x < 70; x++) {
+        bitmap.set([49, 32, 71, 255], (y * width + x) * 4);
+    }
+    const result = inspectSelectionOutline(bitmap, addFixtureOutline(bitmap, width), width, height);
+    assert.equal(result.object.pixels, 1600);
+    assert.equal(result.boundaryPixels, 156);
+    assert.equal(result.outlinePixels, 304);
+    assert.equal(result.interiorOrangePixels, 0);
+    assert.equal(result.outsideChangedPixels, 0);
+    for (const color of [[80, 80, 80, 255], [20, 180, 30, 255], [180, 30, 20, 255]]) {
+        const other = Buffer.alloc(bitmap.length);
+        for (let index = 0; index < other.length; index += 4) other.set(color, index);
+        assert.throws(() => locateRedObject(other, width, height), /no selectable canonical red object/);
+    }
+});
+
 test('selection evidence rejects unchanged and hover-only frames after the pointer leaves', () => {
     const { bitmap, width, height } = selectionFixture();
     // A hover outline that disappears when input parks off the object leaves this
