@@ -21,6 +21,10 @@ pub fn show_root_ui(
     runtime.sync_from_snapshot(snapshot);
 
     let mut commands = Vec::new();
+    if !runtime.depth_view_state_requested {
+        commands.push(UiToBevy::GetDepthViewState);
+        runtime.depth_view_state_requested = true;
+    }
     runtime.ui_regions.clear();
     if runtime.last_mode != Some(snapshot.edit_mode) {
         commands.push(UiToBevy::RequestBrushState);
@@ -88,13 +92,27 @@ fn draw_top_panel(
                 if ui.button("Reset Camera").clicked() {
                     commands.push(UiToBevy::CameraCommand(CameraCommand::Reset));
                 }
-                if ui
-                    .selectable_label(snapshot.depth_view_enabled, "Depth View")
-                    .clicked()
-                {
+                let depth_label = if !snapshot.depth_view_available {
+                    "Depth View"
+                } else if snapshot.depth_view_enabled {
+                    "Depth View: On"
+                } else {
+                    "Depth View: Off"
+                };
+                let depth_response = ui.add_enabled(
+                    snapshot.depth_view_available,
+                    egui::Button::new(depth_label).selected(snapshot.depth_view_enabled),
+                );
+                if depth_response.clicked() {
                     commands.push(UiToBevy::SetDepthView {
                         enabled: !snapshot.depth_view_enabled,
                     });
+                }
+                if let Some(reason) = snapshot.depth_view_reason.as_deref() {
+                    depth_response.on_disabled_hover_text(reason);
+                    ui.label(reason);
+                } else if !snapshot.depth_view_available {
+                    ui.label("Depth view is unavailable.");
                 }
                 if snapshot.mesh_edit_active {
                     ui.label(format!(
@@ -343,5 +361,41 @@ fn edit_mode_label(mode: EditMode) -> &'static str {
         EditMode::Paint => "Paint Mode",
         EditMode::MeshEdit => "Edit Mode",
         EditMode::Sculpt => "Sculpt Mode",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn depth_view_queries_on_first_frame_without_optimistic_enable() {
+        let ctx = egui::Context::default();
+        let mut snapshot = EguiUiSnapshot::default();
+        let mut runtime = EguiUiRuntime::default();
+        let mut first_commands = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            first_commands.extend(show_root_ui(ui.ctx(), &mut snapshot, &mut runtime));
+        });
+        // This CPU-only harness consumes UI state without a texture renderer.
+        output.textures_delta.clear();
+        assert_eq!(
+            first_commands
+                .iter()
+                .filter(|command| matches!(command, UiToBevy::GetDepthViewState))
+                .count(),
+            1
+        );
+        assert!(!snapshot.depth_view_available);
+        assert!(!snapshot.depth_view_enabled);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let commands = show_root_ui(ui.ctx(), &mut snapshot, &mut runtime);
+            assert!(!commands.iter().any(|command| matches!(
+                command,
+                UiToBevy::GetDepthViewState | UiToBevy::SetDepthView { .. }
+            )));
+        });
+        output.textures_delta.clear();
     }
 }

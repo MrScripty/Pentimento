@@ -18,14 +18,15 @@ use bevy::render::{
         BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState, ColorWrites,
         FragmentState, MultisampleState, Operations, PipelineCache, PrimitiveState,
         RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
-        SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType, TextureFormat,
-        TextureSampleType,
+        SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline,
+        SpecializedRenderPipelines, TextureFormat, TextureSampleType, VertexState,
         binding_types::{sampler, texture_2d, uniform_buffer},
     },
     renderer::{RenderContext, RenderDevice, ViewQuery},
     texture::GpuImage,
     view::ViewTarget,
 };
+use bevy::shader::Shader;
 
 use super::OutlineCamera;
 use super::OutlineRenderTargets;
@@ -74,6 +75,7 @@ impl Plugin for EdgeDetectionPlugin {
         };
 
         render_app.init_gpu_resource::<EdgeDetectionPipeline>();
+        render_app.init_gpu_resource::<SpecializedRenderPipelines<EdgeDetectionPipeline>>();
         bevy::log::info!("EdgeDetectionPlugin: Pipeline initialized");
     }
 }
@@ -93,7 +95,7 @@ pub struct EdgeDetectionUniform {
 
 /// Render the outline composite for the current main view.
 fn render_edge_detection(
-    view: ViewQuery<&ViewTarget, With<OutlineCamera>>,
+    view: ViewQuery<(&ViewTarget, Option<&EdgeDetectionPreparedPipeline>), With<OutlineCamera>>,
     settings: Option<Res<OutlineSettings>>,
     prepared: Option<Res<EdgeDetectionPrepared>>,
     pipeline: Option<Res<EdgeDetectionPipeline>>,
@@ -107,11 +109,18 @@ fn render_edge_detection(
     if !settings.enabled {
         return;
     }
-    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
+    let (target, prepared_pipeline) = view.into_inner();
+    let Some(prepared_pipeline) = prepared_pipeline else {
+        return;
+    };
+    if !prepared_pipeline.matches_format(target.main_texture_format()) {
+        return;
+    }
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(prepared_pipeline.id) else {
         return;
     };
 
-    let post_process = view.into_inner().post_process_write();
+    let post_process = target.post_process_write();
     let bind_group = render_device.create_bind_group(
         "edge_detection_bind_group",
         &pipeline_cache.get_bind_group_layout(&pipeline.layout),
@@ -149,7 +158,8 @@ fn render_edge_detection(
 pub struct EdgeDetectionPipeline {
     pub layout: BindGroupLayoutDescriptor,
     pub sampler: Sampler,
-    pub pipeline_id: CachedRenderPipelineId,
+    shader: Handle<Shader>,
+    vertex: VertexState,
 }
 
 impl FromWorld for EdgeDetectionPipeline {
@@ -183,38 +193,62 @@ impl FromWorld for EdgeDetectionPipeline {
         let fullscreen_shader = world.resource::<FullscreenShader>();
         let vertex_state = fullscreen_shader.to_vertex_state();
 
-        let pipeline_id =
-            world
-                .resource_mut::<PipelineCache>()
-                .queue_render_pipeline(RenderPipelineDescriptor {
-                    label: Some("edge_detection_pipeline".into()),
-                    layout: vec![layout_descriptor.clone()],
-                    vertex: vertex_state,
-                    fragment: Some(FragmentState {
-                        constants: vec![],
-                        shader,
-                        shader_defs: vec![],
-                        entry_point: Some("fragment".into()),
-                        targets: vec![Some(ColorTargetState {
-                            // Use HDR format to match ViewTarget (atmosphere enables HDR)
-                            format: TextureFormat::Rgba16Float,
-                            blend: None,
-                            write_mask: ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: MultisampleState::default(),
-                    immediate_size: 0,
-                    zero_initialize_workgroup_memory: false,
-                });
-
         Self {
             layout: layout_descriptor,
             sampler,
-            pipeline_id,
+            shader,
+            vertex: vertex_state,
         }
     }
+}
+
+impl SpecializedRenderPipeline for EdgeDetectionPipeline {
+    type Key = TextureFormat;
+
+    fn specialize(&self, format: Self::Key) -> RenderPipelineDescriptor {
+        edge_detection_descriptor(
+            self.layout.clone(),
+            self.vertex.clone(),
+            self.shader.clone(),
+            format,
+        )
+    }
+}
+
+fn edge_detection_descriptor(
+    layout_descriptor: BindGroupLayoutDescriptor,
+    vertex_state: VertexState,
+    shader: Handle<Shader>,
+    format: TextureFormat,
+) -> RenderPipelineDescriptor {
+    RenderPipelineDescriptor {
+        label: Some("edge_detection_pipeline".into()),
+        layout: vec![layout_descriptor],
+        vertex: vertex_state,
+        fragment: Some(FragmentState {
+            constants: vec![],
+            shader,
+            shader_defs: vec![],
+            entry_point: Some("fragment".into()),
+            targets: vec![Some(ColorTargetState {
+                format,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+        }),
+        primitive: PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        immediate_size: 0,
+        zero_initialize_workgroup_memory: false,
+    }
+}
+
+/// Cached choice belongs to this view, never to the last camera prepared.
+#[derive(Component)]
+pub struct EdgeDetectionPreparedPipeline {
+    format: TextureFormat,
+    id: CachedRenderPipelineId,
 }
 
 /// Prepared data for edge detection (created during Prepare phase)
@@ -228,10 +262,21 @@ pub struct EdgeDetectionPrepared {
 fn prepare_edge_detection(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
+    pipeline: Res<EdgeDetectionPipeline>,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<EdgeDetectionPipeline>>,
+    views: Query<(Entity, &ViewTarget), With<OutlineCamera>>,
     settings: Option<Res<OutlineSettings>>,
     targets: Option<Res<OutlineRenderTargets>>,
     gpu_images: Res<RenderAssets<GpuImage>>,
 ) {
+    for (entity, target) in &views {
+        let format = target.main_texture_format();
+        let id = pipelines.specialize(&pipeline_cache, &pipeline, format);
+        commands
+            .entity(entity)
+            .insert(EdgeDetectionPreparedPipeline { format, id });
+    }
     let Some(settings) = settings else {
         return;
     };
@@ -276,4 +321,102 @@ fn prepare_edge_detection(
 
 fn clear_prepare_edge_detection_resources(mut commands: Commands) {
     commands.remove_resource::<EdgeDetectionPrepared>();
+}
+
+impl EdgeDetectionPreparedPipeline {
+    fn matches_format(&self, format: TextureFormat) -> bool {
+        self.format == format
+    }
+}
+
+#[cfg(test)]
+mod target_format_tests {
+    use super::*;
+
+    fn descriptor(format: TextureFormat) -> RenderPipelineDescriptor {
+        // Exercise the same descriptor builder used by SpecializedRenderPipeline.
+        edge_detection_descriptor(
+            BindGroupLayoutDescriptor::new("test_layout", &[]),
+            VertexState::default(),
+            Handle::default(),
+            format,
+        )
+    }
+
+    #[test]
+    fn destination_format_is_the_specialization_key() {
+        // Compile-time check that no bool/platform guess replaces the actual format.
+        fn accepts_texture_format<P: SpecializedRenderPipeline<Key = TextureFormat>>() {}
+        accepts_texture_format::<EdgeDetectionPipeline>();
+        for format in [
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+        ] {
+            let descriptor = descriptor(format);
+            let target = descriptor.fragment.as_ref().unwrap().targets[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(target.format, format);
+            assert_eq!(target.blend, None);
+            assert_eq!(target.write_mask, ColorWrites::ALL);
+            // post_process_write is resolved even when the camera uses MSAA.
+            assert_eq!(descriptor.multisample.count, 1);
+            assert!(descriptor.depth_stencil.is_none());
+        }
+    }
+
+    #[test]
+    fn mixed_views_and_format_changes_cannot_reuse_another_views_choice() {
+        let mut world = World::new();
+        let sdr = TextureFormat::Rgba8UnormSrgb;
+        let hdr = TextureFormat::Rgba16Float;
+        let a = world
+            .spawn(EdgeDetectionPreparedPipeline {
+                format: sdr,
+                id: CachedRenderPipelineId::INVALID,
+            })
+            .id();
+        let b = world
+            .spawn(EdgeDetectionPreparedPipeline {
+                format: hdr,
+                id: CachedRenderPipelineId::INVALID,
+            })
+            .id();
+        for (view, own, other) in [(a, sdr, hdr), (b, hdr, sdr)] {
+            let prepared = world.get::<EdgeDetectionPreparedPipeline>(view).unwrap();
+            assert!(prepared.matches_format(own));
+            assert!(!prepared.matches_format(other));
+            assert_eq!(
+                descriptor(prepared.format).fragment.unwrap().targets[0]
+                    .as_ref()
+                    .unwrap()
+                    .format,
+                own
+            );
+        }
+        // A changed target must be skipped until prepare refreshes this entity.
+        assert!(
+            !world
+                .get::<EdgeDetectionPreparedPipeline>(a)
+                .unwrap()
+                .matches_format(hdr)
+        );
+        world.entity_mut(a).insert(EdgeDetectionPreparedPipeline {
+            format: hdr,
+            id: CachedRenderPipelineId::INVALID,
+        });
+        assert!(
+            world
+                .get::<EdgeDetectionPreparedPipeline>(a)
+                .unwrap()
+                .matches_format(hdr)
+        );
+        assert!(
+            world
+                .get::<EdgeDetectionPreparedPipeline>(b)
+                .unwrap()
+                .matches_format(hdr)
+        );
+    }
 }

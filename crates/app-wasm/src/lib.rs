@@ -6,7 +6,7 @@
 use bevy::input::mouse::{MouseButton, MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use pentimento_ipc::{BevyToUi, CameraCommand, UiToBevy};
-use pentimento_scene::ScenePlugin;
+use pentimento_scene::{DepthViewCapability, DepthViewSettings, OutboundUiMessages, ScenePlugin};
 use wasm_bindgen::prelude::*;
 
 mod bridge;
@@ -48,7 +48,7 @@ pub struct TauriIpcPlugin;
 
 impl Plugin for TauriIpcPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, handle_ui_messages);
+        app.add_systems(Update, (handle_ui_messages, flush_ui_messages).chain());
         app.add_systems(Update, debug_mouse_input);
     }
 }
@@ -91,7 +91,12 @@ fn debug_mouse_input(
 }
 
 /// System that polls for messages from the Svelte UI
-fn handle_ui_messages(mut camera_query: Query<&mut Transform, With<Camera3d>>) {
+fn handle_ui_messages(
+    mut camera_query: Query<&mut Transform, With<Camera3d>>,
+    capability: Res<DepthViewCapability>,
+    mut settings: ResMut<DepthViewSettings>,
+    mut outbound: ResMut<OutboundUiMessages>,
+) {
     // Check for pending messages from the UI
     while let Some(msg) = bridge::poll_ui_message() {
         match msg {
@@ -114,6 +119,15 @@ fn handle_ui_messages(mut camera_query: Query<&mut Transform, With<Camera3d>>) {
                     info!("Camera command: {:?}", cmd);
                 }
             },
+            UiToBevy::GetDepthViewState => {
+                outbound.send(capability.state_message(&settings));
+            }
+            UiToBevy::SetDepthView { enabled } => {
+                if let Some(rejection) = capability.set_enabled(&mut settings, enabled) {
+                    outbound.send(rejection);
+                }
+                outbound.send(capability.state_message(&settings));
+            }
             UiToBevy::UiDirty => {
                 // UI has changed, but in Tauri mode we don't need to capture
                 // since the UI is rendered directly by the browser
@@ -129,4 +143,10 @@ fn handle_ui_messages(mut camera_query: Query<&mut Transform, With<Camera3d>>) {
 #[allow(dead_code)]
 pub fn send_to_ui(msg: BevyToUi) {
     bridge::send_to_ui(msg);
+}
+
+fn flush_ui_messages(mut outbound: ResMut<OutboundUiMessages>) {
+    for message in outbound.drain() {
+        bridge::send_to_ui(message);
+    }
 }

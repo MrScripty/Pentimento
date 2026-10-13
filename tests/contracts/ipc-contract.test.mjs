@@ -36,6 +36,14 @@ function assertBevyToUiMessage(message) {
   assert.equal(typeof message.type, 'string');
 
   switch (message.type) {
+    case 'DepthViewState':
+      assert.equal(typeof message.data.available, 'boolean');
+      assert.equal(typeof message.data.enabled, 'boolean');
+      assert.ok(message.data.reason === null || typeof message.data.reason === 'string');
+      return;
+    case 'DepthViewRejected':
+      assert.equal(typeof message.data.reason, 'string');
+      return;
     case 'ProjectStateChanged':
       assert.match(message.data.generation,/^(0|[1-9][0-9]*)$/);
       for(const field of ['available','active','blocked'])assert.equal(typeof message.data[field],'boolean');
@@ -144,6 +152,9 @@ function assertUiToBevyMessage(message) {
       assert.equal(typeof message.data.pollution, 'number');
       assertTuple(message.data.sun_direction, 3, 'UpdateLighting.sun_direction');
       return;
+    case 'GetDepthViewState':
+      assert.equal(message.data, undefined);
+      return;
     case 'SetDepthView':
       assert.equal(typeof message.data.enabled, 'boolean');
       return;
@@ -193,6 +204,9 @@ test('rust ipc samples cover the active frontend contract surface', () => {
   const inboundTypes = new Set(samples.bevy_to_ui.map((message) => message.type));
   const outboundTypes = new Set(samples.ui_to_bevy.map((message) => message.type));
 
+  assert.ok(inboundTypes.has('DepthViewState'));
+  assert.ok(inboundTypes.has('DepthViewRejected'));
+  assert.ok(outboundTypes.has('GetDepthViewState'));
   assert.ok(inboundTypes.has('ShowAddObjectMenu'));
   assert.ok(inboundTypes.has('LayerStateChanged'));
   assert.ok(inboundTypes.has('MeshEditModeChanged'));

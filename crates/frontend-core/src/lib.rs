@@ -3,6 +3,7 @@
 //! Defines the `CompositeBackend` trait that abstracts over different UI rendering backends.
 
 pub mod cef_keyboard;
+pub mod cef_mouse;
 mod native_state;
 
 use std::sync::Arc;

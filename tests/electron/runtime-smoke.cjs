@@ -5,7 +5,9 @@ const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
-const { inspectScene } = require('./frame-evidence.cjs');
+const { inspectScene, locateRedObject, inspectSelectionOutline } = require('./frame-evidence.cjs');
+const { isFatalConsoleMessage } = require('./runtime-errors.cjs');
+const { inspectUnavailableDepth } = require('./depth-evidence.cjs');
 const root = path.resolve(__dirname, '../..');
 const preflight = process.argv.includes('--preflight');
 const phase = preflight ? 'environment' : 'production';
@@ -80,7 +82,7 @@ if (preflight) {
         let inspected = false;
         contents.on('console-message', async ({ message, level }) => {
             result.console.push({ level, message });
-            if (level === 'error' || /panicked at|unhandled rejection|WebGL.*context lost/i.test(String(message))) return fail(new Error(message));
+            if (isFatalConsoleMessage(level, message)) return fail(new Error(message));
             if (message !== 'Pentimento: WASM loaded!' || inspected) return;
             inspected = true;
             try {
@@ -106,11 +108,19 @@ if (preflight) {
                 assert.equal(result.renderer.require, 'undefined');
                 assert.ok(result.renderer.elements > 0);
                 assert.ok(result.renderer.canvasVisible && result.renderer.canvasWidth > 0 && result.renderer.canvasHeight > 0);
+                result.depthView = inspectUnavailableDepth(await contents.executeJavaScript(`(() => {
+                    const button = document.querySelector('button[aria-label="Toggle depth view"]');
+                    const status = document.getElementById('depth-view-status');
+                    return { disabled: button?.disabled, pressed: button?.getAttribute('aria-pressed'),
+                        title: button?.title, describedBy: button?.getAttribute('aria-describedby'),
+                        status: status?.textContent.trim(), statusHidden: status?.hidden };
+                })()`));
                 const screenshot = await contents.capturePage();
                 assert.equal(screenshot.isEmpty(), false);
                 fs.writeFileSync(path.join(evidence, 'production.png'), screenshot.toPNG());
                 result.screenshot = screenshot.getSize();
                 // Hide only the DOM overlay during canvas capture, so UI cannot make a blank canvas pass.
+                let selectionBefore;
                 await contents.executeJavaScript("document.querySelector('#app').style.visibility = 'hidden'");
                 try {
                     result.canvasFrames = [];
@@ -127,7 +137,53 @@ if (preflight) {
                         const scene = inspectScene(canvas.toBitmap(), size.width, size.height);
                         fs.writeFileSync(path.join(evidence, `canvas-${frame}.png`), canvas.toPNG());
                         result.canvasFrames.push({ rect, size, ...scene });
+                        selectionBefore = { canvas, bitmap: canvas.toBitmap(), rect, size };
                     }
+                } finally {
+                    await contents.executeJavaScript("document.querySelector('#app').style.visibility = ''");
+                }
+                const object = locateRedObject(selectionBefore.bitmap, selectionBefore.size.width, selectionBefore.size.height);
+                const click = {
+                    x: Math.round(selectionBefore.rect.x + (object.point.x + .5) * selectionBefore.rect.width / selectionBefore.size.width),
+                    y: Math.round(selectionBefore.rect.y + (object.point.y + .5) * selectionBefore.rect.height / selectionBefore.size.height),
+                };
+                assert.equal(await contents.executeJavaScript(`document.elementFromPoint(${click.x}, ${click.y})?.id`), 'bevy-canvas',
+                    'selection input must target a visible scene object, not an overlay');
+                result.selection = { click, object, rect: selectionBefore.rect, size: selectionBefore.size, input: 'Electron mouse events' };
+                fs.writeFileSync(path.join(evidence, 'selection-before.png'), selectionBefore.canvas.toPNG());
+                win.focus();
+                contents.focus();
+                contents.sendInputEvent({ type: 'mouseMove', ...click });
+                // Software-rendered picking needs a completed hover update before
+                // press, and a separate update with the button down before release.
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                contents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...click });
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                contents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...click });
+                // Park the pointer on the toolbar, so hover feedback cannot qualify.
+                contents.sendInputEvent({ type: 'mouseMove', x: 20, y: 20 });
+                await new Promise(resolve => setTimeout(resolve, 500));
+                await contents.executeJavaScript("document.querySelector('#app').style.visibility = 'hidden'");
+                try {
+                    const deadline = Date.now() + 15_000;
+                    let consecutive = 0, lastError;
+                    while (Date.now() < deadline && consecutive < 2) {
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                        const after = await contents.capturePage(selectionBefore.rect);
+                        const size = after.getSize();
+                        assert.deepEqual(size, selectionBefore.size);
+                        fs.writeFileSync(path.join(evidence, 'selection-after.png'), after.toPNG());
+                        try {
+                            inspectScene(after.toBitmap(), size.width, size.height);
+                            result.selection.pixels = inspectSelectionOutline(selectionBefore.bitmap, after.toBitmap(), size.width, size.height);
+                            consecutive++;
+                        } catch (error) {
+                            lastError = error;
+                            consecutive = 0;
+                        }
+                    }
+                    assert.equal(consecutive, 2, `selection did not produce a stable real outline: ${lastError?.message}`);
+                    result.selection.stableFrames = consecutive;
                 } finally {
                     await contents.executeJavaScript("document.querySelector('#app').style.visibility = ''");
                 }

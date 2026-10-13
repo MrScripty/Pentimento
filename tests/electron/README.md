@@ -25,6 +25,17 @@ verification status are recorded in
   scene's red cube, green torus, blue sphere, and neutral ground/background.
   The UI overlay is hidden only while taking these captures. Blank, grayscale,
   transparent, or missing-object frames cannot satisfy the oracle.
+  It also locates the real red object's interior for an Electron mouse click.
+  After the pointer leaves, two captures must show new orange pixels concentrated
+  on that object's original boundary, without an orange fill or unrelated scene
+  changes. `selection-before.png`, `selection-after.png`, and JSON coordinates
+  and pixel counts retain the evidence. Synthetic fixtures reject unchanged,
+  wrong-object, wrong-color, fill, and global-tint frames.
+- `runtime-errors.cjs` recognizes fatal browser logs and Bevy's formatted ERROR
+  records, which its browser subscriber emits through `console.info`.
+- `depth-evidence.cjs` requires the real WASM capability response: a disabled,
+  unpressed depth control with a visible accessible OpenGL/WebGL reason.
+  A control still waiting for bootstrap does not pass.
 - `supervise.py` owns the Linux process family through exit. PID/start-time
   identity and subreaping prevent orphaned children from being mistaken for
   successful shutdown. Forced cleanup is failure, never success.
@@ -67,5 +78,5 @@ Evidence is written to `PENTIMENTO_EVIDENCE_DIR`, or `electron-runtime-evidence`
 under the working repository when unset. CI retains environment information,
 the resolved lockfiles, build/runtime logs, JSON results and scene PNGs.
 
-This is software-rendered startup/scene and shutdown qualification. It does not
+This is software-rendered startup/scene, selection-outline, and shutdown qualification. It does not
 establish hardware GPU performance, stylus behavior, or paint/sculpt workflows.

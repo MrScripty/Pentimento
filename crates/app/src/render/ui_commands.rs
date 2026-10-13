@@ -3,8 +3,9 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use pentimento_ipc::{CameraCommand, GizmoCommand, MaterialCommand, ObjectCommand, UiToBevy};
 use pentimento_scene::{
-    AddObjectEvent, CanvasPlaneEvent, DepthViewSettings, GizmoState, MainCamera, MeshEditEvent,
-    OrbitCamera, SceneAmbientOcclusion, SceneLighting,
+    AddObjectEvent, CanvasPlaneEvent, DepthViewCapability, DepthViewSettings, GizmoState,
+    MainCamera, MeshEditEvent, OrbitCamera, OutboundUiMessages, SceneAmbientOcclusion,
+    SceneLighting,
 };
 #[cfg(feature = "selection")]
 use pentimento_scene::{Selectable, Selected, SelectionState};
@@ -64,9 +65,24 @@ pub(crate) fn dispatch_ui_commands(
                     ambient_occlusion.update(settings);
                 }
             }
-            UiToBevy::SetDepthView { enabled } => {
+            UiToBevy::GetDepthViewState | UiToBevy::SetDepthView { .. } => {
+                let capability = world
+                    .get_resource::<DepthViewCapability>()
+                    .cloned()
+                    .unwrap_or_default();
+                let mut replies = Vec::new();
                 if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
-                    settings.enabled = enabled;
+                    if let UiToBevy::SetDepthView { enabled } = command {
+                        if let Some(rejection) = capability.set_enabled(&mut settings, enabled) {
+                            replies.push(rejection);
+                        }
+                    }
+                    replies.push(capability.state_message(&settings));
+                }
+                if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+                    for reply in replies {
+                        outbound.send(reply);
+                    }
                 }
             }
             UiToBevy::MeshEditCommand(command) => handle_mesh_edit_command(world, command),
@@ -579,5 +595,83 @@ mod project_command_tests {
         );
         assert!(std::path::Path::new(&fresh).is_file());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod depth_command_tests {
+    use super::*;
+    use pentimento_ipc::BevyToUi;
+
+    fn world(capability: Option<DepthViewCapability>) -> World {
+        let mut world = World::new();
+        world.init_resource::<DepthViewSettings>();
+        world.init_resource::<OutboundUiMessages>();
+        if let Some(capability) = capability {
+            world.insert_resource(capability);
+        }
+        world
+    }
+
+    fn drain(world: &mut World) -> Vec<BevyToUi> {
+        world.resource_mut::<OutboundUiMessages>().drain()
+    }
+
+    #[test]
+    fn depth_query_and_supported_toggles_return_authoritative_state() {
+        let mut world = world(Some(DepthViewCapability {
+            unavailable_reason: None,
+        }));
+        dispatch_ui_commands(&mut world, [UiToBevy::GetDepthViewState]);
+        assert!(matches!(
+            drain(&mut world).as_slice(),
+            [BevyToUi::DepthViewState {
+                available: true,
+                enabled: false,
+                reason: None
+            }]
+        ));
+        for enabled in [true, true, false, false] {
+            dispatch_ui_commands(&mut world, [UiToBevy::SetDepthView { enabled }]);
+            assert_eq!(world.resource::<DepthViewSettings>().enabled, enabled);
+            assert!(
+                matches!(drain(&mut world).as_slice(), [BevyToUi::DepthViewState { available: true, enabled: actual, reason: None }] if *actual == enabled)
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_depth_rejects_enable_and_disable_without_mutating_settings() {
+        let mut world = world(Some(DepthViewCapability {
+            unavailable_reason: Some("GL unsupported".into()),
+        }));
+        // A stale setting must neither display as enabled nor be mutated on rejection.
+        world.resource_mut::<DepthViewSettings>().enabled = true;
+        for enabled in [true, false] {
+            dispatch_ui_commands(&mut world, [UiToBevy::SetDepthView { enabled }]);
+            assert!(world.resource::<DepthViewSettings>().enabled);
+            assert!(matches!(drain(&mut world).as_slice(), [
+                BevyToUi::DepthViewRejected { reason },
+                BevyToUi::DepthViewState { available: false, enabled: false, reason: Some(state_reason) },
+            ] if reason == "GL unsupported" && reason == state_reason));
+        }
+    }
+
+    #[test]
+    fn missing_depth_capability_fails_closed_in_native_dispatcher() {
+        let mut world = world(None);
+        dispatch_ui_commands(&mut world, [UiToBevy::SetDepthView { enabled: true }]);
+        assert!(!world.resource::<DepthViewSettings>().enabled);
+        assert!(matches!(
+            drain(&mut world).as_slice(),
+            [
+                BevyToUi::DepthViewRejected { .. },
+                BevyToUi::DepthViewState {
+                    available: false,
+                    enabled: false,
+                    reason: Some(_)
+                },
+            ]
+        ));
     }
 }

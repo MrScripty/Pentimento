@@ -13,7 +13,7 @@ use bevy::asset::embedded_asset;
 use bevy::camera::ClearColorConfig;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
-use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
 use bevy::render::extract_component::ExtractComponent;
@@ -93,7 +93,8 @@ fn setup_outline_system(
     let height = window.resolution.physical_height().max(1);
 
     // Create ID buffer render target (entity IDs as colors)
-    let id_buffer = create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
+    let id_buffer =
+        create_render_texture(width, height, TextureFormat::Rgba8UnormSrgb, &mut images);
 
     commands.insert_resource(OutlineRenderTargets {
         id_buffer: id_buffer.clone(),
@@ -109,7 +110,8 @@ fn setup_outline_system(
     // This ensures it exists from spawn time for proper extraction to render world
 
     // Spawn ID buffer camera (renders selected objects to ID texture)
-    // Use Reinhard tonemapping for WASM/WebGL2 compatibility (TonyMcMapface requires tonemapping_luts)
+    // This is a data pass. Its shader compensates for the sRGB attachment so all
+    // 24 ID bits survive storage; tone mapping, dithering and MSAA must not mix IDs.
     commands.spawn((
         Camera3d::default(),
         Camera {
@@ -122,7 +124,9 @@ fn setup_outline_system(
         // Only render entities on layer 1 (selected objects)
         RenderLayers::layer(1),
         IdBufferCamera,
-        Tonemapping::Reinhard,
+        Tonemapping::None,
+        DebandDither::Disabled,
+        Msaa::Off,
     ));
 
     info!(
@@ -283,7 +287,7 @@ fn handle_window_resize(
 
     // Create new ID buffer
     let new_id_buffer =
-        create_render_texture(width, height, TextureFormat::Rgba8Unorm, &mut images);
+        create_render_texture(width, height, TextureFormat::Rgba8UnormSrgb, &mut images);
 
     // Update camera target component
     if let Ok(camera_entity) = id_camera.single() {

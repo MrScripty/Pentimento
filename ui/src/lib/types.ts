@@ -29,6 +29,8 @@ export type MeshEditTool = 'Select' | 'Extrude' | 'LoopCut' | 'Knife' | 'Merge' 
 
 // Messages from Bevy to UI
 export type BevyToUi =
+    | { type: 'DepthViewState'; data: DepthViewState }
+    | { type: 'DepthViewRejected'; data: { reason: string } }
     | { type:'ProjectStateChanged';data:ProjectState }
     | { type:'ProjectOperationFinished';data:{operation:'Save'|'Open'|'New';success:boolean;message:string} }
     | { type: 'Initialize'; data: { scene_info: SceneInfo; settings: AppSettings } }
@@ -65,6 +67,7 @@ export interface SavedBrushPresetsState {
 
 // Messages from UI to Bevy
 export type UiToBevy =
+    | { type: 'GetDepthViewState' }
     | { type:'ProjectCommand';data:ProjectCommand }
     | { type: 'UiDirty' }
     | { type: 'LayoutUpdate'; data: LayoutInfo }
@@ -89,6 +92,13 @@ export type UiToBevy =
 
 export type ProjectCommand='GetState'|{New:{expected_generation:string;confirm_discard:boolean}}|{Save:{path:string}}|{Open:{path:string}};
 export interface ProjectState {generation:string;path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}
+
+// Renderer-authoritative depth view capability and state.
+export interface DepthViewState {
+    available: boolean;
+    enabled: boolean;
+    reason: string | null;
+}
 
 // Scene types
 export interface SceneInfo {

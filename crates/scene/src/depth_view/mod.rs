@@ -20,11 +20,13 @@ use bevy::render::{
         BufferBindingType, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
         ColorTargetState, ColorWrites, FragmentState, MultisampleState, Operations, PipelineCache,
         PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
-        ShaderStages, ShaderType, TextureFormat, TextureSampleType, TextureViewDimension,
+        ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines,
+        TextureFormat, TextureSampleType, TextureViewDimension, VertexState,
     },
-    renderer::{RenderContext, RenderDevice, ViewQuery},
+    renderer::{RenderAdapterInfo, RenderContext, RenderDevice, ViewQuery},
     view::ViewTarget,
 };
+use bevy::shader::Shader;
 
 use crate::ambient_occlusion::SceneAmbientOcclusion;
 use crate::camera::MainCamera;
@@ -65,6 +67,76 @@ impl Default for DepthViewSettings {
     }
 }
 
+/// Availability of this implementation on the selected renderer, not a platform guess.
+/// Unknown/headless renderers fail closed until plugin finish resolves the adapter.
+#[derive(Resource, Clone, Debug)]
+pub struct DepthViewCapability {
+    pub unavailable_reason: Option<String>,
+}
+
+impl Default for DepthViewCapability {
+    fn default() -> Self {
+        Self {
+            unavailable_reason: Some("Depth view is waiting for a compatible renderer".into()),
+        }
+    }
+}
+
+impl DepthViewCapability {
+    fn for_backend(backend: Option<wgpu::Backend>) -> Self {
+        match backend {
+            Some(wgpu::Backend::Gl) => Self {
+                unavailable_reason: Some(
+                    "Depth view is unavailable with the current OpenGL/WebGL renderer".into(),
+                ),
+            },
+            Some(
+                wgpu::Backend::Vulkan
+                | wgpu::Backend::Metal
+                | wgpu::Backend::Dx12
+                | wgpu::Backend::BrowserWebGpu,
+            ) => Self {
+                unavailable_reason: None,
+            },
+            _ => Self::default(),
+        }
+    }
+
+    pub fn state_message(&self, settings: &DepthViewSettings) -> pentimento_ipc::BevyToUi {
+        pentimento_ipc::BevyToUi::DepthViewState {
+            available: self.unavailable_reason.is_none(),
+            enabled: self.unavailable_reason.is_none() && settings.enabled,
+            reason: self.unavailable_reason.clone(),
+        }
+    }
+
+    /// Both frontends use the same admission check. Rejected requests never mutate settings.
+    pub fn set_enabled(
+        &self,
+        settings: &mut impl std::ops::DerefMut<Target = DepthViewSettings>,
+        enabled: bool,
+    ) -> Option<pentimento_ipc::BevyToUi> {
+        if let Some(reason) = &self.unavailable_reason {
+            return Some(pentimento_ipc::BevyToUi::DepthViewRejected {
+                reason: reason.clone(),
+            });
+        }
+        // Repeated requests must not recapture already-disabled shadows/AO.
+        if settings.enabled != enabled {
+            settings.enabled = enabled;
+        }
+        None
+    }
+}
+
+fn announce_depth_view(
+    capability: Res<DepthViewCapability>,
+    settings: Res<DepthViewSettings>,
+    mut outbound: ResMut<crate::OutboundUiMessages>,
+) {
+    outbound.send(capability.state_message(&settings));
+}
+
 /// Computed scene depth bounds, updated each frame when depth view is active.
 /// Kept separate from `DepthViewSettings` to avoid triggering `is_changed()`
 /// on the settings resource every frame.
@@ -100,21 +172,12 @@ impl Plugin for DepthViewPlugin {
         embedded_asset!(app, "shaders/depth_view.wesl");
 
         app.init_resource::<DepthViewSettings>();
+        app.init_resource::<DepthViewCapability>();
+        app.add_systems(Startup, announce_depth_view);
         app.init_resource::<DepthViewBounds>();
         app.add_plugins(ExtractComponentPlugin::<DepthViewCamera>::default());
         app.add_plugins(ExtractResourcePlugin::<DepthViewSettings>::default());
         app.add_plugins(ExtractResourcePlugin::<DepthViewBounds>::default());
-
-        // Main-world systems that toggle DepthPrepass, disable costly effects,
-        // and compute scene depth bounds for gradient normalization.
-        app.add_systems(
-            Update,
-            (
-                compute_scene_depth_bounds,
-                sync_depth_prepass,
-                toggle_expensive_features,
-            ),
-        );
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             warn!("DepthViewPlugin: No RenderApp available");
@@ -133,19 +196,44 @@ impl Plugin for DepthViewPlugin {
                 .after(tonemapping),
         );
 
+        info!("DepthViewPlugin: per-view render system registered");
+    }
+
+    fn finish(&self, app: &mut App) {
+        let backend = app
+            .get_sub_app(RenderApp)
+            .and_then(|render_app| render_app.world().get_resource::<RenderAdapterInfo>())
+            .map(|info| info.backend);
+        let capability = DepthViewCapability::for_backend(backend);
+        let supported = capability.unavailable_reason.is_none();
+        if let Some(reason) = &capability.unavailable_reason {
+            info!("{reason}; retaining depth graph ordering without a depth pipeline");
+        }
+        app.insert_resource(capability);
+        if !supported {
+            return;
+        }
+        // Main-world systems that toggle DepthPrepass, disable costly effects,
+        // and compute scene depth bounds for gradient normalization.
+        app.add_systems(
+            Update,
+            (
+                compute_scene_depth_bounds,
+                sync_depth_prepass,
+                toggle_expensive_features,
+            ),
+        );
+
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
         render_app.add_systems(
             Render,
             prepare_depth_view.in_set(RenderSystems::PrepareBindGroups),
         );
 
-        info!("DepthViewPlugin: per-view render system registered");
-    }
-
-    fn finish(&self, app: &mut App) {
-        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
-            return;
-        };
         render_app.init_gpu_resource::<DepthViewPipeline>();
+        render_app.init_gpu_resource::<SpecializedRenderPipelines<DepthViewPipeline>>();
         info!("DepthViewPlugin: pipeline initialized");
     }
 }
@@ -310,25 +398,38 @@ pub struct DepthViewUniform {
 }
 
 fn render_depth_view(
-    view: ViewQuery<&ViewTarget, With<DepthViewCamera>>,
+    view: ViewQuery<
+        (
+            &ViewTarget,
+            Option<&DepthViewPreparedPipeline>,
+            Option<&DepthViewPrepared>,
+        ),
+        With<DepthViewCamera>,
+    >,
     settings: Option<Res<DepthViewSettings>>,
-    prepared: Option<Res<DepthViewPrepared>>,
     pipeline: Option<Res<DepthViewPipeline>>,
     pipeline_cache: Res<PipelineCache>,
     render_device: Res<RenderDevice>,
     mut render_context: RenderContext,
 ) {
-    let (Some(settings), Some(prepared), Some(pipeline)) = (settings, prepared, pipeline) else {
+    let (Some(settings), Some(pipeline)) = (settings, pipeline) else {
         return;
     };
     if !settings.enabled {
         return;
     }
-    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
+    let (target, prepared_pipeline, prepared) = view.into_inner();
+    let (Some(prepared_pipeline), Some(prepared)) = (prepared_pipeline, prepared) else {
+        return;
+    };
+    if !prepared_pipeline.matches_format(target.main_texture_format()) {
+        return;
+    }
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(prepared_pipeline.id) else {
         return;
     };
 
-    let post_process = view.into_inner().post_process_write();
+    let post_process = target.post_process_write();
     let bind_group = render_device.create_bind_group(
         "depth_view_bind_group",
         &pipeline_cache.get_bind_group_layout(&pipeline.layout),
@@ -365,7 +466,8 @@ fn render_depth_view(
 #[derive(Resource)]
 pub struct DepthViewPipeline {
     pub layout: BindGroupLayoutDescriptor,
-    pub pipeline_id: CachedRenderPipelineId,
+    shader: Handle<Shader>,
+    vertex: VertexState,
 }
 
 impl FromWorld for DepthViewPipeline {
@@ -404,36 +506,61 @@ impl FromWorld for DepthViewPipeline {
         let fullscreen_shader = world.resource::<FullscreenShader>();
         let vertex_state = fullscreen_shader.to_vertex_state();
 
-        let pipeline_id =
-            world
-                .resource_mut::<PipelineCache>()
-                .queue_render_pipeline(RenderPipelineDescriptor {
-                    label: Some("depth_view_pipeline".into()),
-                    layout: vec![layout_descriptor.clone()],
-                    vertex: vertex_state,
-                    fragment: Some(FragmentState {
-                        constants: vec![],
-                        shader,
-                        shader_defs: vec![],
-                        entry_point: Some("fragment".into()),
-                        targets: vec![Some(ColorTargetState {
-                            format: TextureFormat::Rgba16Float,
-                            blend: None,
-                            write_mask: ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: MultisampleState::default(),
-                    immediate_size: 0,
-                    zero_initialize_workgroup_memory: false,
-                });
-
         Self {
             layout: layout_descriptor,
-            pipeline_id,
+            shader,
+            vertex: vertex_state,
         }
     }
+}
+
+impl SpecializedRenderPipeline for DepthViewPipeline {
+    type Key = TextureFormat;
+
+    fn specialize(&self, format: Self::Key) -> RenderPipelineDescriptor {
+        depth_view_descriptor(
+            self.layout.clone(),
+            self.vertex.clone(),
+            self.shader.clone(),
+            format,
+        )
+    }
+}
+
+fn depth_view_descriptor(
+    layout_descriptor: BindGroupLayoutDescriptor,
+    vertex_state: VertexState,
+    shader: Handle<Shader>,
+    format: TextureFormat,
+) -> RenderPipelineDescriptor {
+    RenderPipelineDescriptor {
+        label: Some("depth_view_pipeline".into()),
+        layout: vec![layout_descriptor],
+        vertex: vertex_state,
+        fragment: Some(FragmentState {
+            constants: vec![],
+            shader,
+            shader_defs: vec![],
+            entry_point: Some("fragment".into()),
+            targets: vec![Some(ColorTargetState {
+                format,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+        }),
+        primitive: PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        immediate_size: 0,
+        zero_initialize_workgroup_memory: false,
+    }
+}
+
+/// Cached choice belongs to this view, never to the last camera prepared.
+#[derive(Component)]
+pub struct DepthViewPreparedPipeline {
+    format: TextureFormat,
+    id: CachedRenderPipelineId,
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +568,7 @@ impl FromWorld for DepthViewPipeline {
 // ---------------------------------------------------------------------------
 
 /// Prepared per-frame data consumed by `render_depth_view`.
-#[derive(Resource)]
+#[derive(Component)]
 pub struct DepthViewPrepared {
     pub uniform_buffer: Buffer,
     pub depth_texture_view: bevy::render::render_resource::TextureView,
@@ -452,10 +579,26 @@ pub struct DepthViewPrepared {
 fn prepare_depth_view(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
+    pipeline: Res<DepthViewPipeline>,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<DepthViewPipeline>>,
     settings: Option<Res<DepthViewSettings>>,
     bounds: Option<Res<DepthViewBounds>>,
-    views: Query<&bevy::core_pipeline::prepass::ViewPrepassTextures, With<DepthViewCamera>>,
+    views: Query<
+        (
+            Entity,
+            &ViewTarget,
+            Option<&bevy::core_pipeline::prepass::ViewPrepassTextures>,
+        ),
+        With<DepthViewCamera>,
+    >,
 ) {
+    // Missing/disabled prepass data must not retain a previous frame's texture.
+    for (entity, _, _) in &views {
+        commands
+            .entity(entity)
+            .remove::<(DepthViewPrepared, DepthViewPreparedPipeline)>();
+    }
     let Some(settings) = settings else {
         return;
     };
@@ -465,16 +608,6 @@ fn prepare_depth_view(
     let Some(bounds) = bounds else {
         return;
     };
-
-    // Grab the depth texture view from the first matching camera.
-    let Some(prepass_textures) = views.iter().next() else {
-        return;
-    };
-
-    let Some(depth_view) = prepass_textures.depth_only_view() else {
-        return;
-    };
-    let depth_texture_view = depth_view.clone();
 
     let uniform = DepthViewUniform {
         near_plane: bounds.near_plane,
@@ -492,12 +625,280 @@ fn prepare_depth_view(
         usage: BufferUsages::UNIFORM,
     });
 
-    commands.insert_resource(DepthViewPrepared {
-        uniform_buffer,
-        depth_texture_view,
-    });
+    for (entity, target, prepass) in &views {
+        let Some(depth) = prepass.and_then(|prepass| prepass.depth_only_view()) else {
+            continue;
+        };
+        let format = target.main_texture_format();
+        let id = pipelines.specialize(&pipeline_cache, &pipeline, format);
+        commands.entity(entity).insert((
+            DepthViewPreparedPipeline { format, id },
+            DepthViewPrepared {
+                uniform_buffer: uniform_buffer.clone(),
+                depth_texture_view: depth.clone(),
+            },
+        ));
+    }
 }
 
-fn clear_prepare_depth_view_resources(mut commands: Commands) {
-    commands.remove_resource::<DepthViewPrepared>();
+fn clear_prepare_depth_view_resources(
+    mut commands: Commands,
+    views: Query<Entity, Or<(With<DepthViewPrepared>, With<DepthViewPreparedPipeline>)>>,
+) {
+    for entity in &views {
+        commands
+            .entity(entity)
+            .remove::<(DepthViewPrepared, DepthViewPreparedPipeline)>();
+    }
+}
+
+impl DepthViewPreparedPipeline {
+    fn matches_format(&self, format: TextureFormat) -> bool {
+        self.format == format
+    }
+}
+
+#[cfg(test)]
+mod target_format_tests {
+    use super::*;
+
+    fn descriptor(format: TextureFormat) -> RenderPipelineDescriptor {
+        // Exercise the same descriptor builder used by SpecializedRenderPipeline.
+        depth_view_descriptor(
+            BindGroupLayoutDescriptor::new("test_layout", &[]),
+            VertexState::default(),
+            Handle::default(),
+            format,
+        )
+    }
+
+    #[test]
+    fn destination_format_is_the_specialization_key() {
+        // Compile-time check that no bool/platform guess replaces the actual format.
+        fn accepts_texture_format<P: SpecializedRenderPipeline<Key = TextureFormat>>() {}
+        accepts_texture_format::<DepthViewPipeline>();
+        for format in [
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+        ] {
+            let descriptor = descriptor(format);
+            let target = descriptor.fragment.as_ref().unwrap().targets[0]
+                .as_ref()
+                .unwrap();
+            assert_eq!(target.format, format);
+            assert_eq!(target.blend, None);
+            assert_eq!(target.write_mask, ColorWrites::ALL);
+            // post_process_write is resolved even when the camera uses MSAA.
+            assert_eq!(descriptor.multisample.count, 1);
+            assert!(descriptor.depth_stencil.is_none());
+        }
+    }
+
+    #[test]
+    fn mixed_views_and_format_changes_cannot_reuse_another_views_choice() {
+        let mut world = World::new();
+        let sdr = TextureFormat::Rgba8UnormSrgb;
+        let hdr = TextureFormat::Rgba16Float;
+        let a = world
+            .spawn(DepthViewPreparedPipeline {
+                format: sdr,
+                id: CachedRenderPipelineId::INVALID,
+            })
+            .id();
+        let b = world
+            .spawn(DepthViewPreparedPipeline {
+                format: hdr,
+                id: CachedRenderPipelineId::INVALID,
+            })
+            .id();
+        for (view, own, other) in [(a, sdr, hdr), (b, hdr, sdr)] {
+            let prepared = world.get::<DepthViewPreparedPipeline>(view).unwrap();
+            assert!(prepared.matches_format(own));
+            assert!(!prepared.matches_format(other));
+            assert_eq!(
+                descriptor(prepared.format).fragment.unwrap().targets[0]
+                    .as_ref()
+                    .unwrap()
+                    .format,
+                own
+            );
+        }
+        // A changed target must be skipped until prepare refreshes this entity.
+        assert!(
+            !world
+                .get::<DepthViewPreparedPipeline>(a)
+                .unwrap()
+                .matches_format(hdr)
+        );
+        world.entity_mut(a).insert(DepthViewPreparedPipeline {
+            format: hdr,
+            id: CachedRenderPipelineId::INVALID,
+        });
+        assert!(
+            world
+                .get::<DepthViewPreparedPipeline>(a)
+                .unwrap()
+                .matches_format(hdr)
+        );
+        assert!(
+            world
+                .get::<DepthViewPreparedPipeline>(b)
+                .unwrap()
+                .matches_format(hdr)
+        );
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use bevy::app::SubApp;
+    use pentimento_ipc::BevyToUi;
+
+    #[test]
+    fn backend_selection_is_not_a_native_vs_wasm_guess() {
+        assert!(
+            DepthViewCapability::for_backend(None)
+                .unavailable_reason
+                .is_some()
+        );
+        assert!(
+            DepthViewCapability::for_backend(Some(wgpu::Backend::Gl))
+                .unavailable_reason
+                .is_some()
+        );
+        for backend in [
+            wgpu::Backend::Vulkan,
+            wgpu::Backend::Metal,
+            wgpu::Backend::Dx12,
+            wgpu::Backend::BrowserWebGpu,
+        ] {
+            assert!(
+                DepthViewCapability::for_backend(Some(backend))
+                    .unavailable_reason
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_requests_do_not_mutate_settings_or_report_enabled() {
+        let mut world = World::new();
+        world.init_resource::<DepthViewSettings>();
+        world.clear_trackers();
+        let unavailable = DepthViewCapability::for_backend(Some(wgpu::Backend::Gl));
+        for enabled in [true, false, true] {
+            let mut settings = world.resource_mut::<DepthViewSettings>();
+            assert!(matches!(
+                unavailable.set_enabled(&mut settings, enabled),
+                Some(BevyToUi::DepthViewRejected { .. })
+            ));
+            assert!(!settings.is_changed());
+            assert!(!settings.enabled);
+            assert!(matches!(
+                unavailable.state_message(&settings),
+                BevyToUi::DepthViewState {
+                    available: false,
+                    enabled: false,
+                    reason: Some(_)
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn missing_renderer_installs_no_pipeline_or_depth_systems() {
+        let mut app = App::new();
+        app.init_resource::<DepthViewSettings>();
+        app.init_resource::<SceneAmbientOcclusion>();
+        app.insert_sub_app(RenderApp, SubApp::new());
+        DepthViewPlugin.finish(&mut app);
+        assert!(
+            app.world()
+                .resource::<DepthViewCapability>()
+                .unavailable_reason
+                .is_some()
+        );
+        assert!(
+            !app.sub_app(RenderApp)
+                .world()
+                .contains_resource::<DepthViewPipeline>()
+        );
+        let camera = app.world_mut().spawn(MainCamera).id();
+        app.world_mut().resource_mut::<DepthViewSettings>().enabled = true;
+        app.update();
+        assert!(app.world().get::<DepthPrepass>(camera).is_none());
+        assert!(!app.world().resource::<SceneAmbientOcclusion>().dirty);
+    }
+
+    #[test]
+    fn supported_toggle_restores_effects_and_repeated_requests_are_noops() {
+        let mut app = App::new();
+        app.init_resource::<DepthViewSettings>();
+        app.init_resource::<SceneAmbientOcclusion>();
+        app.add_systems(Update, (sync_depth_prepass, toggle_expensive_features));
+        let camera = app.world_mut().spawn(MainCamera).id();
+        let sun = app
+            .world_mut()
+            .spawn((
+                SunLight,
+                DirectionalLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+            ))
+            .id();
+        app.update();
+        app.world_mut()
+            .resource_mut::<SceneAmbientOcclusion>()
+            .settings
+            .enabled = true;
+        let capability = DepthViewCapability::for_backend(Some(wgpu::Backend::Vulkan));
+        assert!(
+            capability
+                .set_enabled(
+                    &mut app.world_mut().resource_mut::<DepthViewSettings>(),
+                    true
+                )
+                .is_none()
+        );
+        app.update();
+        assert!(app.world().get::<DepthPrepass>(camera).is_some());
+        assert!(
+            !app.world()
+                .get::<DirectionalLight>(sun)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(
+            !app.world()
+                .resource::<SceneAmbientOcclusion>()
+                .settings
+                .enabled
+        );
+        app.world_mut().clear_trackers();
+        let mut settings = app.world_mut().resource_mut::<DepthViewSettings>();
+        capability.set_enabled(&mut settings, true);
+        assert!(!settings.is_changed());
+        drop(settings);
+        capability.set_enabled(
+            &mut app.world_mut().resource_mut::<DepthViewSettings>(),
+            false,
+        );
+        app.update();
+        assert!(app.world().get::<DepthPrepass>(camera).is_none());
+        assert!(
+            app.world()
+                .get::<DirectionalLight>(sun)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(
+            app.world()
+                .resource::<SceneAmbientOcclusion>()
+                .settings
+                .enabled
+        );
+    }
 }

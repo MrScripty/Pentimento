@@ -497,20 +497,27 @@ run_verification_suite() {
         npm run verify
         # RustEmbed requires the shared UI assets before checking native frontends.
         build_ui
-        cargo check -p pentimento --features egui
-        cargo check -p pentimento --features dioxus
-        cargo check -p pentimento --features cef
-        cargo check --target wasm32-unknown-unknown -p pentimento-wasm
-        cargo rustc -p pentimento-frontend-core --lib -- -D warnings
-        cargo rustc -p pentimento-scene --lib --features 'wireframe selection mesh_painting mesh_editing sculpting atmosphere' -- -D warnings
-        cargo rustc -p pentimento-webview --lib --features dioxus -- -D warnings
-        cargo rustc -p pentimento-webview --lib --features cef -- -D warnings
-        cargo rustc -p pentimento-egui-ui --lib -- -D warnings
-        cargo rustc -p pentimento-dioxus-ui --lib -- -D warnings
-        cargo rustc -p pentimento --bin pentimento --features egui -- -D warnings
-        cargo rustc -p pentimento --bin pentimento --features dioxus -- -D warnings
-        cargo rustc -p pentimento --bin pentimento --features cef -- -D warnings
-        cargo rustc -p pentimento-wasm --lib --target wasm32-unknown-unknown -- -D warnings
+        # Run complete library suites so renderer/capability regressions cannot
+        # silently disappear behind an obsolete test-name filter.
+        cargo test --locked -p pentimento-scene --lib --features selection
+        cargo test --locked -p pentimento-frontend-core --lib
+        cargo test --locked -p pentimento-dioxus-ui --lib
+        cargo test --locked -p pentimento-egui-ui --lib
+        cargo test --locked -p pentimento --features egui depth
+        cargo check --locked -p pentimento --features egui
+        cargo check --locked -p pentimento --features dioxus
+        cargo check --locked -p pentimento --features cef
+        cargo check --locked --target wasm32-unknown-unknown -p pentimento-wasm
+        cargo rustc --locked -p pentimento-frontend-core --lib -- -D warnings
+        cargo rustc --locked -p pentimento-scene --lib --features 'wireframe selection mesh_painting mesh_editing sculpting atmosphere' -- -D warnings
+        cargo rustc --locked -p pentimento-webview --lib --features dioxus -- -D warnings
+        cargo rustc --locked -p pentimento-webview --lib --features cef -- -D warnings
+        cargo rustc --locked -p pentimento-egui-ui --lib -- -D warnings
+        cargo rustc --locked -p pentimento-dioxus-ui --lib -- -D warnings
+        cargo rustc --locked -p pentimento --bin pentimento --features egui -- -D warnings
+        cargo rustc --locked -p pentimento --bin pentimento --features dioxus -- -D warnings
+        cargo rustc --locked -p pentimento --bin pentimento --features cef -- -D warnings
+        cargo rustc --locked -p pentimento-wasm --lib --target wasm32-unknown-unknown -- -D warnings
     )
 }
 

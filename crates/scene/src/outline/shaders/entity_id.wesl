@@ -2,6 +2,7 @@
 // Used for the ID pass in Surface ID outline rendering
 
 import bevy_pbr::render::forward_io::VertexOutput;
+import bevy_render::color_operations::srgb_to_linear_rgb;
 
 struct EntityIdUniform {
     entity_color: vec4<f32>,
@@ -13,7 +14,7 @@ var<uniform> entity_id: EntityIdUniform;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Output the entity ID as the fragment color
-    // No lighting, no PBR - just the raw ID encoded as RGB
-    return entity_id.entity_color;
+    // Compensate for the attachment's linear-to-sRGB write so stored bytes are
+    // the original 24-bit ID. Writing the normalized ID directly loses high IDs.
+    return vec4(srgb_to_linear_rgb(entity_id.entity_color.rgb), entity_id.entity_color.a);
 }

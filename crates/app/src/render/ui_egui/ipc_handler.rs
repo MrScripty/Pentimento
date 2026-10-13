@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use pentimento_egui_ui::apply_bevy_message;
-use pentimento_scene::{DepthViewSettings, OutboundUiMessages};
+use pentimento_scene::{DepthViewCapability, DepthViewSettings, OutboundUiMessages};
 
 use super::resources::EguiFrontendState;
 
@@ -8,12 +8,14 @@ pub fn sync_bevy_messages(
     mut outbound: ResMut<OutboundUiMessages>,
     mut frontend: ResMut<EguiFrontendState>,
     depth: Option<Res<DepthViewSettings>>,
+    capability: Option<Res<DepthViewCapability>>,
 ) {
     for message in outbound.drain() {
         apply_bevy_message(&mut frontend.snapshot, message);
     }
     if let Some(depth) = depth {
-        frontend.snapshot.depth_view_enabled = depth.enabled;
+        let capability = capability.as_deref().cloned().unwrap_or_default();
+        apply_bevy_message(&mut frontend.snapshot, capability.state_message(&depth));
     }
 }
 
@@ -35,6 +37,9 @@ mod tests {
             app.init_resource::<OutboundUiMessages>()
                 .init_resource::<EguiFrontendState>()
                 .init_resource::<DepthViewSettings>()
+                .insert_resource(DepthViewCapability {
+                    unavailable_reason: None,
+                })
                 .add_systems(Update, sync_bevy_messages);
             let context = egui::Context::default();
             context.all_styles_mut(|style| style.animation_time = 0.0);
@@ -103,6 +108,35 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_depth_toolbar_is_disabled_with_reason() {
+        let mut toolbar = ToolbarHarness::new();
+        toolbar
+            .app
+            .world_mut()
+            .insert_resource(DepthViewCapability {
+                unavailable_reason: Some("OpenGL/WebGL depth view is unavailable".into()),
+            });
+        toolbar
+            .app
+            .world_mut()
+            .resource_mut::<DepthViewSettings>()
+            .enabled = true;
+        let commands = toolbar.click("Depth View");
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, UiToBevy::SetDepthView { .. }))
+        );
+        let snapshot = &toolbar.app.world().resource::<EguiFrontendState>().snapshot;
+        assert!(!snapshot.depth_view_available);
+        assert!(!snapshot.depth_view_enabled);
+        assert_eq!(
+            snapshot.depth_view_reason.as_deref(),
+            Some("OpenGL/WebGL depth view is unavailable")
+        );
+    }
+
+    #[test]
     fn depth_toolbar_roundtrips_authoritative_scene_state() {
         let mut toolbar = ToolbarHarness::new();
         for (label, enabled) in [("Depth View: Off", true), ("Depth View: On", false)] {
@@ -114,6 +148,16 @@ mod tests {
             assert_eq!(commands.len(), 1);
             assert!(
                 matches!(commands[0], UiToBevy::SetDepthView { enabled: actual } if actual == enabled)
+            );
+            assert_eq!(
+                toolbar
+                    .app
+                    .world()
+                    .resource::<EguiFrontendState>()
+                    .snapshot
+                    .depth_view_enabled,
+                !enabled,
+                "a click must wait for backend acknowledgement"
             );
             crate::render::ui_commands::dispatch_ui_commands(toolbar.app.world_mut(), commands);
             toolbar.app.update();
@@ -143,5 +187,33 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, UiToBevy::SetDepthView { enabled: false }))
         );
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use pentimento_ipc::BevyToUi;
+
+    #[test]
+    fn missing_capability_cannot_overwrite_unavailable_state_with_raw_enabled_settings() {
+        let mut app = App::new();
+        app.init_resource::<OutboundUiMessages>()
+            .init_resource::<EguiFrontendState>()
+            .init_resource::<DepthViewSettings>()
+            .add_systems(Update, sync_bevy_messages);
+        app.world_mut().resource_mut::<DepthViewSettings>().enabled = true;
+        app.world_mut()
+            .resource_mut::<OutboundUiMessages>()
+            .send(BevyToUi::DepthViewState {
+                available: false,
+                enabled: false,
+                reason: Some("Unavailable".into()),
+            });
+        app.update();
+        let state = &app.world().resource::<EguiFrontendState>().snapshot;
+        assert!(!state.depth_view_available);
+        assert!(!state.depth_view_enabled);
+        assert!(state.depth_view_reason.is_some());
     }
 }

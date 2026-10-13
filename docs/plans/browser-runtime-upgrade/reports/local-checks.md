@@ -21,3 +21,17 @@ The crate downloader's local HTTP transport returned `connection refused`. curl 
 ## Unsatisfied claims
 
 `cargo check --locked -p pentimento --features cef` was attempted and stopped in glib-sys because pkg-config could not locate `glib-2.0.pc` (required >=2.70). Actual CEF native application compilation and pixel qualification require the Linux development libraries/display provided by the existing CI job. Actual Electron/WASM production rendering and ordinary sandbox behavior require its separate representative CI job. Compilation, mocked contract tests, metadata checks and version output do not satisfy those rendered claims. No hardware/stylus or unsupported-platform qualification is claimed.
+
+## Renderer and input repair verification
+
+After the first hosted head exposed actual WebGL validation and native wheel-direction faults:
+
+- Canonical `./launcher.sh --build --frontend electron` compiled the updated Bevy0.20 WASM, generated bindings, and built production Svelte/Electron assets successfully. An earlier simultaneous native test build caused the packaging process to be killed; the serialized retry passed without changing code, runtime flags, or validation.
+- Full `cargo test --locked -p pentimento-scene --lib --features selection`:94 tests passed, including4 per-view format tests,4 depth-capability tests and the all-channel8-bit ID roundtrip regression.
+- Full `cargo test --locked -p pentimento-frontend-core --lib`:4 tests passed, including3 shared CEF wheel direction/edge-case tests and authoritative depth-state admission.
+- Final `npm run verify` after renderer/capability changes and native/browser depth/selection pixel evidence:101 tests passed, zero-warning accessibility/typecheck and Rust formatting passed. Source README, shell/Node syntax and whitespace gates also passed.
+- Full `cargo test --locked -p pentimento-egui-ui --lib`:28 tests passed after correcting a test-owned egui texture-delta lifecycle. The complete Dioxus library suite was attempted but is blocked locally by missing `fontconfig.pc`; its required gate is now in canonical CI.
+- Standalone CEF154 adapter rechecked after the shared wheel-boundary fix against the real distribution:passed, with the same7 pre-existing warnings.
+- Independent review cleared the renderer, lossless ID conversion, capability consumers and shared wheel sign conversion, with actual native and browser depth evidence remaining mandatory in the runtime jobs.
+
+These do not supersede the exact-head native/Electron rendered gates. The existing browser depth implementation remains unavailable and now reports that limitation truthfully. Native depth remains subject to actual Vulkan enable/disable qualification.

@@ -38,6 +38,19 @@ fn main() {
             },
         ],
         bevy_to_ui: vec![
+            BevyToUi::DepthViewState {
+                available: false,
+                enabled: false,
+                reason: Some("OpenGL/WebGL depth view is unavailable".into()),
+            },
+            BevyToUi::DepthViewState {
+                available: true,
+                enabled: true,
+                reason: None,
+            },
+            BevyToUi::DepthViewRejected {
+                reason: "OpenGL/WebGL depth view is unavailable".into(),
+            },
             BevyToUi::ProjectStateChanged {
                 generation: "9007199254740993".into(),
                 path: Some("/tmp/example.pentimento.json".into()),
@@ -197,6 +210,7 @@ fn main() {
             BevyToUi::CloseMenus,
         ],
         ui_to_bevy: vec![
+            UiToBevy::GetDepthViewState,
             UiToBevy::PaintCommand(PaintCommand::UvLayers {
                 command: UvLayerCommand::SelectReceiver { mesh_id: 12 },
             }),

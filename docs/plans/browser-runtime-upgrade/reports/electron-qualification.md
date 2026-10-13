@@ -1,8 +1,9 @@
 # Electron production qualification
 
-Status on 2026-10-13: implemented; local focused evidence passed; real renderer
-acceptance remains blocked locally and pending in CI. This report does not mark
-BR3 accepted.
+Status on 2026-10-13: the first hosted sandbox probe and real WASM build passed,
+but production rendering failed. The diagnosed WebGL repairs and pending
+requalification are recorded in [WebGL rendering](webgl-rendering.md).
+This report does not mark BR3 accepted.
 
 ## Source lineage
 
@@ -43,6 +44,12 @@ preload plus real `dist/ui/wasm/pentimento_wasm.js` and
 - Retain the source oracle's pixel thresholds and two canvas-only captures.
   The current `ScenePlugin` still defines the red cube, green torus, blue sphere,
   and neutral ground expected by that oracle.
+- Require actual WebGL selection-outline evidence: locate a red-object interior
+  from the native capture, send an Electron mouse click, park the pointer away,
+  and require two stable orange-boundary frames. Keep before/after PNGs and
+  input/pixel metrics; reject fills, unrelated scene changes, unchanged frames,
+  and wrong-object/color borders. The combined focused suite now has 20 passing
+  tests. Exact-head hosted execution remains pending.
 - Preserve process ownership, shutdown handshake, orphan rejection, and
   PID/start-time tracking. Give each supervisor fixture its own evidence path,
   including when CI sets a shared artifact destination.
@@ -58,7 +65,7 @@ preload plus real `dist/ui/wasm/pentimento_wasm.js` and
   audit gate from this rendering job; dependency advisory checks are not
   renderer-acceptance evidence.
 
-## Evidence and limits
+## Initial local evidence and limits
 
 Passed locally:
 
@@ -84,15 +91,17 @@ The platform failed to initialize. Exiting.
 
 The supervisor recorded main exit `-5`, no shutdown handshake, observed process
 family exit, and `success: false`. No forced cleanup was needed. The executor
-has neither Xvfb nor a configured display. Its available Rust toolchain has only
-the native Linux target and no `wasm-bindgen` CLI, so the genuine WASM build and
-production renderer test have not run locally. These missing prerequisites are
-supplied by the CI workflow; no sandbox/security workaround was attempted.
+has neither Xvfb nor a configured display. At this initial check its Rust
+toolchain also lacked the WASM target and `wasm-bindgen` CLI. Those build
+prerequisites were subsequently installed and a canonical local WASM build
+completed; the real local renderer remains unavailable. No sandbox/security
+workaround was attempted.
 
-CI remains pending for this branch's exact eventual commit. Passing source-
-branch checks, local pixel fixtures, binary version output, or shell typechecks
-do not substitute for the new commit's sandbox probe, real WASM build, strict
-nonblank scene capture, and graceful process-family shutdown.
+The first exact-head hosted run exposed real texture-format and depth-shader
+failures, as detailed in the linked WebGL report. Passing source-branch checks,
+local pixel fixtures, binary version output, or shell typechecks do not replace
+successful strict scene capture and graceful process-family shutdown on the
+corrected commit.
 
 The qualified environment is software-rendered Linux x86_64. It cannot establish
 hardware GPU behavior/performance, stylus responsiveness, unsupported platforms,

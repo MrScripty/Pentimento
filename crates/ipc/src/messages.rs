@@ -17,6 +17,16 @@ use crate::types::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum BevyToUi {
+    /// Authoritative optional depth-view capability and current state.
+    DepthViewState {
+        available: bool,
+        enabled: bool,
+        reason: Option<String>,
+    },
+
+    /// A depth-view request could not be applied; state is unchanged.
+    DepthViewRejected { reason: String },
+
     ProjectStateChanged {
         /// Decimal document generation; exact even beyond JavaScript integer precision.
         generation: String,
@@ -229,6 +239,9 @@ pub enum UiToBevy {
 
     /// Mesh edit mode commands
     MeshEditCommand(MeshEditCommand),
+
+    /// Query depth capability after mounting or reconnecting a UI.
+    GetDepthViewState,
 
     /// Toggle depth view mode
     SetDepthView {
