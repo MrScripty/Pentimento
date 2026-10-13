@@ -2,7 +2,7 @@
 // Samples the Vello-rendered texture and blends it over the 3D scene
 // with proper alpha compositing.
 
-#import bevy_ui::ui_vertex_output::UiVertexOutput
+import bevy_ui_render::ui_vertex_output::UiVertexOutput;
 
 @group(1) @binding(0) var ui_texture: texture_2d<f32>;
 @group(1) @binding(1) var ui_sampler: sampler;

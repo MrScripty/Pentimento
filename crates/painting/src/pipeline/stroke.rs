@@ -102,7 +102,7 @@ impl PaintingPipeline {
         let blend_mode = self.blend_mode;
         if let Some(layer) = self
             .current_layer_id
-            .and_then(|id| self.layers.layer_mut(id))
+            .and_then(|id| self.layers.layer_mut_for_paint(id))
         {
             let result = layer.surface.apply_dab(
                 dab.x,
@@ -198,7 +198,7 @@ impl PaintingPipeline {
 
         if let Some(layer) = self
             .current_layer_id
-            .and_then(|id| self.layers.layer_mut(id))
+            .and_then(|id| self.layers.layer_mut_for_paint(id))
         {
             for (coord, data) in self.pending_undo_captures.drain() {
                 super::undo::restore_tile(&mut layer.surface, coord, &data);

@@ -20,7 +20,7 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
     };
 
     if !outbound_msgs.is_empty() {
-        if let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() {
+        if let Some(bridge) = world.get_non_send::<DioxusBridgeResource>() {
             for msg in &outbound_msgs {
                 eprintln!(">>> IPC forwarding outbound to UI: {:?}", msg);
             }
@@ -34,14 +34,14 @@ pub fn handle_ui_to_bevy_messages(world: &mut World) {
         // Mark scope dirty and poll to trigger incremental re-render.
         // Uses render_immediate() (incremental diffing), not rebuild() (appends nodes).
         // IPC messages are read by the component during render.
-        if let Some(mut doc_resource) = world.get_non_send_resource_mut::<BlitzDocumentResource>() {
+        if let Some(mut doc_resource) = world.get_non_send_mut::<BlitzDocumentResource>() {
             doc_resource.document.mark_dirty_and_poll();
         }
     }
 
     // Collect all pending messages first to avoid holding the borrow
     let messages: Vec<UiToBevy> = {
-        let Some(bridge) = world.get_non_send_resource::<DioxusBridgeResource>() else {
+        let Some(bridge) = world.get_non_send::<DioxusBridgeResource>() else {
             return;
         };
         let mut msgs = Vec::new();

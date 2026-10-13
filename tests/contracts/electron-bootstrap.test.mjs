@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
+const electronVersion = require('../../src-electron/package.json').devDependencies.electron;
 const { checkInstallation } = require('../../src-electron/check-install.cjs');
 
 function fixture(t) {
@@ -15,13 +16,13 @@ function fixture(t) {
         fs.mkdirSync(path.dirname(full), { recursive: true });
         fs.writeFileSync(full, typeof value === 'string' ? value : JSON.stringify(value), { mode });
     };
-    write('package.json', { devDependencies: { electron: '^44.5.1' } });
-    write('package-lock.json', { packages: { '': { devDependencies: { electron: '^44.5.1' } }, 'node_modules/electron': { version: '44.5.1' } } });
-    write('node_modules/electron/package.json', { version: '44.5.1', main: 'index.js' });
+    write('package.json', { devDependencies: { electron: electronVersion } });
+    write('package-lock.json', { packages: { '': { devDependencies: { electron: electronVersion } }, 'node_modules/electron': { version: electronVersion } } });
+    write('node_modules/electron/package.json', { version: electronVersion, main: 'index.js' });
     write('node_modules/electron/index.js', 'throw new Error("must not import or download");');
     write('node_modules/.bin/electron', '#!/bin/sh\nexit 0\n', 0o755);
     write('node_modules/electron/dist/electron', '#!/bin/sh\nexit 0\n', 0o755);
-    write('node_modules/electron/dist/version', '44.5.1\n');
+    write('node_modules/electron/dist/version', `${electronVersion}\n`);
     write('node_modules/electron/path.txt', 'electron');
     return { root, write };
 }
@@ -60,17 +61,18 @@ function launcherFixture(t, installerExit = 0, npmExit = 0) {
     fs.copyFileSync(path.join(repository, 'launcher.sh'), path.join(repo, 'launcher.sh'));
     fs.mkdirSync(path.join(repo, 'node_modules'));
     fs.mkdirSync(path.join(repo, 'src-electron'));
-    for (const file of ['package.json', 'package-lock.json', 'check-install.cjs']) {
+    for (const file of ['package.json', 'package-lock.json', 'check-install.cjs', 'check-runtime.cjs']) {
         fs.copyFileSync(path.join(repository, 'src-electron', file), path.join(repo, 'src-electron', file));
     }
     const trace = path.join(repo, 'trace');
-    shell(path.join(repo, 'bin/cargo'), 'exit 0\n');
+    shell(path.join(repo, 'bin/cargo'), 'if [[ "$*" == "pkgid -p wasm-bindgen" ]]; then echo registry+https://github.com/rust-lang/crates.io-index#wasm-bindgen@0.2.100; fi\n');
     shell(path.join(repo, 'bin/rustup'), 'echo wasm32-unknown-unknown\n');
-    shell(path.join(repo, 'bin/wasm-bindgen'), 'exit 0\n');
+    shell(path.join(repo, 'bin/wasm-bindgen'), 'echo "wasm-bindgen 0.2.100"\n');
     shell(path.join(repo, 'bin/npm'), `
 echo "npm $*" >> "$TRACE"
+if [[ "$*" == "run install:runtime" ]]; then exec "$INSTALLER_FIXTURE"; fi
 mkdir -p node_modules/.bin node_modules/electron
-printf '{"version":"44.5.1"}' > node_modules/electron/package.json
+printf '{"version":"${electronVersion}"}' > node_modules/electron/package.json
 printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/electron
 chmod +x node_modules/.bin/electron
 cp "$INSTALLER_FIXTURE" node_modules/.bin/install-electron
@@ -82,7 +84,7 @@ if [[ ${installerExit} != 0 ]]; then exit ${installerExit}; fi
 mkdir -p node_modules/electron/dist
 printf '#!/bin/sh\\nexit 0\\n' > node_modules/electron/dist/electron
 chmod +x node_modules/electron/dist/electron
-printf '44.5.1\\n' > node_modules/electron/dist/version
+printf '${electronVersion}\\n' > node_modules/electron/dist/version
 printf electron > node_modules/electron/path.txt
 `);
     const run = () => spawnSync('bash', ['launcher.sh', '--install'], {
@@ -94,19 +96,20 @@ printf electron > node_modules/electron/path.txt
 
 test('launcher install explicitly acquires the binary, is repeatable, and repairs a missing binary', (t) => {
     const { repo, run, lines } = launcherFixture(t);
+    const installed = run();
+    assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    assert.deepEqual(lines(), ['npm ci', 'npm run install:runtime', 'install-electron']);
     assert.equal(run().status, 0);
-    assert.deepEqual(lines(), ['npm ci', 'install-electron']);
-    assert.equal(run().status, 0);
-    assert.deepEqual(lines(), ['npm ci', 'install-electron']);
+    assert.deepEqual(lines(), ['npm ci', 'npm run install:runtime', 'install-electron']);
     fs.unlinkSync(path.join(repo, 'src-electron/node_modules/electron/dist/electron'));
     assert.equal(run().status, 0);
-    assert.deepEqual(lines(), ['npm ci', 'install-electron', 'npm ci', 'install-electron']);
+    assert.deepEqual(lines(), ['npm ci', 'npm run install:runtime', 'install-electron', 'npm ci', 'npm run install:runtime', 'install-electron']);
 });
 
 test('launcher propagates official binary installer failure', (t) => {
     const { repo, run, lines } = launcherFixture(t, 19);
     assert.equal(run().status, 1);
-    assert.deepEqual(lines(), ['npm ci', 'install-electron']);
+    assert.deepEqual(lines(), ['npm ci', 'npm run install:runtime', 'install-electron']);
     assert.equal(checkInstallation(path.join(repo, 'src-electron'), 'linux'), false);
 });
 

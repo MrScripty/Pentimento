@@ -211,6 +211,25 @@ impl HalfEdgeMesh {
             && link_edges[0].is_disjoint(&link_edges[1])
     }
 
+    /// Read a live triangle without allocating a temporary vertex vector.
+    /// Returns None for tombstones, malformed cycles, or non-triangular faces.
+    pub fn get_triangle_vertices(&self, face_id: FaceId) -> Option<[VertexId; 3]> {
+        let start = self.face(face_id)?.half_edge;
+        let a = self.half_edge(start)?;
+        let b = self.half_edge(a.next)?;
+        let c = self.half_edge(b.next)?;
+        if a.face != Some(face_id)
+            || b.face != Some(face_id)
+            || c.face != Some(face_id)
+            || a.next == start
+            || b.next == start
+            || c.next != start
+        {
+            return None;
+        }
+        Some([a.origin, b.origin, c.origin])
+    }
+
     /// Get the vertices of a face in order
     pub fn get_face_vertices(&self, face_id: FaceId) -> Vec<VertexId> {
         // Maximum edges per face - prevents infinite loops on corrupted mesh

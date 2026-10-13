@@ -4,8 +4,19 @@
 //! frontend path.
 
 mod app;
+mod controls;
+mod paint_color;
+mod paint_panel;
+mod presets;
+mod project_dialog;
+mod sculpt_panel;
 mod state;
+#[cfg(test)]
+mod test_render;
+#[cfg(test)]
+mod tests;
+mod uv_layer_panel;
 
 pub use app::show_root_ui;
-pub use bevy_egui::egui;
+pub use egui;
 pub use state::{EguiUiRuntime, EguiUiSnapshot, apply_bevy_message};

@@ -188,19 +188,78 @@ pub struct PaintBrushPresetInfo {
 }
 
 /// UV target commands are separate from source Canvas layer commands.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UvLayerBlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UvLayerPaintTarget {
+    #[default]
+    Color,
+    Mask,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UvLayerCommand {
-    SelectReceiver { mesh_id: u32 },
+    SelectReceiver {
+        mesh_id: u32,
+    },
     Enable,
-    Create { name: String },
-    Duplicate { layer_id: u32 },
-    Delete { layer_id: u32 },
-    Select { layer_id: u32 },
-    Rename { layer_id: u32, name: String },
-    Reorder { layer_id: u32, new_index: usize },
-    Visible { layer_id: u32, visible: bool },
-    Opacity { layer_id: u32, opacity: f32 },
-    Lock { layer_id: u32, locked: bool },
+    Create {
+        name: String,
+    },
+    Duplicate {
+        layer_id: u32,
+    },
+    Delete {
+        layer_id: u32,
+    },
+    Select {
+        layer_id: u32,
+    },
+    Rename {
+        layer_id: u32,
+        name: String,
+    },
+    Reorder {
+        layer_id: u32,
+        new_index: usize,
+    },
+    Visible {
+        layer_id: u32,
+        visible: bool,
+    },
+    Opacity {
+        layer_id: u32,
+        opacity: f32,
+    },
+    Lock {
+        layer_id: u32,
+        locked: bool,
+    },
+    BlendMode {
+        layer_id: u32,
+        mode: UvLayerBlendMode,
+    },
+    AddMask {
+        layer_id: u32,
+    },
+    RemoveMask {
+        layer_id: u32,
+    },
+    MaskEnabled {
+        layer_id: u32,
+        enabled: bool,
+    },
+    PaintTarget {
+        layer_id: u32,
+        target: UvLayerPaintTarget,
+    },
     Undo,
     Redo,
 }
@@ -212,6 +271,14 @@ pub struct UvLayerInfo {
     pub opacity: f32,
     pub locked: bool,
     pub is_active: bool,
+    #[serde(default)]
+    pub blend_mode: UvLayerBlendMode,
+    #[serde(default)]
+    pub has_mask: bool,
+    #[serde(default)]
+    pub mask_enabled: bool,
+    #[serde(default)]
+    pub paint_target: UvLayerPaintTarget,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UvReceiverInfo {

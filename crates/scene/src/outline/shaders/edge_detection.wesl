@@ -4,7 +4,8 @@
 // The ID buffer provides current-frame boundary information.
 // Outlines are drawn at boundary positions, scene passes through elsewhere.
 
-#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
+import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
+import bevy_render::color_operations::linear_rgb_to_srgb;
 
 struct EdgeDetectionUniform {
     outline_color: vec4<f32>,
@@ -31,7 +32,10 @@ var scene_sampler: sampler;
 // Sample the ID at a pixel offset
 fn sample_id(uv: vec2<f32>, offset: vec2<f32>) -> vec4<f32> {
     let pixel_size = 1.0 / uniforms.texture_size;
-    return textureSample(id_texture, id_sampler, uv + offset * pixel_size);
+    let sampled = textureSample(id_texture, id_sampler, uv + offset * pixel_size);
+    // Sampling an sRGB attachment decodes RGB. Restore the ID's byte-channel
+    // representation; alpha, used for coverage, is unaffected by sRGB conversion.
+    return vec4(linear_rgb_to_srgb(sampled.rgb), sampled.a);
 }
 
 // Check if the current pixel is on the edge boundary in the ID buffer

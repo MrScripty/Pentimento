@@ -7,7 +7,7 @@ explicit single-surface authoring data; [shared UV layers](shared-uv-layers-v3.m
 add the shared layer representation and appearance owner. PTex rendered painting
 and persistence remain unsupported.
 
-File → Save, Save As, and Open use absolute local `.pentimento.json` paths in the native editor. The Svelte dialog sends real shared IPC commands and waits for the engine's success or failure receipt. Browser-only previews disable file operations until the native capability handshake. New and Export remain disabled.
+File → Save, Save As, and Open use absolute local `.pentimento.json` paths in the native editor. The Svelte dialog sends real shared IPC commands and waits for the engine's success or failure receipt. Browser-only previews disable file operations until the native capability handshake. New creates a fresh empty document after explicit confirmation; Export remains disabled.
 
 The first canonical format is self-contained UTF-8 JSON with `format: "pentimento-project"` and `version: 1`. It uses the existing scene, mesh, layer, and brush models rather than an asset database. Serialization and parsing preserve finite f32 values exactly, including editable pixel values. Runtime Entity IDs, asset handles, caches, active strokes, replay packets, and undo history are omitted.
 
@@ -43,3 +43,11 @@ The sibling lock remains available for later operations. Parent-directory durabi
 Rust owned-file tests exercise production shared Save/Open dispatch, exact authoring identities and pixel values, rendered receiver images, malformed/over-limit files, failed saves, external-edit conflicts, active-stroke refusal, scene/input reset, and real first edits with Undo/Redo after reopen. Native command-batch tests cover Save after queued object/canvas creation and the successful Open document boundary. The native input fixture proves the full project dialog region prevents a canvas stroke.
 
 Chromium tests exercise the actual Svelte controls, capability gates, pending/failure/success receipts, focus handling, and emitted LayoutUpdate regions. Their engine receipts are synthetic and do not establish native CEF file I/O or GPU acceptance. Native CEF qualification remains pending. Build output, owned fixtures, logs, and JPEG85 evidence belong outside Git.
+
+## New document boundary
+
+File > New Project always confirms discarding unsaved changes and all local Undo/Redo history. The editor does not claim precise dirty tracking. Cancel and Escape send no New command. The modal freezes the exact decimal document generation at creation; later state updates cannot retarget the confirmation. Native admission rejects unconfirmed or stale requests, active editing ownership, unapplied document commands, and admitted scene pointer presses without replacing geometry, file ownership, or history.
+
+A confirmed idle New prepares a validated empty version-2 document and uses the same atomic replacement primitive as Open. It resets authoring objects and identity counters, paint/UV/sculpt histories and selection, brushes, camera and lighting defaults, pending scene/native input, and paused projection. It releases the old file owner (including any external-edit conflict) without writing or deleting that file. Save As can then choose a fresh local path. External-edit handling for Save/Open is unchanged.
+
+The native controller flushes its buffered canvas prefix before admission and drops the remainder of the old command batch after successful replacement. Native forwarding observes the replacement generation, clears gesture/motion/modifier state, and suppresses contacts held across the boundary until their physical release/end. Fresh presses can then edit the new document. These controller/input tests compile production source in a headless harness; they do not qualify the native GUI. The CEF SDK remains unavailable, and no CEF download retry or browser sandbox workaround is used for this candidate.

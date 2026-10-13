@@ -350,6 +350,7 @@ test('IPC readiness preserves a newer layout waiting behind an older bootstrap r
     assert.equal(sent.at(-1).data.regions[0].x, 2);
     bridge.dispose();
 });
+
 for (const mode of ['wasm', 'native'] as const) {
     test(`${mode} bridge queries depth state and delivers authoritative replies`, async () => {
         const { fakeWindow, events } = setupDom(mode);
@@ -383,3 +384,46 @@ for (const mode of ['wasm', 'native'] as const) {
         bridge.dispose();
     });
 }
+
+
+test('delayed native depth query is coalesced and recovers authoritative capability', async () => {
+    const { fakeWindow, events } = setupDom('native');
+    const { bridge } = await importBridgeModule();
+    const { connectDepthView } = await import('../../ui/src/lib/depth-view.ts');
+    const states: unknown[] = [];
+    const controller = connectDepthView(bridge, state => states.push(state));
+    bridge.getDepthViewState();
+    bridge.setDepthView(true); // Mutations must never be replayed later.
+    fakeWindow.dispatchEvent(new Event('pentimento:ipc-ready'));
+    assert.equal(events.length, 0);
+    const available = { available: true, enabled: false, reason: null };
+    fakeWindow.ipc = { postMessage(message) {
+        events.push(message);
+        if (JSON.parse(message).type === 'GetDepthViewState') {
+            fakeWindow.__PENTIMENTO_RECEIVE__!(JSON.stringify({ type: 'DepthViewState', data: available }));
+        }
+    } };
+    fakeWindow.dispatchEvent(new Event('pentimento:ipc-ready'));
+    fakeWindow.dispatchEvent(new Event('pentimento:ipc-ready'));
+    assert.deepEqual(events.map(message => JSON.parse(message)), [{ type: 'GetDepthViewState' }]);
+    assert.deepEqual(states.at(-1), available);
+    controller.toggle();
+    assert.deepEqual(JSON.parse(events.at(-1)!), { type: 'SetDepthView', data: { enabled: true } });
+    assert.deepEqual(states.at(-1), available);
+    controller.dispose();
+    bridge.dispose();
+});
+
+test('native depth disposal discards queued query and remount requests fresh capability', async () => {
+    const { fakeWindow, events } = setupDom('native');
+    const { bridge } = await importBridgeModule();
+    bridge.getDepthViewState();
+    bridge.dispose();
+    const { bridge: mounted } = await importBridgeModule();
+    fakeWindow.ipc = { postMessage: message => events.push(message) };
+    fakeWindow.dispatchEvent(new Event('pentimento:ipc-ready'));
+    assert.deepEqual(events, [], 'disposed depth bootstrap must not leak into another mount');
+    mounted.getDepthViewState();
+    assert.deepEqual(events.map(message => JSON.parse(message)), [{ type: 'GetDepthViewState' }]);
+    mounted.dispose();
+});

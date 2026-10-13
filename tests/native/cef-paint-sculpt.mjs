@@ -8,9 +8,10 @@ import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
+import { assertNativeScene, assertNativeDepthScene } from './depth-view-pixels.mjs';
 import { assertContinuousPaint } from './paint-stroke-pixels.mjs';
 import { projectionReceipts, assertRenderedTarget, receiverHistoryRegion, assertReceiverEndpoint } from './projection-target-evidence.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, waitForUiPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -67,13 +68,16 @@ async function waitForStrokeCompletion(offset, description) {
     assert.notEqual(completed.outcome, 'rejected', `${description}: transaction ${started.id} was rejected`);
     return completed;
 }
-async function capture(name, { synchronize = true, uiOwned = false } = {}) {
+async function parkPointer(name, { synchronize = true, uiOwned = false } = {}) {
     // Move to empty viewport so brush gizmos/hover highlights cannot masquerade
     // as a geometry change in before/after viewport comparisons.
     const parkedLogOffset = log().length;
     xdo('mousemove', '--window', windowId, 20, height - 30);
     if (synchronize) await until(() => parkedPointerFrames(log().slice(parkedLogOffset), 20, height - 30, { uiOwned }),
         `${name}: off-target hover through gizmo/presentation update frames`, 30000);
+}
+async function capture(name, { synchronize = true, uiOwned = false } = {}) {
+    await parkPointer(name, { synchronize, uiOwned });
     const pixels = command('import', ['-window', windowId, '-depth', '8', 'rgb:-']);
     assert.equal(pixels.length, width * height * 3, 'Unexpected X11 capture dimensions');
     command('convert', ['-size', `${width}x${height}`, '-depth', '8', 'rgb:-', '-quality', '85', `${out}/${name}.jpg`], { input: pixels });
@@ -186,7 +190,8 @@ async function failureDiagnostics() {
                 brush_panels: [...document.querySelectorAll('.brush-panel')].map(element => element.textContent),
                 regions: [...document.querySelectorAll('.toolbar,.side-panel,.brush-panel,.add-menu-backdrop')].map(element => {
                     const rect = element.getBoundingClientRect();
-                    return { ...describe(element), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                    return { ...describe(element), x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                        scroll_top: element.scrollTop, scroll_height: element.scrollHeight, client_height: element.clientHeight };
                 }),
             };
         }, sculptPoint ?? null), new Promise(resolve => {
@@ -204,7 +209,7 @@ try {
     console.log(JSON.stringify({ type: 'pentimento.cef.configuration', cef_rendering: cefRendering, cef_args: cefRenderingArgs }));
     app = spawn('./launcher.sh', ['--run', '--frontend', 'cef', '--', '--remote-debugging-port=0', ...cefRenderingArgs], {
         cwd: root, detached: true, stdio: ['ignore', logFd, logFd],
-        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug', PENTIMENTO_NATIVE_DIAGNOSTICS: '1', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
+        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug,pentimento_scene::native_history=debug', PENTIMENTO_NATIVE_DIAGNOSTICS: '1', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
     });
     const endpoint = await until(() => log().match(/DevTools listening on (ws:\/\/(?:127\.0\.0\.1|\[::1\]):\d+\/\S+)/)?.[1], 'ephemeral CEF DevTools endpoint', 120000);
     const url = new URL(endpoint);
@@ -223,7 +228,7 @@ try {
     await page.getByRole('button', { name: 'Reset Camera', exact: true }).waitFor();
     // Read-only trace: no input dispatch, focus changes, or backend commands.
     await page.evaluate(() => {
-        const evidence = { keys: [], focus: [] };
+        const evidence = { time_origin_ms: performance.timeOrigin, keys: [], focus: [], wheel: [] };
         window.__PENTIMENTO_NATIVE_INPUT_EVIDENCE__ = evidence;
         for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
             evidence.keys.push({ type, key: event.key, code: event.code, ctrl: event.ctrlKey,
@@ -235,15 +240,80 @@ try {
             evidence.focus.push({ target: event.target?.tagName ?? null, id: event.target?.id ?? null, time: performance.now() });
             if (evidence.focus.length > 32) evidence.focus.shift();
         });
+        window.addEventListener('wheel', event => {
+            evidence.wheel.push({ x: event.clientX, y: event.clientY,
+                delta_x: event.deltaX, delta_y: event.deltaY, delta_mode: event.deltaMode,
+                trusted: event.isTrusted, target: event.target?.tagName ?? null, time: performance.now() });
+            if (evidence.wheel.length > 128) evidence.wheel.shift();
+        }, { passive: true });
     });
 
     await until(() => page.evaluate(() => typeof window.ipc?.postMessage === 'function' && typeof window.__PENTIMENTO_RECEIVE__ === 'function'), 'real native bridge readiness');
     stage = 'cef_framebuffer_readiness';
     const framebuffer = await until(() => cefFramebufferReceipt(log()), 'CEF first painted framebuffer (DOM readiness alone is insufficient)', 30000);
-    const startup = await capture('native-startup');
+    await parkPointer('native-startup');
+    const { frame: startup, pixels: toolbarPixels } = await waitForUiPresentation(until, {
+        // Keep the pointer barrier above; do not nest another 30s wait inside
+        // the single deadline for observing actual native presentation.
+        capture: () => capture('native-startup', { synchronize: false }),
+        width, height, rect: await page.locator('header.toolbar').boundingBox(), name: 'toolbar',
+    });
     record('native_startup', { screenshot: startup.screenshot, pixels_sha256: startup.sha256, width, height, cdp_bindings: sockets });
-    const toolbarPixels = assertPaintedUiRegion(startup, width, height, await page.locator('header.toolbar').boundingBox(), 'toolbar');
     record('cef_framebuffer_ready', { ...framebuffer, ...toolbarPixels, screenshot: startup.screenshot });
+
+    stage = 'native_depth_view';
+    const depthToggle = page.getByRole('button', { name: 'Toggle depth view', exact: true });
+    await until(() => depthToggle.isEnabled(), 'Vulkan backend reports depth view available');
+    assert.equal(await depthToggle.getAttribute('aria-pressed'), 'false');
+    await parkPointer('depth-baseline');
+    let depthBaselineFrames = [];
+    let depthBaselineCaptures = 0;
+    const depthBaseline = await until(async () => {
+        let frame, scene;
+        try {
+            frame = await capture(`depth-baseline-${++depthBaselineCaptures}`, { synchronize: false });
+            scene = assertNativeScene(frame, width, height);
+        } catch (error) {
+            // until retries failures; only consecutive valid frames prove stability.
+            depthBaselineFrames = [];
+            throw error;
+        }
+        if (depthBaselineFrames.length && difference(depthBaselineFrames.at(-1), frame).mean_max_channel_difference > .1) depthBaselineFrames = [];
+        depthBaselineFrames.push(frame);
+        return depthBaselineFrames.length >= 3 ? { frame, scene } : null;
+    }, 'stable visible native scene before depth toggle', 30000);
+    record('depth_scene_baseline', { ...depthBaseline.scene, screenshot: depthBaseline.frame.screenshot,
+        noise_screenshots: depthBaselineFrames.map(frame => frame.screenshot) });
+    for (let cycle = 1; cycle <= 2; cycle++) {
+        const toggle = async (enabled) => {
+            const box = await depthToggle.boundingBox();
+            assertNativeClickBounds(box, width, height);
+            await clickAt(box.x + box.width / 2, box.y + box.height / 2);
+            // The controller changes aria-pressed only on backend DepthViewState.
+            await until(() => depthToggle.getAttribute('aria-pressed').then(value => value === String(enabled)),
+                `depth ${cycle}: backend acknowledgement ${enabled}`, 30000);
+        };
+        await toggle(true);
+        await parkPointer(`depth-${cycle}-enabled`);
+        const depthOn = await until(async () => {
+            const frame = await capture(`depth-${cycle}-enabled`, { synchronize: false });
+            const pixels = assertNativeDepthScene(depthBaselineFrames.at(-1), frame, width, height);
+            return { frame, pixels };
+        }, `depth ${cycle}: presented grayscale scene`, 30000);
+        const depthOnFrames = [depthOn.frame, await capture(`depth-${cycle}-enabled-noise-1`), await capture(`depth-${cycle}-enabled-noise-2`)];
+        const depthRegion = deformationRegion(depthBaselineFrames, depthOnFrames, width, height);
+        record('native_depth_enabled', { cycle, backend_enabled: true, ...depthOn.pixels, screenshot: depthOn.frame.screenshot });
+        await toggle(false);
+        await parkPointer(`depth-${cycle}-disabled`);
+        const depthOff = await until(async () => {
+            const frame = await capture(`depth-${cycle}-disabled`, { synchronize: false });
+            const scene = assertNativeScene(frame, width, height);
+            const restored = assertRegionRestored(depthRegion, depthRegion.baseline, depthRegion.deformed, frame, `Depth ${cycle} disabled`);
+            return { frame, scene, restored };
+        }, `depth ${cycle}: restored native scene`, 30000);
+        record('native_depth_disabled', { cycle, backend_enabled: false, ...depthOff.scene, ...depthOff.restored, screenshot: depthOff.frame.screenshot });
+        depthBaselineFrames = [depthOff.frame, await capture(`depth-${cycle}-disabled-noise-1`), await capture(`depth-${cycle}-disabled-noise-2`)];
+    }
 
     stage = 'sculpt_entry';
     // Exact projection of the default sphere center (2,.5,0), using the default

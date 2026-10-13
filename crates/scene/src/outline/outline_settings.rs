@@ -6,6 +6,7 @@ use bevy::render::extract_resource::ExtractResource;
 
 /// Configuration for the selection outline effect
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct OutlineSettings {
     /// Outline color
     pub color: LinearRgba,

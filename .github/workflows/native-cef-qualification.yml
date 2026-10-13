@@ -9,6 +9,9 @@ on:
       - 'tests/native/**'
       - 'package*.json'
       - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/cef-runtime.mjs'
+      - 'scripts/setup-cef.sh'
       - 'launcher.sh'
       - '.github/workflows/native-cef-qualification.yml'
 
@@ -77,13 +80,17 @@ jobs:
         run: |
           set -o pipefail
           unset CARGO_TARGET_DIR
-          cef_input_lib_dir="$(find target/debug/build -type d -name cef_linux_x86_64 -print -quit)"
+          cef_input_lib_dir="$(node scripts/cef-runtime.mjs target/debug Cargo.lock)"
           test -f "$cef_input_lib_dir/libcef.so"
           export LD_LIBRARY_PATH="$cef_input_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo test --locked -p pentimento-frontend-core cef_mouse:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/cef-wheel-tests.log"
           cargo test --locked -p pentimento --features cef input:: -- --nocapture \
             2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/input-tests.log"
           cargo test --locked -p pentimento --features cef render::framebuffer_receipt_tests:: -- --nocapture \
             2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/framebuffer-receipt-tests.log"
+          cargo test --locked -p pentimento --features cef depth_command_tests:: -- --nocapture \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/depth-command-tests.log"
       - name: Exercise actual native input, panels, painting and sculpting
         shell: bash
         run: |

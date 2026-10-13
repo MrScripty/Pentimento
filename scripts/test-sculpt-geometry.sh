@@ -2,7 +2,7 @@
 # CPU geometry and render-asset regressions. No display or GPU is required.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-cargo test --locked -p painting --features bevy --lib
+cargo test --locked -p painting --features bevy --lib --tests
 cargo test --locked -p sculpting --features bevy --lib --tests
 # Explicit discovery guards prevent feature/filter changes from silently running zero tests.
 geometry_tests="$(cargo test --locked -p sculpting --features bevy --test geometry_regressions -- --list)"

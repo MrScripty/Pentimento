@@ -13,7 +13,8 @@ use bevy::render::{
     renderer::RenderQueue,
     texture::GpuImage,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use painting::{BlendMode, BrushPreset, PaintingPipeline};
 use pentimento_ipc::{BevyToUi, BlendMode as IpcBlendMode, LayerInfo};
@@ -99,6 +100,12 @@ impl PaintingResource {
 
     pub(crate) fn has_active_stroke(&self) -> bool {
         self.pipelines.values().any(PaintingPipeline::is_stroking)
+    }
+    /// Native mode changes may exempt only their verified active plane.
+    pub(crate) fn has_unowned_active_stroke(&self, native_plane: Option<u32>) -> bool {
+        self.pipelines
+            .iter()
+            .any(|(id, pipeline)| pipeline.is_stroking() && Some(*id) != native_plane)
     }
     /// Create a new painting resource
     pub fn new() -> Self {
@@ -220,7 +227,7 @@ pub struct DirtyTileUpload {
     /// Tile dimensions (width, height)
     pub size: (u32, u32),
     /// RGBA8 pixel data (row-major, size.0 * size.1 * 4 bytes)
-    pub data: Vec<u8>,
+    pub data: Arc<[u8]>,
 }
 
 /// Per-canvas dirty tile buffer
@@ -228,15 +235,84 @@ pub struct DirtyTileUpload {
 pub struct CanvasDirtyTileBuffer {
     /// Asset ID of the canvas texture (for GpuImage lookup)
     pub image_id: AssetId<Image>,
+    /// Revision acknowledged only after all of this batch reaches the queue.
+    revision: u64,
     /// Pending tile uploads
     pub tiles: Vec<DirtyTileUpload>,
 }
 
 /// Resource for buffering dirty tile uploads to be extracted to render world
 #[derive(Resource, Default, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct DirtyTileUploadBuffer {
     /// Per-canvas upload buffers
     pub canvases: Vec<CanvasDirtyTileBuffer>,
+    next_revision: u64,
+    /// Extracted clones share only acknowledgements, never mutable pixel data.
+    acknowledged: Arc<Mutex<HashMap<AssetId<Image>, u64>>>,
+}
+
+impl DirtyTileUploadBuffer {
+    fn acknowledge(&self, image: AssetId<Image>, revision: u64) {
+        let mut acknowledged = self
+            .acknowledged
+            .lock()
+            .expect("canvas acknowledgement lock");
+        acknowledged
+            .entry(image)
+            .and_modify(|old| *old = (*old).max(revision))
+            .or_insert(revision);
+    }
+
+    fn settle(&mut self, live_images: &HashSet<AssetId<Image>>) {
+        let acknowledged = std::mem::take(
+            &mut *self
+                .acknowledged
+                .lock()
+                .expect("canvas acknowledgement lock"),
+        );
+        self.canvases.retain(|canvas| {
+            live_images.contains(&canvas.image_id)
+                && acknowledged
+                    .get(&canvas.image_id)
+                    .is_none_or(|revision| *revision != canvas.revision)
+        });
+    }
+
+    fn merge(&mut self, image_id: AssetId<Image>, tiles: Vec<DirtyTileUpload>) {
+        if tiles.is_empty() {
+            return;
+        }
+        self.next_revision = self
+            .next_revision
+            .checked_add(1)
+            .expect("canvas upload revision exhausted");
+        let revision = self.next_revision;
+        if let Some(pending) = self
+            .canvases
+            .iter_mut()
+            .find(|canvas| canvas.image_id == image_id)
+        {
+            pending.revision = revision;
+            for tile in tiles {
+                if let Some(old) = pending
+                    .tiles
+                    .iter_mut()
+                    .find(|old| old.offset == tile.offset)
+                {
+                    *old = tile;
+                } else {
+                    pending.tiles.push(tile);
+                }
+            }
+        } else {
+            self.canvases.push(CanvasDirtyTileBuffer {
+                image_id,
+                revision,
+                tiles,
+            });
+        }
+    }
 }
 
 /// Convert f32 RGBA surface data to u8 RGBA for GPU upload
@@ -324,7 +400,7 @@ impl Plugin for PaintingSystemPlugin {
 }
 
 /// Setup textures for newly created canvas planes
-fn setup_canvas_textures(
+pub(crate) fn setup_canvas_textures(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -379,7 +455,7 @@ fn setup_canvas_textures(
         let handle = images.add(image);
 
         // Update the material to use this texture
-        if let Some(material) = materials.get_mut(&material_handle.0) {
+        if let Some(mut material) = materials.get_mut(&material_handle.0) {
             material.base_color_texture = Some(handle.clone());
             material.base_color = Color::WHITE; // Full color so texture shows through
             info!(
@@ -402,7 +478,13 @@ fn setup_canvas_textures(
 }
 
 /// Process paint events and update the pipeline
-fn process_paint_events(
+pub(crate) fn process_paint_events(world: &mut World) {
+    world
+        .run_system_cached(apply_paint_events)
+        .expect("Canvas owner resources available");
+}
+
+fn apply_paint_events(
     mut paint_events: MessageReader<PaintEvent>,
     mut painting_res: ResMut<PaintingResource>,
     canvas_query: Query<&CanvasPlane>,
@@ -499,6 +581,32 @@ fn process_paint_events(
                     }
                 }
             }
+            PaintEvent::History { plane_entity, redo } => {
+                if let Ok(canvas) = canvas_query.get(*plane_entity)
+                    && let Some(pipeline) = painting_res.get_pipeline_mut(canvas.plane_id)
+                {
+                    let active = pipeline.is_stroking();
+                    let before = (pipeline.undo_count(), pipeline.redo_count());
+                    let restored = if *redo {
+                        pipeline.redo()
+                    } else {
+                        pipeline.undo()
+                    };
+                    debug!(
+                        target: "pentimento_scene::native_history",
+                        "Native canvas history applied: plane={} redo={} restored={} active_before={} history_before={:?} history_after={:?}",
+                        canvas.plane_id,
+                        redo,
+                        restored,
+                        active,
+                        before,
+                        (pipeline.undo_count(), pipeline.redo_count())
+                    );
+                    if restored {
+                        info!("Paint history restored (redo={})", redo);
+                    }
+                }
+            }
         }
     }
 }
@@ -507,12 +615,17 @@ fn process_paint_events(
 ///
 /// This system runs in the main world and prepares tile data for upload.
 /// The actual GPU upload happens in the render world via `upload_dirty_tiles_to_gpu`.
-fn extract_dirty_tiles(
+pub(crate) fn extract_dirty_tiles(
     mut painting_res: ResMut<PaintingResource>,
     canvas_query: Query<(&CanvasPlane, &CanvasTexture)>,
     mut buffer: ResMut<DirtyTileUploadBuffer>,
+    mut images: Option<ResMut<Assets<Image>>>,
 ) {
-    buffer.canvases.clear();
+    let live_images = canvas_query
+        .iter()
+        .map(|(_, texture)| texture.image_handle.id())
+        .collect();
+    buffer.settle(&live_images);
 
     for (canvas_plane, canvas_texture) in canvas_query.iter() {
         let Some(pipeline) = painting_res.get_pipeline_mut(canvas_plane.plane_id) else {
@@ -524,10 +637,7 @@ fn extract_dirty_tiles(
             continue;
         }
 
-        let mut canvas_buffer = CanvasDirtyTileBuffer {
-            image_id: canvas_texture.image_handle.id(),
-            tiles: Vec::with_capacity(dirty_tiles.len()),
-        };
+        let mut tiles = Vec::with_capacity(dirty_tiles.len());
 
         for tile_coord in dirty_tiles {
             let (x, y, w, h) = pipeline.get_tile_bounds(tile_coord);
@@ -543,14 +653,61 @@ fn extract_dirty_tiles(
                 rgba8.len()
             );
 
-            canvas_buffer.tiles.push(DirtyTileUpload {
+            tiles.push(DirtyTileUpload {
                 offset: (x, y),
                 size: (w, h),
-                data: rgba8,
+                data: rgba8.into(),
             });
         }
 
-        buffer.canvases.push(canvas_buffer);
+        buffer.merge(canvas_texture.image_handle.id(), tiles);
+    }
+    // Keep a CPU recovery copy without scheduling redundant whole-image
+    // uploads. Retry pending patches too if an absent image is reinserted.
+    if let Some(images) = images.as_mut() {
+        for canvas in &buffer.canvases {
+            if let Some(image) = images
+                .bypass_change_detection()
+                .get_mut_untracked(canvas.image_id)
+            {
+                for tile in &canvas.tiles {
+                    patch_canvas_backing(image, tile);
+                }
+            }
+        }
+    }
+}
+
+fn patch_canvas_backing(image: &mut Image, tile: &DirtyTileUpload) {
+    let size = image.texture_descriptor.size;
+    if image.texture_descriptor.format != TextureFormat::Rgba8UnormSrgb
+        || size.depth_or_array_layers != 1
+        || tile
+            .offset
+            .0
+            .checked_add(tile.size.0)
+            .is_none_or(|end| end > size.width)
+        || tile
+            .offset
+            .1
+            .checked_add(tile.size.1)
+            .is_none_or(|end| end > size.height)
+        || tile.data.len() != tile.size.0 as usize * tile.size.1 as usize * 4
+    {
+        return;
+    }
+    let Some(bytes) = image.data.as_mut() else {
+        return;
+    };
+    let width = size.width as usize;
+    if bytes.len() != width * size.height as usize * 4 {
+        return;
+    }
+    for row in 0..tile.size.1 as usize {
+        let destination = ((tile.offset.1 as usize + row) * width + tile.offset.0 as usize) * 4;
+        let source = row * tile.size.0 as usize * 4;
+        let count = tile.size.0 as usize * 4;
+        bytes[destination..destination + count].copy_from_slice(&tile.data[source..source + count]);
     }
 }
 
@@ -608,6 +765,7 @@ fn upload_dirty_tiles_to_gpu(
                 tile.offset.0, tile.offset.1, tile.size.0, tile.size.1
             );
         }
+        buffer.acknowledge(canvas.image_id, canvas.revision);
     }
 }
 
@@ -631,5 +789,190 @@ mod tests {
 
         assert_eq!(res.brush_color, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(res.get_pipeline(0).unwrap().color(), [1.0, 0.0, 0.0, 1.0]);
+    }
+}
+
+#[cfg(test)]
+mod upload_retry_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn fixture() -> (World, Entity, Handle<Image>) {
+        let mut world = World::new();
+        world.init_resource::<PaintingResource>();
+        world.init_resource::<DirtyTileUploadBuffer>();
+        world.init_resource::<Assets<Image>>();
+        let image = Image::new_fill(
+            Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[0, 0, 0, 0],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        let handle = world.resource_mut::<Assets<Image>>().add(image);
+        world
+            .resource_mut::<PaintingResource>()
+            .get_or_create_pipeline(7, 256, 256);
+        let entity = world
+            .spawn((
+                CanvasPlane::new(7, 256, 256, 1., 1.),
+                CanvasTexture {
+                    image_handle: handle.clone(),
+                    needs_full_upload: true,
+                },
+            ))
+            .id();
+        (world, entity, handle)
+    }
+
+    #[test]
+    fn unavailable_render_retries_same_bytes_then_acknowledged_idle_is_empty() {
+        let (mut world, _, handle) = fixture();
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        let extracted = world.resource::<DirtyTileUploadBuffer>().clone();
+        assert_eq!(extracted.canvases[0].tiles.len(), 4);
+        for _ in 0..3 {
+            // The production uploader returns without an acknowledgement when
+            // queue/GpuImage resources are absent, exactly as on startup.
+            world.run_system_once(upload_dirty_tiles_to_gpu).unwrap();
+            world.run_system_once(extract_dirty_tiles).unwrap();
+            let pending = &world.resource::<DirtyTileUploadBuffer>().canvases[0];
+            assert_eq!(pending.revision, extracted.canvases[0].revision);
+            assert!(Arc::ptr_eq(
+                &pending.tiles[0].data,
+                &extracted.canvases[0].tiles[0].data
+            ));
+        }
+        extracted.acknowledge(handle.id(), extracted.canvases[0].revision);
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        assert!(
+            world
+                .resource::<DirtyTileUploadBuffer>()
+                .canvases
+                .is_empty()
+        );
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        assert!(
+            world
+                .resource::<DirtyTileUploadBuffer>()
+                .canvases
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn pending_pixels_patch_reinserted_cpu_image_without_new_stroke() {
+        let (mut world, _, handle) = fixture();
+        let saved = world
+            .resource_mut::<Assets<Image>>()
+            .remove(handle.id())
+            .unwrap();
+        world
+            .resource_mut::<PaintingResource>()
+            .get_pipeline_mut(7)
+            .unwrap()
+            .clear([0.2, 0.4, 0.1, 1.]);
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        let pending = world.resource::<DirtyTileUploadBuffer>().clone();
+        world
+            .resource_mut::<Assets<Image>>()
+            .insert(handle.id(), saved)
+            .unwrap();
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        assert_eq!(
+            world.resource::<DirtyTileUploadBuffer>().canvases[0].revision,
+            pending.canvases[0].revision
+        );
+        let bytes = world
+            .resource::<Assets<Image>>()
+            .get(&handle)
+            .unwrap()
+            .data
+            .as_ref()
+            .unwrap();
+        assert!(bytes.chunks_exact(4).all(|p| p
+            == [
+                linear_to_srgb_u8(0.2),
+                linear_to_srgb_u8(0.4),
+                linear_to_srgb_u8(0.1),
+                255
+            ]));
+    }
+
+    #[test]
+    fn cancel_and_undo_supersede_pending_pixels_without_stale_ack_loss() {
+        let (mut world, entity, handle) = fixture();
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        let initial = world.resource::<DirtyTileUploadBuffer>().clone();
+        initial.acknowledge(handle.id(), initial.canvases[0].revision);
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        let baseline = world
+            .resource::<Assets<Image>>()
+            .get(&handle)
+            .unwrap()
+            .data
+            .clone();
+        for cancel in [true, false] {
+            let mut painting = world.resource_mut::<PaintingResource>();
+            let pipeline = painting.get_pipeline_mut(7).unwrap();
+            pipeline.set_color([0.6, 0.2, 0.1, 1.]);
+            pipeline.begin_stroke(7, if cancel { 1 } else { 2 }, 0);
+            pipeline.stroke_to(64., 64., 1.);
+            world.run_system_once(extract_dirty_tiles).unwrap();
+            let drawn = world.resource::<DirtyTileUploadBuffer>().clone();
+            assert!(!drawn.canvases[0].tiles.is_empty());
+            assert_ne!(
+                world.resource::<Assets<Image>>().get(&handle).unwrap().data,
+                baseline
+            );
+            let mut painting = world.resource_mut::<PaintingResource>();
+            let pipeline = painting.get_pipeline_mut(7).unwrap();
+            if cancel {
+                pipeline.cancel_stroke();
+            } else {
+                pipeline.end_stroke();
+                pipeline.undo();
+            }
+            world.run_system_once(extract_dirty_tiles).unwrap();
+            let restored = world.resource::<DirtyTileUploadBuffer>().clone();
+            assert!(restored.canvases[0].revision > drawn.canvases[0].revision);
+            assert_eq!(
+                world.resource::<Assets<Image>>().get(&handle).unwrap().data,
+                baseline
+            );
+            drawn.acknowledge(handle.id(), drawn.canvases[0].revision);
+            world.run_system_once(extract_dirty_tiles).unwrap();
+            assert_eq!(
+                world.resource::<DirtyTileUploadBuffer>().canvases[0].revision,
+                restored.canvases[0].revision
+            );
+            restored.acknowledge(handle.id(), restored.canvases[0].revision);
+            world.run_system_once(extract_dirty_tiles).unwrap();
+            assert!(
+                world
+                    .resource::<DirtyTileUploadBuffer>()
+                    .canvases
+                    .is_empty()
+            );
+        }
+        world
+            .resource_mut::<PaintingResource>()
+            .get_pipeline_mut(7)
+            .unwrap()
+            .clear([0.2, 0.1, 0.3, 1.]);
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        world.despawn(entity);
+        world.run_system_once(extract_dirty_tiles).unwrap();
+        assert!(
+            world
+                .resource::<DirtyTileUploadBuffer>()
+                .canvases
+                .is_empty(),
+            "deleted canvas drops pending bytes"
+        );
     }
 }

@@ -1,16 +1,10 @@
 //! Diffusion texture streaming for Pentimento
 //!
-//! Supports both local GPU inference (via candle) and remote server streaming.
+//! Supports remote server streaming.
 
 mod remote;
 
-#[cfg(feature = "local")]
-mod local;
-
 pub use remote::RemoteDiffusion;
-
-#[cfg(feature = "local")]
-pub use local::LocalDiffusion;
 
 use pentimento_ipc::DiffusionRequest;
 use thiserror::Error;

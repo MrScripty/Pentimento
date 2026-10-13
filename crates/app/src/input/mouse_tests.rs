@@ -72,7 +72,7 @@ fn fixture() -> (App, Entity, Rc<RefCell<Vec<Recorded>>>) {
         .add_plugins(super::super::InputPlugin);
     let window = app.world_mut().spawn(Window::default()).id();
     let recorded = Rc::new(RefCell::new(Vec::new()));
-    app.insert_non_send_resource(crate::render::FrontendResource {
+    app.insert_non_send(crate::render::FrontendResource {
         backend: Box::new(RecordingBackend(recorded.clone())),
         texture_format: TextureFormat::Rgba8Unorm,
     });
@@ -346,6 +346,7 @@ fn wheel_events_use_their_chronological_positions_and_existing_sign() {
         WindowEvent::MouseWheel(MouseWheel {
             window,
             unit: bevy::input::mouse::MouseScrollUnit::Line,
+            phase: bevy::input::touch::TouchPhase::Moved,
             x: 1.,
             y: 2.,
         })
@@ -414,7 +415,7 @@ fn coordinates_follow_capture_overlay_and_cef_dpi_contracts() {
 }
 
 #[test]
-fn browser_producer_preserves_egui_owned_input_flags() {
+fn egui_region_arbitration_updates_pointer_and_preserves_keyboard_flag() {
     let (mut app, window, _) = fixture();
     app.world_mut()
         .resource_mut::<crate::config::PentimentoConfig>()
@@ -427,6 +428,16 @@ fn browser_producer_preserves_egui_owned_input_flags() {
         &mut app,
         &[
             moved(window, 400., 250.),
+            button(window, bevy::input::mouse::MouseButton::Left, true),
+        ],
+    );
+    let flags = app.world().resource::<FrontendInputBlockState>();
+    assert!(!flags.block_pointer && flags.block_keyboard);
+    native_batch(
+        &mut app,
+        &[
+            button(window, bevy::input::mouse::MouseButton::Left, false),
+            moved(window, 700., 180.),
             button(window, bevy::input::mouse::MouseButton::Left, true),
         ],
     );
@@ -578,7 +589,7 @@ fn window_focus_loss_also_releases_a_held_pointer() {
 }
 
 #[test]
-fn browser_waits_for_layout_but_dioxus_and_egui_do_not_wait_for_svelte() {
+fn browser_and_egui_wait_for_owned_layout_while_dioxus_does_not() {
     for mode in [
         crate::config::CompositeMode::Capture,
         crate::config::CompositeMode::Overlay,
@@ -597,6 +608,7 @@ fn browser_waits_for_layout_but_dioxus_and_egui_do_not_wait_for_svelte() {
             crate::config::CompositeMode::Capture
                 | crate::config::CompositeMode::Overlay
                 | crate::config::CompositeMode::Cef
+                | crate::config::CompositeMode::Egui
         );
         assert_eq!(
             app.world()
@@ -1415,4 +1427,495 @@ fn open_resets_old_document_hover_before_native_stationary_press() {
         "the new document must use current Window cursor B rather than old document hover A"
     );
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn confirm_new_in_native_fixture(app: &mut App) {
+    app.init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<Image>>()
+        .init_resource::<Assets<StandardMaterial>>()
+        .init_resource::<pentimento_scene::PaintingResource>();
+    let generation = pentimento_scene::project_generation(app.world());
+    crate::render::dispatch_ui_commands(
+        app.world_mut(),
+        [UiToBevy::ProjectCommand(
+            pentimento_ipc::ProjectCommand::New {
+                expected_generation: generation.to_string(),
+                confirm_discard: true,
+            },
+        )],
+    );
+    assert_eq!(
+        pentimento_scene::project_generation(app.world()),
+        generation + 1
+    );
+}
+#[test]
+fn new_suppresses_old_held_mouse_until_release_and_allows_fresh_scene_press() {
+    let (mut app, window, _) = fixture();
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 350., 310.),
+            button(window, MouseButton::Left, true),
+        ],
+    );
+    native_batch(&mut app, &[]); // old press was consumed; no active editing mode owns it
+    confirm_new_in_native_fixture(&mut app);
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 400., 330.),
+            button(window, MouseButton::Left, true),
+        ],
+    );
+    assert!(
+        !app.world()
+            .resource::<pentimento_scene::FrontendScenePointerInput>()
+            .has_scene_press()
+    );
+    assert!(
+        app.world()
+            .resource::<FrontendInputBlockState>()
+            .blocks_pointer()
+    );
+    native_batch(&mut app, &[button(window, MouseButton::Left, false)]);
+    native_batch(&mut app, &[button(window, MouseButton::Left, true)]);
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::FrontendScenePointerInput>()
+            .has_scene_press()
+    );
+}
+#[test]
+fn new_suppresses_old_touch_until_end_and_releases_old_ui_capture() {
+    use bevy::input::touch::{TouchInput, TouchPhase};
+    let (mut app, window, recorded) = fixture();
+    let contact = |id, phase| {
+        WindowEvent::TouchInput(TouchInput {
+            window,
+            id,
+            phase,
+            position: Vec2::new(650., 100.),
+            force: None,
+        })
+    };
+    native_batch(&mut app, &[contact(17, TouchPhase::Started)]);
+    assert!(app.world().resource::<FrontendUiLayout>().pointer_captured);
+    confirm_new_in_native_fixture(&mut app);
+    recorded.borrow_mut().clear();
+    native_batch(
+        &mut app,
+        &[
+            contact(17, TouchPhase::Moved),
+            contact(18, TouchPhase::Started),
+        ],
+    );
+    assert!(!app.world().resource::<FrontendUiLayout>().pointer_captured);
+    assert!(
+        app.world()
+            .resource::<FrontendInputBlockState>()
+            .blocks_pointer()
+    );
+    assert!(
+        recorded
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, Recorded::Mouse(MouseEvent::ButtonUp { .. })))
+    );
+    assert!(
+        !recorded
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, Recorded::Mouse(MouseEvent::ButtonDown { .. })))
+    );
+    native_batch(
+        &mut app,
+        &[
+            contact(17, TouchPhase::Ended),
+            contact(18, TouchPhase::Started),
+        ],
+    );
+    assert!(app.world().resource::<FrontendUiLayout>().pointer_captured);
+}
+
+fn native_history_chord(window: Entity, redo: bool) -> Vec<WindowEvent> {
+    let mut events = vec![history_key(window, KeyCode::ControlLeft, true)];
+    if redo {
+        events.push(history_key(window, KeyCode::ShiftLeft, true));
+    }
+    events.extend([
+        history_key(window, KeyCode::KeyZ, true),
+        history_key(window, KeyCode::KeyZ, false),
+    ]);
+    if redo {
+        events.push(history_key(window, KeyCode::ShiftLeft, false));
+    }
+    events.push(history_key(window, KeyCode::ControlLeft, false));
+    events
+}
+
+fn native_history_counts(app: &App) -> (usize, usize) {
+    let pipeline = app
+        .world()
+        .resource::<pentimento_scene::PaintingResource>()
+        .get_pipeline(7)
+        .unwrap();
+    (pipeline.undo_count(), pipeline.redo_count())
+}
+
+fn native_history_redo_fixture() -> (App, Entity, Vec<u8>) {
+    let (mut app, window) = native_paint_fixture();
+    native_batch(&mut app, &native_paint_gesture(window));
+    let first = native_paint_pixels(&app);
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::PaintCommand(pentimento_ipc::PaintCommand::SetBrushColor {
+            color: [1., 0., 1., 1.],
+        }),
+    ));
+    native_batch(&mut app, &native_paint_gesture(window));
+    assert_eq!(native_history_counts(&app), (2, 0));
+    for _ in 0..2 {
+        native_batch(&mut app, &native_history_chord(window, false));
+    }
+    assert_eq!(native_history_counts(&app), (0, 2));
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::PaintCommand(pentimento_ipc::PaintCommand::SetBrushOpacity { opacity: 0. }),
+    ));
+    (app, window, first)
+}
+
+#[test]
+fn native_paint_history_release_then_redo_is_ordered_and_one_shot() {
+    // A zero-opacity focus click is a real no-op transaction that retains Redo.
+    // Two available entries reveal an accidental duplicate or idle-frame replay.
+    for mode in [
+        crate::config::CompositeMode::Cef,
+        crate::config::CompositeMode::Dioxus,
+        crate::config::CompositeMode::Egui,
+    ] {
+        for history_first in [false, true] {
+            let (mut app, window, first) = native_history_redo_fixture();
+            app.world_mut()
+                .resource_mut::<crate::config::PentimentoConfig>()
+                .composite_mode = mode;
+            let before = native_paint_pixels(&app);
+            native_batch(
+                &mut app,
+                &[
+                    moved(window, 350., 310.),
+                    button(window, MouseButton::Left, true),
+                ],
+            );
+            assert!(
+                app.world()
+                    .resource::<pentimento_scene::PaintMode>()
+                    .current_stroke
+                    .is_some()
+            );
+            assert!(
+                app.world()
+                    .resource::<pentimento_scene::PaintingResource>()
+                    .get_pipeline(7)
+                    .unwrap()
+                    .is_stroking()
+            );
+            assert!(native_paint_pixels(&app) == before);
+            let release = button(window, MouseButton::Left, false);
+            let mut events = if history_first {
+                native_history_chord(window, true)
+            } else {
+                vec![release.clone()]
+            };
+            if history_first {
+                events.push(release);
+            } else {
+                events.extend(native_history_chord(window, true));
+            }
+            native_batch(&mut app, &events);
+            let expected = if history_first { (0, 2) } else { (1, 1) };
+            assert_eq!(
+                native_history_counts(&app),
+                expected,
+                "{mode:?}, history first={history_first}"
+            );
+            let expected_pixels = if history_first { &before } else { &first };
+            assert!(native_paint_pixels(&app) == *expected_pixels);
+            let pipeline = app
+                .world()
+                .resource::<pentimento_scene::PaintingResource>()
+                .get_pipeline(7)
+                .unwrap();
+            assert!(!pipeline.is_stroking());
+            let packets = pipeline.log().total_packet_count();
+            assert_eq!(packets, 3, "two authored strokes and one completed no-op");
+            for _ in 0..3 {
+                native_batch(&mut app, &[]);
+                assert_eq!(native_history_counts(&app), expected);
+                assert!(native_paint_pixels(&app) == *expected_pixels);
+                assert_eq!(
+                    app.world()
+                        .resource::<pentimento_scene::PaintingResource>()
+                        .get_pipeline(7)
+                        .unwrap()
+                        .log()
+                        .total_packet_count(),
+                    packets
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn native_paint_history_complete_gesture_and_undo_match_split_frame_order() {
+    for undo_first in [false, true] {
+        let prepare = || {
+            let (mut app, window) = native_paint_fixture();
+            app.world_mut()
+                .resource_mut::<crate::config::PentimentoConfig>()
+                .composite_mode = crate::config::CompositeMode::Cef;
+            native_batch(&mut app, &native_paint_gesture(window));
+            (app, window)
+        };
+        let (mut split, window) = prepare();
+        let (prefix, suffix) = if undo_first {
+            (
+                native_history_chord(window, false),
+                native_paint_gesture(window),
+            )
+        } else {
+            (
+                native_paint_gesture(window),
+                native_history_chord(window, false),
+            )
+        };
+        native_batch(&mut split, &prefix);
+        native_batch(&mut split, &suffix);
+        let (mut joined, window) = prepare();
+        let mut events = if undo_first {
+            native_history_chord(window, false)
+        } else {
+            native_paint_gesture(window)
+        };
+        events.extend(if undo_first {
+            native_paint_gesture(window)
+        } else {
+            native_history_chord(window, false)
+        });
+        native_batch(&mut joined, &events);
+        assert_eq!(
+            native_history_counts(&joined),
+            native_history_counts(&split)
+        );
+        assert!(native_paint_pixels(&joined) == native_paint_pixels(&split));
+        assert!(
+            !joined
+                .world()
+                .resource::<pentimento_scene::PaintingResource>()
+                .get_pipeline(7)
+                .unwrap()
+                .is_stroking()
+        );
+    }
+}
+
+#[test]
+fn native_paint_history_held_stroke_refuses_redo_without_later_replay() {
+    let (mut app, window, _) = native_history_redo_fixture();
+    let before = native_paint_pixels(&app);
+    let mut events = vec![
+        moved(window, 350., 310.),
+        button(window, MouseButton::Left, true),
+    ];
+    events.extend(native_history_chord(window, true));
+    native_batch(&mut app, &events);
+    assert_eq!(native_history_counts(&app), (0, 2));
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::PaintingResource>()
+            .get_pipeline(7)
+            .unwrap()
+            .is_stroking()
+    );
+    native_batch(&mut app, &[button(window, MouseButton::Left, false)]);
+    native_batch(&mut app, &[]);
+    assert_eq!(native_history_counts(&app), (0, 2));
+    assert!(native_paint_pixels(&app) == before);
+}
+
+#[test]
+fn native_paint_history_release_chords_preserve_modifiers_and_skip_repeats() {
+    let (mut app, window, first) = native_history_redo_fixture();
+    native_batch(
+        &mut app,
+        &[
+            moved(window, 350., 310.),
+            button(window, MouseButton::Left, true),
+        ],
+    );
+    let mut events = vec![button(window, MouseButton::Left, false)];
+    let mut redo = native_history_chord(window, true);
+    let mut repeat = history_key(window, KeyCode::KeyZ, true);
+    if let WindowEvent::KeyboardInput(event) = &mut repeat {
+        event.repeat = true;
+    }
+    redo.insert(3, repeat);
+    events.extend(redo);
+    events.extend(native_history_chord(window, false));
+    events.extend(native_history_chord(window, true));
+    native_batch(&mut app, &events);
+    assert_eq!(native_history_counts(&app), (1, 1));
+    assert!(native_paint_pixels(&app) == first);
+    native_batch(&mut app, &[]);
+    assert_eq!(native_history_counts(&app), (1, 1));
+}
+
+#[test]
+fn native_paint_history_frame_owner_resets_for_unarbitrated_frontend() {
+    let (mut app, window, _) = native_history_redo_fixture();
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::FrontendScenePointerInput>()
+            .owns_canvas_history()
+    );
+    app.world_mut()
+        .resource_mut::<crate::config::PentimentoConfig>()
+        .composite_mode = crate::config::CompositeMode::Dioxus;
+    app.world_mut().resource_mut::<FrontendUiLayout>().received = false;
+    for expected in [(1, 1), (2, 0)] {
+        native_batch(&mut app, &native_history_chord(window, true));
+        assert!(
+            !app.world()
+                .resource::<pentimento_scene::FrontendScenePointerInput>()
+                .owns_canvas_history()
+        );
+        assert_eq!(native_history_counts(&app), expected);
+    }
+    native_batch(&mut app, &[]);
+    assert_eq!(native_history_counts(&app), (2, 0));
+}
+
+#[test]
+fn native_paint_history_before_mode_exit_keeps_legacy_owner_once() {
+    for mode in [
+        crate::config::CompositeMode::Cef,
+        crate::config::CompositeMode::Egui,
+    ] {
+        let (mut app, window, first) = native_history_redo_fixture();
+        app.world_mut()
+            .resource_mut::<crate::config::PentimentoConfig>()
+            .composite_mode = mode;
+        let mut events = native_history_chord(window, true);
+        events.extend([
+            history_key(window, KeyCode::ShiftLeft, true),
+            history_key(window, KeyCode::Tab, true),
+        ]);
+        native_batch(&mut app, &events);
+        assert_eq!(native_history_counts(&app), (1, 1));
+        assert!(native_paint_pixels(&app) == first);
+        assert!(!app.world().resource::<pentimento_scene::PaintMode>().active);
+        assert!(
+            !app.world()
+                .resource::<pentimento_scene::FrontendScenePointerInput>()
+                .owns_canvas_history()
+        );
+        native_batch(
+            &mut app,
+            &[
+                history_key(window, KeyCode::Tab, false),
+                history_key(window, KeyCode::ShiftLeft, false),
+            ],
+        );
+        app.world_mut()
+            .resource_mut::<pentimento_scene::PaintMode>()
+            .active = true;
+        native_batch(&mut app, &[]);
+        assert_eq!(native_history_counts(&app), (1, 1));
+        assert!(native_paint_pixels(&app) == first);
+    }
+}
+
+#[derive(Resource)]
+struct InvalidateNativeCanvasHistory(bool);
+fn invalidate_native_canvas_history(
+    mut invalidate: ResMut<InvalidateNativeCanvasHistory>,
+    mut input: ResMut<pentimento_scene::FrontendScenePointerInput>,
+) {
+    if std::mem::take(&mut invalidate.0) {
+        input.clear();
+    }
+}
+#[test]
+fn native_paint_history_mid_frame_clear_cannot_replay_through_legacy_hotkey() {
+    let (mut app, window, _) = native_history_redo_fixture();
+    let before = native_paint_pixels(&app);
+    app.insert_resource(InvalidateNativeCanvasHistory(true));
+    app.add_systems(
+        PreUpdate,
+        invalidate_native_canvas_history
+            .after(forward_native_input)
+            .before(super::super::hotkeys::handle_paint_undo_hotkey),
+    );
+    native_batch(&mut app, &native_history_chord(window, true));
+    assert_eq!(native_history_counts(&app), (0, 2));
+    assert!(native_paint_pixels(&app) == before);
+    native_batch(&mut app, &[]);
+    assert_eq!(native_history_counts(&app), (0, 2));
+    native_batch(&mut app, &native_history_chord(window, true));
+    assert_eq!(native_history_counts(&app), (1, 1));
+}
+
+#[test]
+fn native_paint_history_before_color_sample_reads_the_restored_canvas() {
+    let (mut app, window) = native_paint_fixture();
+    native_batch(&mut app, &native_paint_gesture(window));
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::PaintCommand(pentimento_ipc::PaintCommand::SetColorSampling { enabled: true }),
+    ));
+    let mut events = native_history_chord(window, false);
+    events.extend([
+        moved(window, 350., 310.),
+        button(window, MouseButton::Left, true),
+        button(window, MouseButton::Left, false),
+    ]);
+    native_batch(&mut app, &events);
+    assert_eq!(native_history_counts(&app), (0, 1));
+    assert!(
+        app.world()
+            .resource::<pentimento_scene::PaintMode>()
+            .sample_color,
+        "the restored transparent canvas must reject sampling, leaving the sampler armed"
+    );
+    native_batch(&mut app, &[]);
+    assert_eq!(native_history_counts(&app), (0, 1));
+    assert!(pentimento_scene::dispatch_brush_ui_command(
+        app.world_mut(),
+        &UiToBevy::PaintCommand(pentimento_ipc::PaintCommand::SetBrushColor {
+            color: [1., 0., 1., 1.],
+        }),
+    ));
+    let mut events = native_history_chord(window, true);
+    events.extend([
+        moved(window, 350., 310.),
+        button(window, MouseButton::Left, true),
+        button(window, MouseButton::Left, false),
+    ]);
+    native_batch(&mut app, &events);
+    assert_eq!(native_history_counts(&app), (1, 0));
+    assert!(
+        !app.world()
+            .resource::<pentimento_scene::PaintMode>()
+            .sample_color
+    );
+    assert_eq!(
+        app.world()
+            .resource::<pentimento_scene::PaintingResource>()
+            .brush_color,
+        [0., 0., 0., 1.]
+    );
+    native_batch(&mut app, &[]);
+    assert_native_paint_complete(&app, 1);
 }

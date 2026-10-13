@@ -16,6 +16,8 @@ painting = { path = "../painting", features = ["bevy"], optional = true }
 
 bevy = { workspace = true, features = [
     "3d",
+    "bevy_ui",
+    "bevy_ui_render",
     "wayland",
     "x11",
     "ktx2",

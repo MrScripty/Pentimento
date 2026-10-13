@@ -1,8 +1,8 @@
 //! Explicit v1 asset subset. Unsupported data is refused, never silently dropped.
 use bevy::{
     asset::RenderAssetUsages,
+    mesh::UvChannel,
     mesh::{Indices, VertexAttributeValues},
-    pbr::UvChannel,
     prelude::*,
     render::render_resource::{Extent3d, Face, PrimitiveTopology, TextureDimension, TextureFormat},
 };

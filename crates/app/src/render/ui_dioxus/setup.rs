@@ -77,16 +77,16 @@ pub fn setup_dioxus_texture(world: &mut World) {
 
     // Create the IPC bridge (non-send due to mpsc::Receiver)
     let (bridge, bridge_handle) = DioxusBridge::new();
-    world.insert_non_send_resource(DioxusBridgeResource { bridge_handle });
+    world.insert_non_send(DioxusBridgeResource { bridge_handle });
 
     // Create the UI event channel for input forwarding
     let (event_sender, event_receiver) = create_event_channel();
-    world.insert_non_send_resource(DioxusRendererResource::new(event_sender));
-    world.insert_non_send_resource(event_receiver);
+    world.insert_non_send(DioxusRendererResource::new(event_sender));
+    world.insert_non_send(event_receiver);
 
     // Create the BlitzDocument with our Dioxus UI components
     let document = BlitzDocument::new(width, height, scale_factor, bridge);
-    world.insert_non_send_resource(BlitzDocumentResource { document });
+    world.insert_non_send(BlitzDocumentResource { document });
 
     // Create a Bevy Image for the UI texture
     let mut image = Image::new_fill(

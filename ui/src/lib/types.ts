@@ -30,7 +30,7 @@ export type MeshEditTool = 'Select' | 'Extrude' | 'LoopCut' | 'Knife' | 'Merge' 
 // Messages from Bevy to UI
 export type BevyToUi =
     | { type:'ProjectStateChanged';data:ProjectState }
-    | { type:'ProjectOperationFinished';data:{operation:'Save'|'Open';success:boolean;message:string} }
+    | { type:'ProjectOperationFinished';data:{operation:'Save'|'Open'|'New';success:boolean;message:string} }
     | { type: 'Initialize'; data: { scene_info: SceneInfo; settings: AppSettings } }
     | { type: 'SceneUpdated'; data: SceneInfo }
     | { type: 'SelectionChanged'; data: { selected_ids: string[] } }
@@ -97,8 +97,8 @@ export interface DepthViewState {
     reason: string | null;
 }
 
-export type ProjectCommand='GetState'|{Save:{path:string}}|{Open:{path:string}};
-export interface ProjectState {path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}
+export type ProjectCommand='GetState'|{New:{expected_generation:string;confirm_discard:boolean}}|{Save:{path:string}}|{Open:{path:string}};
+export interface ProjectState {generation:string;path:string|null;available:boolean;active:boolean;blocked:boolean;notice:string|null}
 
 // Scene types
 export interface SceneInfo {
@@ -290,13 +290,18 @@ export interface PaintTargetState {
     pending_bytes: number; limit_bytes: number; evicted_strokes: number; uv_layers?: UvLayerState;
 }
 
-export interface UvLayerInfo { id:number; name:string; visible:boolean; opacity:number; locked:boolean; is_active:boolean }
+export type UvLayerBlendMode = 'Normal' | 'Multiply' | 'Screen' | 'Overlay';
+export type UvLayerPaintTarget = 'Color' | 'Mask';
+export interface UvLayerInfo { id:number; name:string; visible:boolean; opacity:number; locked:boolean; is_active:boolean; blend_mode:UvLayerBlendMode; has_mask:boolean; mask_enabled:boolean; paint_target:UvLayerPaintTarget }
 export interface UvLayerState { receivers:{mesh_id:number;name:string;layered:boolean}[]; receiver:number|null; enabled:boolean; layers:UvLayerInfo[]; can_undo:boolean; can_redo:boolean; active:boolean; projection_preview?:boolean; conflicted:boolean; notice:string|null }
 export type UvLayerCommand = 'Enable' | 'Undo' | 'Redo'
     | {SelectReceiver:{mesh_id:number}} | {Create:{name:string}} | {Duplicate:{layer_id:number}}
     | {Delete:{layer_id:number}} | {Select:{layer_id:number}} | {Rename:{layer_id:number;name:string}}
     | {Reorder:{layer_id:number;new_index:number}} | {Visible:{layer_id:number;visible:boolean}}
-    | {Opacity:{layer_id:number;opacity:number}} | {Lock:{layer_id:number;locked:boolean}};
+    | {Opacity:{layer_id:number;opacity:number}} | {Lock:{layer_id:number;locked:boolean}}
+    | {BlendMode:{layer_id:number;mode:UvLayerBlendMode}}
+    | {AddMask:{layer_id:number}} | {RemoveMask:{layer_id:number}}
+    | {MaskEnabled:{layer_id:number;enabled:boolean}} | {PaintTarget:{layer_id:number;target:UvLayerPaintTarget}};
 export type PaintCommand =
     | {UvLayers:{command:UvLayerCommand}}
     | { SetTarget: { target: PaintTarget } }

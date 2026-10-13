@@ -106,3 +106,40 @@ nonempty source after projection controls. Sculpt Radius qualification requires
 both paired DOM values and a diagnostic receipt from the actual pipeline preset.
 These extra requirements need a successful hosted run on the published source;
 local CPU and browser passes alone do not qualify native rendering.
+
+## Native Canvas release/history ordering
+
+Native Canvas history in stable-owner frames now travels with the arbitrated
+pointer batch. Each admitted, nonrepeat Ctrl+Z/Ctrl+Shift+Z intent retains its
+resolved modifiers, native event position and canvas entity. The paint collector
+queues History beside StrokeEnd/Cancel, and the same cached pipeline reader
+processes them in order. Release then Redo can therefore finish a no-op focus
+click and restore exactly one entry in the same frame. Redo before release,
+or while actually holding a stroke, still refuses. History produces no replay
+packets, and idle frames cannot retry a consumed shortcut.
+
+Frame publication clears old intents; mid-frame document invalidation discards
+them while retaining an empty ownership marker so the legacy hotkey cannot
+replay the same keys. The next native frame resets that marker even if the
+frontend switches to an unarbitrated route. Intents cannot transfer to a different
+active canvas. DirectUV and the egui/Sculpt segmented dispatcher retain their
+existing owners.
+
+This repair deliberately preserves two older routes: frames handled by the
+existing Shift+Tab Canvas mode reducer and frames with an armed Canvas color
+sampler use their prior history handler. The sampler reads pixels synchronously,
+and mode changes are still reduced from frame-final state. This change does not
+claim fully chronological mode transitions or sampler/history interleaving.
+Tests preserve admitted history before Paint exit and sampling from the restored
+surface, without duplicate or idle-frame replay.
+
+The normal native `input::` gates include release/Redo in both event orders,
+whole gestures with Undo versus split-frame controls, held-stroke refusal,
+complete modifier releases, repeated keydown suppression, frame/document reset,
+mode exit and sampling. Run `cargo test --locked -p pentimento --features cef
+input::` and `cargo test --locked -p pentimento --features egui input::` for the
+actual app modules; the scene-only queue regression is included in `cargo test
+--locked -p pentimento-scene --features sculpting,mesh_painting
+paint_input_batch_tests --lib`. Native rendered acceptance remains a separate
+gate. The qualification harness retains its one-shot physical click/shortcut
+path, with no extra stroke-settlement wait or shortcut retry.

@@ -11,7 +11,7 @@ await mkdir(`${output}/driver-fixtures`, { recursive: true });
 assert.ok(process.env.PENTIMENTO_DIRECTUV_DRIVER_BIN, 'build the qualified app or scene test binary first');
 const driver = spawn(process.env.PENTIMENTO_DIRECTUV_DRIVER_BIN,
   [process.env.PENTIMENTO_DIRECTUV_DRIVER_TEST ?? 'input::direct_uv_native_tests::browser_driver', '--exact', '--ignored', '--nocapture', '--test-threads=1'],
-  { env: { ...process.env, PENTIMENTO_DIRECTUV_DRIVER_DIR: `${output}/driver-fixtures`, PENTIMENTO_BRUSH_PRESETS_PATH: `${output}/driver-fixtures/brushes.json` }, stdio: ['pipe', 'pipe', 'pipe'] });
+  { env: { ...process.env, PENTIMENTO_UV_LAYERS_DRIVER: '1', PENTIMENTO_DIRECTUV_DRIVER_DIR: `${output}/driver-fixtures`, PENTIMENTO_BRUSH_PRESETS_PATH: `${output}/driver-fixtures/brushes.json` }, stdio: ['pipe', 'pipe', 'pipe'] });
 const waiting = [];
 let initialResolve, initialReject;
 const initial = new Promise((resolve, reject) => { initialResolve = resolve; initialReject = reject; });
@@ -155,12 +155,43 @@ try {
   assert.deepEqual(applied.layers[2],beforeApply.layers[2]);
   await uv('Undo UV layer edit');assert.deepEqual(last.uv_layers_document,beforeApply);assert.deepEqual(last.source,source);
   await uv('Redo UV layer edit');assert.deepEqual(last.uv_layers_document,applied);
+  const modeControl=page.getByLabel('UV layer blend mode',{exact:true});
+  for(const mode of ['Multiply','Screen','Overlay']) {
+    const before=last.uv_layers_document;const beforeImage=last.image;
+    await modeControl.selectOption(mode);await settle();
+    const blended=last.uv_layers_document;const blendedImage=last.image;
+    assert.equal(await modeControl.inputValue(),mode);
+    assert.equal(blended.layers.find(l=>l.meta.id===blended.active_layer).meta.blend_mode,mode);
+    assert.deepEqual(blended.layers.map(l=>l.pixels),before.layers.map(l=>l.pixels));
+    assert.notDeepEqual(blendedImage,beforeImage);
+    await uv('Undo UV layer edit');assert.deepEqual(last.uv_layers_document,before);assert.deepEqual(last.image,beforeImage);
+    await uv('Redo UV layer edit');assert.deepEqual(last.uv_layers_document,blended);assert.deepEqual(last.image,blendedImage);
+  }
+  // Combined blend metadata edits exercise the actual controls and derived CPU image.
+  const blendBaseline=last.uv_layers_document;const blendBaselineImage=last.image;
+  await page.getByLabel('UV layer opacity (%)',{exact:true}).fill('37');
+  await page.getByLabel('UV layer opacity (%)',{exact:true}).press('Tab');await settle();
+  const blendFaded=last.uv_layers_document;const blendFadedImage=last.image;
+  assert.notDeepEqual(blendFadedImage,blendBaselineImage);
+  assert.deepEqual(blendFaded.layers.map(l=>l.pixels),blendBaseline.layers.map(l=>l.pixels));
+  await uv('Lower UV layer');
+  const blendReordered=last.uv_layers_document;const blendReorderedImage=last.image;
+  assert.notDeepEqual(blendReorderedImage,blendFadedImage);
+  for(const layer of blendBaseline.layers)assert.deepEqual(blendReordered.layers.find(l=>l.meta.id===layer.meta.id).pixels,layer.pixels);
+  await uv('Undo UV layer edit');assert.deepEqual(last.uv_layers_document,blendFaded);assert.deepEqual(last.image,blendFadedImage);
+  await uv('Undo UV layer edit');assert.deepEqual(last.uv_layers_document,blendBaseline);assert.deepEqual(last.image,blendBaselineImage);
+  await uv('Redo UV layer edit');await uv('Redo UV layer edit');
+  assert.deepEqual(last.uv_layers_document,blendReordered);assert.deepEqual(last.image,blendReorderedImage);
+  await uv('Undo UV layer edit');await uv('Undo UV layer edit');
+  assert.deepEqual(last.uv_layers_document,blendBaseline);assert.deepEqual(last.image,blendBaselineImage);
+  applied=last.uv_layers_document;
   await page.screenshot({path:`${output}/uv-layers-shared-apply.jpg`,type:'jpeg',quality:85});
   const live=page.getByLabel('Live UV preview',{exact:true});
   const accepted=await checkpoint();const historyCount=last.undo;
   await live.click();await settle();assert.deepEqual(last.uv_layers_document,applied);assert.equal(last.undo,historyCount);
   assert.equal(await page.getByRole('button',{name:'DirectUV surface',exact:true}).isDisabled(),true);
   assert.equal(await page.getByRole('button',{name:'Create UV layer',exact:true}).isDisabled(),true);
+  assert.equal(await modeControl.isDisabled(),true);
   const firstPreview=await checkpoint();assert.notDeepEqual(firstPreview.bits,accepted.bits);
   await color('#00cc55');await stroke();const afterSource=last.source;const secondPreview=await checkpoint();
   assert.notDeepEqual(secondPreview.bits,firstPreview.bits);assert.deepEqual(last.uv_layers_document,applied);
@@ -181,6 +212,7 @@ try {
   assert.deepEqual(last.uv_layers_document,applied);assert.equal(last.undo,0);assert.equal(last.redo,0);
   await canvas.focus();await page.keyboard.press('Shift+Tab');await settle();
   await uv('DirectUV surface');
+  assert.equal(await modeControl.inputValue(),'Overlay');
   await uv('Detail');await page.getByLabel('Show UV layer Detail',{exact:true}).click();await settle();
   const pen=async(phase,x,pressure)=>{await canvas.dispatchEvent(`pointer${phase}`,{pointerType:'pen',pointerId:17,isPrimary:true,clientX:box.x+box.width*x,clientY:box.y+box.height/2,pressure});await settle();};
   const penBefore=last.uv_layers_document;
@@ -191,7 +223,7 @@ try {
   await page.screenshot({path:`${output}/uv-layers-reopened-pen.jpg`,type:'jpeg',quality:85});
   assert.deepEqual(errors,[]);
   const report={status:'passed',qualification:'actual Svelte controls -> native app dispatcher and native input forwarding -> production CPU UV and Canvas assets, owned v3 file I/O',native_cef_gpu:false,physical_stylus:false,
-    checks:['create-name-select','DirectUV-selected-layer-mouse','selection-preserves-redo','visibility-opacity-lock','duplicate-both-reorder-directions-delete-recovery','Canvas-Apply-same-selected-layer','UV-Undo-separate-from-Canvas-source','v3-Save-Open-order-metadata-active-target','post-Open-DOM-pen-pressure-Undo-Redo','live-preview-repeated-strokes-and-source-Undo-Redo','live-owner-disables-stack-and-Direct','cancel-preview-retains-source-and-history','Apply-preview-once-pauses-live']};
+    checks:['create-name-select','DirectUV-selected-layer-mouse','selection-preserves-redo','visibility-opacity-lock','duplicate-both-reorder-directions-delete-recovery','Canvas-Apply-same-selected-layer','UV-Undo-separate-from-Canvas-source','v3-Save-Open-order-metadata-active-target','post-Open-DOM-pen-pressure-Undo-Redo','live-preview-repeated-strokes-and-source-Undo-Redo','live-owner-disables-stack-and-Direct','cancel-preview-retains-source-and-history','Apply-preview-once-pauses-live','blend-controls-CPU-upload-Undo-Redo-live-lock-v3-reopen','blend-opacity-order-raw-bits-CPU-image-Undo-Redo']};
   await writeFile(`${output}/browser-shared-uv-report.json`,`${JSON.stringify(report,null,2)}\n`);console.log(JSON.stringify(report));
 } finally {
   await browser.close(); if(driver.exitCode===null)driver.stdin.end('{"stop":true}\n');

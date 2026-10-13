@@ -5,14 +5,17 @@ const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
-const { inspectScene, measureScene } = require('./frame-evidence.cjs');
+const { inspectScene, measureScene, locateRedObject, inspectSelectionOutline } = require('./frame-evidence.cjs');
 const { createSandboxObserver } = require('./sandbox-observer.cjs');
+const { isFatalConsoleMessage } = require('./runtime-errors.cjs');
+const { inspectUnavailableDepth } = require('./depth-evidence.cjs');
 const root = path.resolve(__dirname, '../..');
 const preflight = process.argv.includes('--preflight');
 const phase = preflight ? 'environment' : 'production';
-const evidence = path.join(root, 'electron-runtime-evidence');
+const evidence = process.env.PENTIMENTO_EVIDENCE_DIR || path.join(root, 'electron-runtime-evidence');
 fs.mkdirSync(evidence, { recursive: true });
-const result = { phase, electron: process.versions.electron, console: [], errors: [], network: [], success: false, willQuit: false };
+const result = { phase, electron: process.versions.electron, versions: process.versions,
+    platform: process.platform, architecture: process.arch, argv: process.argv, console: [], errors: [], network: [], success: false, willQuit: false };
 result.graphics = { useGL: app.commandLine.getSwitchValue('use-gl'), useANGLE: app.commandLine.getSwitchValue('use-angle'),
     unsafeSwiftShader: app.commandLine.hasSwitch('enable-unsafe-swiftshader') };
 const save = () => fs.writeFileSync(path.join(evidence, `${phase}.json`), JSON.stringify(result, null, 2) + '\n');
@@ -29,6 +32,7 @@ async function prepareShutdown() {
 let lastCanvasCapture;
 let productionObserver;
 function fail(error) {
+    result.success = false;
     result.errors.push(String(error?.stack || error));
     try {
         if (lastCanvasCapture && !lastCanvasCapture.isEmpty()) {
@@ -46,10 +50,10 @@ function fail(error) {
 process.on('uncaughtException', fail);
 process.on('unhandledRejection', fail);
 const timeout = setTimeout(() => fail(new Error(`${phase} startup did not qualify within 120 seconds`)), 120_000);
-assert.equal(process.versions.electron, '44.5.1');
+assert.equal(process.versions.electron, require('../../src-electron/package.json').devDependencies.electron);
 assert.equal(process.getuid?.() === 0, false, 'runtime tests must run as non-root');
 assert.equal(Boolean(process.env.VITE_DEV_SERVER_URL), false, 'production qualification must not use a dev server');
-for (const flag of ['no-sandbox', 'disable-setuid-sandbox', 'disable-web-security']) {
+for (const flag of ['no-sandbox', 'disable-setuid-sandbox', 'disable-web-security', 'enable-unsafe-swiftshader']) {
     assert.equal(app.commandLine.hasSwitch(flag), false, `forbidden test flag: ${flag}`);
 }
 app.on('will-quit', () => {
@@ -94,11 +98,9 @@ if (preflight) {
         contents.on('preload-error', (_event, preload, error) => fail(new Error(`preload ${preload}: ${error}`)));
         contents.on('render-process-gone', (_event, details) => fail(new Error(`renderer terminated: ${JSON.stringify(details)}`)));
         let inspected = false;
-        contents.on('console-message', async (_event, details, oldMessage) => {
-            const message = typeof details === 'object' ? details.message : oldMessage;
-            const level = typeof details === 'object' ? details.level : details;
+        contents.on('console-message', async ({ message, level }) => {
             result.console.push({ level, message });
-            if (level === 'error' || level === 3 || /panicked at|unhandled rejection|WebGL.*context lost/i.test(String(message))) return fail(new Error(message));
+            if (isFatalConsoleMessage(level, message)) return fail(new Error(message));
             if (message !== 'Pentimento: WASM loaded!' || inspected) return;
             inspected = true;
             try {
@@ -110,7 +112,7 @@ if (preflight) {
                         return control ? {disabled: control.disabled, reason: control.title} : null;
                     })()`);
                     if (result.depthReadiness && (!result.depthReadiness.disabled ||
-                        /unavailable on WebGL\/OpenGL/.test(result.depthReadiness.reason))) break;
+                        /unavailable.*(?:OpenGL\/WebGL|WebGL\/OpenGL)/i.test(result.depthReadiness.reason))) break;
                     await new Promise(resolve => setTimeout(resolve, 100));
                 }
                 assert.equal(contents.getURL(), pathToFileURL(expectedDocument).href);
@@ -136,16 +138,21 @@ if (preflight) {
                 assert.equal(result.renderer.marker, true);
                 assert.equal(result.renderer.process, 'undefined');
                 assert.equal(result.renderer.require, 'undefined');
-                assert.equal(result.renderer.depth.disabled, true);
-                assert.equal(result.renderer.depth.pressed, 'false');
-                assert.match(result.renderer.depth.reason, /unavailable on WebGL\/OpenGL/);
                 assert.ok(result.renderer.elements > 0);
                 assert.ok(result.renderer.canvasVisible && result.renderer.canvasWidth > 0 && result.renderer.canvasHeight > 0);
+                result.depthView = inspectUnavailableDepth(await contents.executeJavaScript(`(() => {
+                    const button = document.querySelector('button[aria-label="Toggle depth view"]');
+                    const status = document.getElementById('depth-view-status');
+                    return { disabled: button?.disabled, pressed: button?.getAttribute('aria-pressed'),
+                        title: button?.title, describedBy: button?.getAttribute('aria-describedby'),
+                        status: status?.textContent.trim(), statusHidden: status?.hidden };
+                })()`));
                 const screenshot = await contents.capturePage();
                 assert.equal(screenshot.isEmpty(), false);
                 fs.writeFileSync(path.join(evidence, 'production.png'), screenshot.toPNG());
                 result.screenshot = screenshot.getSize();
                 // Hide only the DOM overlay during canvas capture, so UI cannot make a blank canvas pass.
+                let selectionBefore;
                 await contents.executeJavaScript("document.querySelector('#app').style.visibility = 'hidden'");
                 try {
                     result.canvasFrames = [];
@@ -175,7 +182,53 @@ if (preflight) {
                         }
                         fs.writeFileSync(path.join(evidence, `canvas-${frame}.png`), canvas.toPNG());
                         result.canvasFrames.push({ rect, size, ...scene });
+                        selectionBefore = { canvas, bitmap: canvas.toBitmap(), rect, size };
                     }
+                } finally {
+                    await contents.executeJavaScript("document.querySelector('#app').style.visibility = ''");
+                }
+                const object = locateRedObject(selectionBefore.bitmap, selectionBefore.size.width, selectionBefore.size.height);
+                const click = {
+                    x: Math.round(selectionBefore.rect.x + (object.point.x + .5) * selectionBefore.rect.width / selectionBefore.size.width),
+                    y: Math.round(selectionBefore.rect.y + (object.point.y + .5) * selectionBefore.rect.height / selectionBefore.size.height),
+                };
+                assert.equal(await contents.executeJavaScript(`document.elementFromPoint(${click.x}, ${click.y})?.id`), 'bevy-canvas',
+                    'selection input must target a visible scene object, not an overlay');
+                result.selection = { click, object, rect: selectionBefore.rect, size: selectionBefore.size, input: 'Electron mouse events' };
+                fs.writeFileSync(path.join(evidence, 'selection-before.png'), selectionBefore.canvas.toPNG());
+                win.focus();
+                contents.focus();
+                contents.sendInputEvent({ type: 'mouseMove', ...click });
+                // Software-rendered picking needs a completed hover update before
+                // press, and a separate update with the button down before release.
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                contents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...click });
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                contents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...click });
+                // Park the pointer on the toolbar, so hover feedback cannot qualify.
+                contents.sendInputEvent({ type: 'mouseMove', x: 20, y: 20 });
+                await new Promise(resolve => setTimeout(resolve, 500));
+                await contents.executeJavaScript("document.querySelector('#app').style.visibility = 'hidden'");
+                try {
+                    const deadline = Date.now() + 15_000;
+                    let consecutive = 0, lastError;
+                    while (Date.now() < deadline && consecutive < 2) {
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                        const after = await contents.capturePage(selectionBefore.rect);
+                        const size = after.getSize();
+                        assert.deepEqual(size, selectionBefore.size);
+                        fs.writeFileSync(path.join(evidence, 'selection-after.png'), after.toPNG());
+                        try {
+                            inspectScene(after.toBitmap(), size.width, size.height);
+                            result.selection.pixels = inspectSelectionOutline(selectionBefore.bitmap, after.toBitmap(), size.width, size.height);
+                            consecutive++;
+                        } catch (error) {
+                            lastError = error;
+                            consecutive = 0;
+                        }
+                    }
+                    assert.equal(consecutive, 2, `selection did not produce a stable real outline: ${lastError?.message}`);
+                    result.selection.stableFrames = consecutive;
                 } finally {
                     await contents.executeJavaScript("document.querySelector('#app').style.visibility = ''");
                 }

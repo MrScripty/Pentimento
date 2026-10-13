@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use painting::BrushPreset;
 use painting::mesh_surface::{MeshPtexSurface, MeshUvSurface};
 use painting::types::{BlendMode, MeshHit, MeshStorageMode};
+use painting::uv_layers::UvPaintTarget;
 
 use crate::mesh_paint_mode::{MeshPaintEvent, PaintableMesh};
 use crate::mesh_uv_history::{UvEntry, UvHistory, same_pixels};
@@ -18,6 +19,7 @@ use crate::mesh_uv_history::{UvEntry, UvHistory, same_pixels};
 struct UvProjectionPreview {
     mesh_id: u32,
     layer: u32,
+    target: UvPaintTarget,
     pixels: Vec<[f32; 4]>,
 }
 
@@ -28,6 +30,7 @@ struct ActiveMeshStroke {
     dimensions: (u32, u32),
     before_bound: bool,
     layer: Option<u32>,
+    target: UvPaintTarget,
     brush: painting::brush::BrushEngine,
     last_face: Option<u32>,
     color: [f32; 4],
@@ -248,7 +251,7 @@ impl MeshPaintingResource {
             .atlas
             .surface_mut()
             .pixels_mut()
-            .copy_from_slice(&layers.active().pixels);
+            .copy_from_slice(&layers.active().working_pixels());
         let (w, h) = surface.dimensions();
         surface.atlas.mark_region_dirty(0, 0, w, h);
     }
@@ -260,7 +263,11 @@ impl MeshPaintingResource {
         if self.has_active_stroke() || self.has_projection_preview() || self.blocked.contains(&id) {
             return Err("Finish the UV transaction or reopen its conflicted owner".into());
         }
-        let authoring = !matches!(&op, painting::uv_layers::UvLayerOp::Select(_));
+        let authoring = !matches!(
+            &op,
+            painting::uv_layers::UvLayerOp::Select(_)
+                | painting::uv_layers::UvLayerOp::PaintTarget(_, _)
+        );
         let changed = self
             .uv_layers
             .get_mut(&id)
@@ -309,10 +316,11 @@ impl MeshPaintingResource {
     pub(crate) fn preview_valid(&self) -> bool {
         self.projection_preview.as_ref().is_some_and(|p| {
             !self.blocked.contains(&p.mesh_id)
-                && self
-                    .uv_layers
-                    .get(&p.mesh_id)
-                    .is_some_and(|l| l.document().active_layer == p.layer && l.paintable().is_ok())
+                && self.uv_layers.get(&p.mesh_id).is_some_and(|l| {
+                    l.document().active_layer == p.layer
+                        && l.active().meta.paint_target == p.target
+                        && l.paintable().is_ok()
+                })
                 && self.uv_surfaces.get(&p.mesh_id).is_some_and(|s| {
                     painting::uv_layers::same_uv_pixels(s.atlas.surface().pixels(), &p.pixels)
                 })
@@ -330,7 +338,8 @@ impl MeshPaintingResource {
         self.projection_preview = Some(UvProjectionPreview {
             mesh_id: id,
             layer: layers.document().active_layer,
-            pixels: layers.active().pixels.clone(),
+            target: layers.active().meta.paint_target,
+            pixels: layers.active().working_pixels(),
         });
         Ok(())
     }
@@ -350,14 +359,7 @@ impl MeshPaintingResource {
         if preview.mesh_id != id {
             return Err("UV preview receiver changed".into());
         }
-        for ((out, src), dst) in preview
-            .pixels
-            .iter_mut()
-            .zip(source)
-            .zip(&layers.active().pixels)
-        {
-            *out = painting::uv_layers::uv_over(*src, *dst);
-        }
+        preview.pixels = layers.projected_workspace(source)?;
         let surface = self.uv_surfaces.get_mut(&id).unwrap();
         surface
             .atlas
@@ -386,7 +388,7 @@ impl MeshPaintingResource {
             .uv_layers
             .get_mut(&p.mesh_id)
             .unwrap()
-            .paint(p.layer, p.pixels);
+            .paint_on(p.layer, p.target, p.pixels);
         if result.as_ref().is_ok_and(|v| *v) {
             self.discard_uv_redo();
             self.trim_shared_history(p.mesh_id);
@@ -570,6 +572,16 @@ impl MeshPaintingResource {
             }
             MeshStorageMode::Ptex { .. } => (None, (0, 0)),
         };
+        let target = self
+            .uv_layers
+            .get(&paintable.mesh_id)
+            .map_or(UvPaintTarget::Color, |l| l.active().meta.paint_target);
+        let color = if target == UvPaintTarget::Mask {
+            let gray = painting::uv_layers::uv_luminance(self.brush_color);
+            [gray, gray, gray, self.brush_color[3]]
+        } else {
+            self.brush_color
+        };
         self.active_stroke = Some(ActiveMeshStroke {
             last_face: None,
             entity,
@@ -582,7 +594,8 @@ impl MeshPaintingResource {
                 .get(&paintable.mesh_id)
                 .map(|l| l.document().active_layer),
             brush: painting::brush::BrushEngine::new(self.brush_preset.clone()),
-            color: self.brush_color,
+            target,
+            color,
             blend: self.blend_mode,
         });
         true
@@ -625,11 +638,11 @@ impl MeshPaintingResource {
             return;
         }
         if let Some(layer_id) = active.layer {
-            let result = self
-                .uv_layers
-                .get_mut(&active.mesh_id)
-                .unwrap()
-                .paint(layer_id, surface.atlas.surface().pixels().to_vec());
+            let result = self.uv_layers.get_mut(&active.mesh_id).unwrap().paint_on(
+                layer_id,
+                active.target,
+                surface.atlas.surface().pixels().to_vec(),
+            );
             if result.is_err() {
                 surface
                     .atlas
@@ -644,6 +657,7 @@ impl MeshPaintingResource {
                 self.discard_uv_redo();
             }
             self.trim_shared_history(active.mesh_id);
+            self.sync_active_layer(active.mesh_id);
             return;
         }
         let after = surface.atlas.surface().pixels().to_vec();
@@ -842,7 +856,7 @@ pub(crate) fn sync_mesh_paint_owners(world: &mut World) {
 }
 
 /// Set up paint textures for newly added PaintableMesh entities.
-fn setup_mesh_paint_textures(
+pub(crate) fn setup_mesh_paint_textures(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -965,7 +979,13 @@ fn setup_mesh_paint_textures(
 }
 
 /// Process mesh paint events and apply dabs to surfaces.
-pub(crate) fn process_mesh_paint_events(
+pub(crate) fn process_mesh_paint_events(world: &mut World) {
+    world
+        .run_system_cached(apply_mesh_paint_events)
+        .expect("DirectUV owner resources available");
+}
+
+fn apply_mesh_paint_events(
     mut mesh_paint_events: MessageReader<MeshPaintEvent>,
     mut painting_res: ResMut<MeshPaintingResource>,
     mesh_query: Query<(&PaintableMesh, &MeshPaintTexture)>,
@@ -1235,7 +1255,7 @@ fn apply_uv_input(r: &mut MeshPaintingResource, id: u32, hit: &MeshHit, pressure
 }
 
 /// Upload dirty tiles to GPU for UV surfaces, compositing paint over original texture.
-fn upload_mesh_dirty_tiles(
+pub(crate) fn upload_mesh_dirty_tiles(
     mut painting_res: ResMut<MeshPaintingResource>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1256,45 +1276,45 @@ fn upload_mesh_dirty_tiles(
                         continue;
                     }
 
-                    let original_data =
-                        paint_texture.original_texture.as_ref().and_then(|handle| {
-                            images.get(handle).and_then(|image| image.data.as_deref())
-                        });
-                    let composite = painting_res
-                        .uv_layers
-                        .get(&paintable.mesh_id)
-                        .map(|layers| {
-                            layers
-                                .document()
-                                .composite_active(Some(surface.atlas.surface().pixels()))
-                        });
-                    let data = if let Some(pixels) = &composite {
-                        crate::uv_layer_scene::display_pixels(
-                            pixels,
-                            paint_texture.original_base_color,
-                            original_data,
-                        )
+                    // Retain dirty tiles when the destination is temporarily absent.
+                    // The next frame retries from the same authoritative CPU source.
+                    if !images.contains(paint_texture.image_handle.id()) {
+                        continue;
+                    }
+                    let bound = if painting_res.uv_layers.contains_key(&paintable.mesh_id) {
+                        let Some(bound) = upload_layered_uv_tiles(
+                            &mut painting_res,
+                            &mut images,
+                            paintable.mesh_id,
+                            &paint_texture,
+                        ) else {
+                            continue;
+                        };
+                        bound
                     } else {
-                        composite_uv(surface, paint_texture.original_base_color, original_data)
-                    };
-                    let bound = composite.as_ref().map_or_else(
-                        || {
-                            painting_res
-                                .display_bound
-                                .get(&paintable.mesh_id)
-                                .copied()
-                                .unwrap_or(true)
-                        },
-                        |pixels| pixels.iter().any(|p| p[3] > 0.),
-                    );
-                    if let Some(image) = images.get_mut(&paint_texture.image_handle) {
+                        let original_data = paint_texture
+                            .original_texture
+                            .as_ref()
+                            .and_then(|handle| images.get(handle))
+                            .and_then(|image| image.data.as_deref());
+                        let data =
+                            composite_uv(surface, paint_texture.original_base_color, original_data);
+                        let bound = painting_res
+                            .display_bound
+                            .get(&paintable.mesh_id)
+                            .copied()
+                            .unwrap_or(true);
+                        let Some(mut image) = images.get_mut(&paint_texture.image_handle) else {
+                            continue;
+                        };
                         painting_res
                             .shared_display_bytes
                             .insert(paintable.mesh_id, data.clone());
                         image.data = Some(data);
-                    }
+                        bound
+                    };
                     if let Some(material_ref) = material_handle {
-                        if let Some(material) = materials.get_mut(&material_ref.0) {
+                        if let Some(mut material) = materials.get_mut(&material_ref.0) {
                             if bound {
                                 material.base_color_texture =
                                     Some(paint_texture.image_handle.clone());
@@ -1326,6 +1346,78 @@ fn upload_mesh_dirty_tiles(
         }
     }
     painting_res.image_tick = Some(images.last_changed());
+}
+
+/// Recompose only invalidated atlas tiles. The authoritative display witness is
+/// patched alongside the Bevy image so external-edit detection stays exact.
+/// Bevy may still upload the whole changed Image asset to the GPU.
+fn upload_layered_uv_tiles(
+    painting: &mut MeshPaintingResource,
+    images: &mut Assets<Image>,
+    mesh_id: u32,
+    texture: &MeshPaintTexture,
+) -> Option<bool> {
+    let surface = painting.uv_surfaces.get(&mesh_id)?;
+    let document = painting.uv_layers.get(&mesh_id)?.document();
+    let (width, height) = surface.dimensions();
+    let byte_count = width as usize * height as usize * 4;
+    let image = images.get(&texture.image_handle)?;
+    let full = texture.needs_full_upload
+        || image
+            .data
+            .as_ref()
+            .is_none_or(|data| data.len() != byte_count)
+        || painting
+            .shared_display_bytes
+            .get(&mesh_id)
+            .is_none_or(|data| data.len() != byte_count);
+    let regions: Vec<_> = if full {
+        vec![(0, 0, width, height)]
+    } else {
+        surface
+            .atlas
+            .dirty_tiles()
+            .map(|tile| surface.atlas.get_tile_bounds(tile))
+            .collect()
+    };
+    let original = texture
+        .original_texture
+        .as_ref()
+        .and_then(|handle| images.get(handle))
+        .and_then(|image| image.data.as_deref());
+    let active = Some(surface.atlas.surface().pixels());
+    let patches: Vec<_> = regions
+        .into_iter()
+        .map(|region @ (x, y, w, h)| {
+            let pixels = document.composite_active_region(active, x, y, w, h);
+            let bytes = crate::uv_layer_scene::display_region(
+                &pixels,
+                texture.original_base_color,
+                original,
+                width,
+                region,
+            );
+            (region, bytes)
+        })
+        .collect();
+    let bound = document.has_visible_paint(active);
+    let mut image = images.get_mut(&texture.image_handle)?;
+    let display = image.data.get_or_insert_with(|| vec![0; byte_count]);
+    display.resize(byte_count, 0);
+    let witness = painting.shared_display_bytes.entry(mesh_id).or_default();
+    witness.resize(byte_count, 0);
+    for ((x, y, w, h), bytes) in patches {
+        for row in 0..h as usize {
+            let destination = ((y as usize + row) * width as usize + x as usize) * 4;
+            let source = row * w as usize * 4;
+            let count = w as usize * 4;
+            display[destination..destination + count]
+                .copy_from_slice(&bytes[source..source + count]);
+            witness[destination..destination + count]
+                .copy_from_slice(&bytes[source..source + count]);
+        }
+    }
+    Some(bound)
 }
 
 pub(crate) fn composite_uv(
@@ -1415,7 +1507,7 @@ fn linear_to_srgb_u8(linear: f32) -> u8 {
 #[cfg(test)]
 mod mixed_history_regression_tests {
     use super::*;
-    use painting::uv_layers::{UvLayerOp, UvLayers};
+    use painting::uv_layers::{UvBlendMode, UvLayerOp, UvLayers};
 
     fn legacy_commit(r: &mut MeshPaintingResource, size: u32, value: f32) {
         let p = PaintableMesh {
@@ -1448,9 +1540,18 @@ mod mixed_history_regression_tests {
             let mut shared = UvLayers::new(1, 1).unwrap();
             for n in 0..shared_entries {
                 shared
-                    .edit(UvLayerOp::Rename(0, format!("Shared {n}")))
+                    .edit(UvLayerOp::BlendMode(
+                        0,
+                        [
+                            UvBlendMode::Multiply,
+                            UvBlendMode::Screen,
+                            UvBlendMode::Overlay,
+                            UvBlendMode::Normal,
+                        ][n % 4],
+                    ))
                     .unwrap();
             }
+            let shared_before = shared.document().clone();
             r.uv_layers.insert(12, shared);
             legacy_commit(&mut r, 2, 0.2);
             assert_eq!(
@@ -1460,6 +1561,7 @@ mod mixed_history_regression_tests {
             );
             assert_eq!(r.undo_count(44), usize::from(shared_entries == 127));
             assert_eq!(r.undo_count(12) + r.undo_count(44), 128);
+            assert_eq!(r.uv_layers[&12].document(), &shared_before);
             assert!(r.history_bytes() <= r.history_limit_bytes());
             let evicted = r.evicted_history_strokes();
             assert_eq!(evicted, usize::from(shared_entries == 128));
@@ -1491,6 +1593,9 @@ mod mixed_history_regression_tests {
         let mut r = MeshPaintingResource::default();
         r.get_or_create_uv_surface(44, 512, 512);
         let mut shared = UvLayers::new(512, 512).unwrap();
+        shared
+            .edit(UvLayerOp::BlendMode(0, UvBlendMode::Overlay))
+            .unwrap();
         for n in 1..=7 {
             shared
                 .paint(0, vec![[n as f32 / 10., 0., 0., 1.]; 512 * 512])
@@ -1507,7 +1612,7 @@ mod mixed_history_regression_tests {
         legacy_commit(&mut r, 512, 0.2);
         assert!(r.history_bytes() <= r.history_limit_bytes());
         assert_eq!(r.history_bytes(), retained);
-        assert_eq!(r.undo_count(12), 7);
+        assert_eq!(r.undo_count(12), 8);
         assert_eq!(
             r.undo_count(44),
             0,
@@ -1515,5 +1620,295 @@ mod mixed_history_regression_tests {
         );
         assert_eq!(r.evicted_history_strokes(), 1);
         assert_eq!(r.uv_layers[&12].document(), &shared_before);
+    }
+}
+
+#[cfg(test)]
+mod incremental_upload_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use painting::uv_layers::{UvBlendMode, UvLayerOp, UvLayers};
+
+    fn image(width: u32, height: u32) -> Image {
+        Image::new_fill(
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[0, 0, 0, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        )
+    }
+
+    fn fixture(width: u32, height: u32) -> (World, Entity) {
+        let mut world = World::new();
+        world.init_resource::<MeshPaintingResource>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        let mut original = image(width, height);
+        for (i, p) in original
+            .data
+            .as_mut()
+            .unwrap()
+            .chunks_exact_mut(4)
+            .enumerate()
+        {
+            p.copy_from_slice(&[(i % 251) as u8, (i * 13 % 251) as u8, 92, 175]);
+        }
+        let original_handle = world.resource_mut::<Assets<Image>>().add(original);
+        let image_handle = world
+            .resource_mut::<Assets<Image>>()
+            .add(image(width, height));
+        let color = Color::linear_rgba(0.2, 0.4, 0.7, 0.8);
+        let material = world
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                base_color: color,
+                base_color_texture: Some(original_handle.clone()),
+                ..default()
+            });
+        let mut layers = UvLayers::new(width, height).unwrap();
+        layers
+            .paint(0, vec![[0.08, 0.12, 0.04, 0.4]; (width * height) as usize])
+            .unwrap();
+        layers.edit(UvLayerOp::Create("top".into())).unwrap();
+        let id = layers.document().active_layer;
+        layers
+            .edit(UvLayerOp::BlendMode(id, UvBlendMode::Overlay))
+            .unwrap();
+        layers.edit(UvLayerOp::AddMask(id)).unwrap();
+        let mut r = world.resource_mut::<MeshPaintingResource>();
+        r.get_or_create_uv_surface(44, width, height);
+        r.uv_layers.insert(44, layers);
+        r.sync_active_layer(44);
+        let entity = world
+            .spawn((
+                PaintableMesh {
+                    mesh_id: 44,
+                    storage_mode: MeshStorageMode::UvAtlas {
+                        resolution: (width, height),
+                    },
+                },
+                MeshPaintTexture {
+                    image_handle,
+                    original_texture: Some(original_handle),
+                    original_base_color: [0.2, 0.4, 0.7, 0.8],
+                    original_color_source: color,
+                    needs_full_upload: true,
+                    has_paint: false,
+                },
+                MeshMaterial3d(material),
+            ))
+            .id();
+        (world, entity)
+    }
+
+    fn full_reference(world: &World, entity: Entity) -> Vec<u8> {
+        let r = world.resource::<MeshPaintingResource>();
+        let texture = world.get::<MeshPaintTexture>(entity).unwrap();
+        let images = world.resource::<Assets<Image>>();
+        let active = r.uv_surfaces[&44].atlas.surface().pixels();
+        let pixels = r.uv_layers[&44].document().composite_active(Some(active));
+        crate::uv_layer_scene::display_pixels(
+            &pixels,
+            texture.original_base_color,
+            texture
+                .original_texture
+                .as_ref()
+                .and_then(|h| images.get(h))
+                .and_then(|i| i.data.as_deref()),
+        )
+    }
+
+    fn assert_display(world: &World, entity: Entity, expected: &[u8]) {
+        let texture = world.get::<MeshPaintTexture>(entity).unwrap();
+        let images = world.resource::<Assets<Image>>();
+        assert_eq!(
+            images.get(&texture.image_handle).unwrap().data.as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            world
+                .resource::<MeshPaintingResource>()
+                .shared_display_bytes[&44],
+            expected
+        );
+    }
+
+    #[test]
+    fn partial_uv_upload_matches_full_composite_at_clipped_tile_edges() {
+        let (mut world, entity) = fixture(259, 257);
+        world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+        assert_display(&world, entity, &full_reference(&world, entity));
+        for (x, y, pixel) in [
+            (258, 256, [0.3, 0.1, 0.2, 0.5]),
+            (140, 150, [0.2, 0.3, 0.1, 0.7]),
+        ] {
+            let mut r = world.resource_mut::<MeshPaintingResource>();
+            let surface = r.uv_surfaces.get_mut(&44).unwrap();
+            surface.atlas.surface_mut().set_pixel(x, y, pixel);
+            surface.atlas.mark_dirty(x, y);
+            assert_eq!(surface.atlas.dirty_tile_count(), 1);
+            let expected = full_reference(&world, entity);
+            world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+            assert_display(&world, entity, &expected);
+            assert!(!world.resource::<MeshPaintingResource>().uv_surfaces[&44].has_dirty_tiles());
+        }
+        // Full invalidation from metadata and active mask edits stays exact.
+        let mut r = world.resource_mut::<MeshPaintingResource>();
+        let id = r.uv_layers[&44].document().active_layer;
+        r.edit_uv_layer(44, UvLayerOp::Opacity(0, 0.2)).unwrap();
+        r.edit_uv_layer(44, UvLayerOp::PaintTarget(id, UvPaintTarget::Mask))
+            .unwrap();
+        let surface = r.uv_surfaces.get_mut(&44).unwrap();
+        surface
+            .atlas
+            .surface_mut()
+            .set_pixel(258, 256, [0.25, 0.25, 0.25, 1.]);
+        surface.atlas.mark_dirty(258, 256);
+        let expected = full_reference(&world, entity);
+        world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+        assert_display(&world, entity, &expected);
+    }
+
+    #[test]
+    fn missing_image_preserves_dirty_tiles_until_successful_retry() {
+        let (mut world, entity) = fixture(259, 257);
+        let handle = world
+            .get::<MeshPaintTexture>(entity)
+            .unwrap()
+            .image_handle
+            .clone();
+        let saved = world
+            .resource_mut::<Assets<Image>>()
+            .remove(handle.id())
+            .unwrap();
+        world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+        assert!(world.resource::<MeshPaintingResource>().uv_surfaces[&44].has_dirty_tiles());
+        assert!(
+            world
+                .get::<MeshPaintTexture>(entity)
+                .unwrap()
+                .needs_full_upload
+        );
+        world
+            .resource_mut::<Assets<Image>>()
+            .insert(handle.id(), saved)
+            .unwrap();
+        world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+        assert_display(&world, entity, &full_reference(&world, entity));
+        assert!(!world.resource::<MeshPaintingResource>().uv_surfaces[&44].has_dirty_tiles());
+        assert!(
+            !world
+                .get::<MeshPaintTexture>(entity)
+                .unwrap()
+                .needs_full_upload
+        );
+    }
+
+    #[test]
+    fn erasing_last_pixel_restores_original_material_binding() {
+        let (mut world, entity) = fixture(259, 257);
+        {
+            let mut r = world.resource_mut::<MeshPaintingResource>();
+            r.uv_layers.insert(44, UvLayers::new(259, 257).unwrap());
+            r.sync_active_layer(44);
+        }
+        for painted in [true, false, true, false] {
+            let mut r = world.resource_mut::<MeshPaintingResource>();
+            let surface = r.uv_surfaces.get_mut(&44).unwrap();
+            surface.atlas.surface_mut().set_pixel(
+                258,
+                256,
+                if painted {
+                    [0.3, 0.1, 0.2, 0.5]
+                } else {
+                    [0.; 4]
+                },
+            );
+            surface.atlas.mark_dirty(258, 256);
+            world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+            assert_display(&world, entity, &full_reference(&world, entity));
+            let texture = world.get::<MeshPaintTexture>(entity).unwrap();
+            assert_eq!(texture.has_paint, painted);
+            let material = world
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .unwrap();
+            let material = world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&material.0)
+                .unwrap();
+            assert_eq!(
+                material.base_color_texture,
+                if painted {
+                    Some(texture.image_handle.clone())
+                } else {
+                    texture.original_texture.clone()
+                }
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual CPU benchmark; run --release --ignored --nocapture"]
+    fn benchmark_layered_uv_upload() {
+        use std::{hint::black_box, time::Instant};
+        for scenario in ["painted_background", "sparse_last_pixel", "erased_empty"] {
+            let (mut world, entity) = fixture(1024, 1024);
+            if scenario != "painted_background" {
+                let mut r = world.resource_mut::<MeshPaintingResource>();
+                let layers = r.uv_layers.get_mut(&44).unwrap();
+                let active = layers.document().active_layer;
+                layers.edit(UvLayerOp::Select(0)).unwrap();
+                layers.paint(0, vec![[0.; 4]; 1024 * 1024]).unwrap();
+                layers.edit(UvLayerOp::Select(active)).unwrap();
+                r.sync_active_layer(44);
+            }
+            world.run_system_once(upload_mesh_dirty_tiles).unwrap();
+            let mut r = world.resource_mut::<MeshPaintingResource>();
+            let surface = r.uv_surfaces.get_mut(&44).unwrap();
+            surface.atlas.surface_mut().set_pixel(
+                1023,
+                1023,
+                if scenario == "erased_empty" {
+                    [0.; 4]
+                } else {
+                    [0.3, 0.1, 0.2, 0.5]
+                },
+            );
+            surface.atlas.mark_dirty(1023, 1023);
+            let expected = full_reference(&world, entity);
+            let mut baseline = Vec::new();
+            for _ in 0..7 {
+                let start = Instant::now();
+                for _ in 0..8 {
+                    black_box(full_reference(black_box(&world), entity));
+                }
+                baseline.push(start.elapsed().as_secs_f64() * 1000. / 8.);
+            }
+            let mut partial = Vec::new();
+            for _ in 0..7 {
+                let start = Instant::now();
+                for _ in 0..8 {
+                    world.resource_scope(|world, mut r: Mut<MeshPaintingResource>| {
+                        let texture = world.get::<MeshPaintTexture>(entity).unwrap().clone();
+                        let mut images = world.resource_mut::<Assets<Image>>();
+                        black_box(upload_layered_uv_tiles(&mut r, &mut images, 44, &texture));
+                    });
+                }
+                partial.push(start.elapsed().as_secs_f64() * 1000. / 8.);
+            }
+            baseline.sort_by(f64::total_cmp);
+            partial.sort_by(f64::total_cmp);
+            assert_display(&world, entity, &expected);
+            let checksum: u64 = expected.iter().map(|&b| b as u64).sum();
+            println!(
+                "layered_uv_upload,scenario={scenario},atlas=1024x1024,layers=2,dirty_tiles=1,baseline_median_ms={:.6},partial_median_ms={:.6},checksum={checksum}",
+                baseline[3], partial[3]
+            );
+        }
     }
 }

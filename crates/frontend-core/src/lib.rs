@@ -3,13 +3,17 @@
 //! Defines the `CompositeBackend` trait that abstracts over different UI rendering backends.
 
 pub mod cef_keyboard;
+pub mod cef_mouse;
 mod native_state;
 
 use std::sync::Arc;
 
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
 
-pub use native_state::{NativeUiState, apply_native_ui_message};
+pub use native_state::{
+    apply_native_ui_message, NativeColorSampling, NativePaintState, NativeProjectReceipt,
+    NativeProjectState, NativeSavedBrushState, NativeSculptHistory, NativeUiState,
+};
 
 /// Result of capturing the UI framebuffer
 #[derive(Debug, Clone)]

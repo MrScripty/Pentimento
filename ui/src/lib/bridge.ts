@@ -149,7 +149,7 @@ class BevyBridge {
                 // A fresh direct state supersedes any older startup snapshot.
                 this.pendingNativeState.delete(msg.type);
                 ipc.postMessage(JSON.stringify(msg));
-            } else if (['RequestBrushState', 'LayoutUpdate', 'SetUiInputCapture', 'UiDirty'].includes(msg.type)) {
+            } else if (['RequestBrushState', 'GetDepthViewState', 'LayoutUpdate', 'SetUiInputCapture', 'UiDirty'].includes(msg.type)) {
                 this.pendingNativeState.set(msg.type, msg);
             } else {
                 console.warn('IPC not available; mutation command was not queued.');

@@ -15,6 +15,7 @@ if [[ "$mode" != --frontend-only ]]; then
         grep -Fq "$suite" <<< "$scene_tests"
     done
     cargo test --locked -p pentimento-scene --features sculpting,mesh_painting,mesh_editing,selection,wireframe,atmosphere --lib
+    cargo test --locked -p pentimento-egui-ui --lib
     cargo check --locked -p pentimento-ipc --examples
 fi
 if [[ "$mode" != --engine-only ]]; then

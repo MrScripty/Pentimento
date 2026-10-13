@@ -72,11 +72,17 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli
 ```
 
-Node.js 22.12+ is required for the Svelte and Electron 44 tooling.
-The canonical `--install` explicitly runs the installed `install-electron`
-command after `npm ci`, so the runtime binary is acquired during bootstrap,
-not on first launch. Readiness checks inspect the lockfile version, installed
-package, binary version marker, and executable without importing Electron.
+Node.js 22.12.0+ is required for the Svelte and Electron tooling.
+
+The browser runtimes are pinned to CEF 154.0.34 (Rust bindings 154.5.0) and
+Electron 44.7.0, verified latest stable on 2026-10-13. `./launcher.sh --install`
+explicitly downloads Electron after `npm ci`. CEF's locked build provisions its
+matching distribution, helper, and resources; `./scripts/setup-cef.sh` can build
+that helper separately. Do not reuse an older `CEF_PATH` distribution. The
+launcher rejects mismatched or incomplete adjacent CEF resources rather than
+searching stale build caches. See the [upgrade evidence](docs/plans/browser-runtime-upgrade/plan.md)
+for verification status and remaining acceptance requirements.
+
 The Electron runtime CI separately builds genuine production UI/WASM, checks the
 ordinary Linux sandbox and preload isolation, and records canvas-only scene
 captures for visual review. Its test-only Linux supervisor records descendant

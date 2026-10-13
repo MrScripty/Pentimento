@@ -124,7 +124,11 @@ pub fn recalculate_boundary_normals(chunked_mesh: &mut ChunkedMesh) {
         for chunk in chunked_mesh.chunks.values_mut() {
             if let Some(&local_id) = chunk.original_to_local.get(&original_id) {
                 if let Some(vertex) = chunk.mesh.vertex_mut(local_id) {
-                    vertex.normal = averaged;
+                    if vertex.normal != averaged {
+                        vertex.normal = averaged;
+                        // Normal-only changes still require a render upload.
+                        chunk.mark_dirty();
+                    }
                 }
             }
         }

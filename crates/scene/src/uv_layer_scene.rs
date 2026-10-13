@@ -3,10 +3,12 @@
 use crate::{MeshPaintTexture, MeshPaintingResource, PaintMode, PaintableMesh};
 use bevy::prelude::*;
 use painting::uv_layers::{
-    UV_COMPOSITOR, UvLayerDocument, UvLayerMeta, UvLayerOp, UvLayers, UvLayersDocument,
+    UV_COMPOSITOR, UvBlendMode, UvLayerDocument, UvLayerMeta, UvLayerOp, UvLayers,
+    UvLayersDocument, UvPaintTarget,
 };
 use pentimento_ipc::{
-    PaintCommand, UvLayerCommand as Command, UvLayerInfo, UvLayerState, UvReceiverInfo,
+    PaintCommand, UvLayerBlendMode as WireBlend, UvLayerCommand as Command, UvLayerInfo,
+    UvLayerPaintTarget as WireTarget, UvLayerState, UvReceiverInfo,
 };
 
 pub(crate) fn composite_display(
@@ -22,31 +24,70 @@ pub(crate) fn display_pixels(
     color: [f32; 4],
     original: Option<&[u8]>,
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(pixels.len() * 4);
-    for (i, p) in pixels.iter().enumerate() {
-        let mut base = color;
-        if let Some(raw) = original.and_then(|v| v.get(i * 4..i * 4 + 4)) {
-            for c in 0..3 {
-                base[c] *= srgb_to_linear(raw[c]);
-            }
-            base[3] *= raw[3] as f32 / 255.;
-        }
-        let base_pm = [
-            base[0] * base[3],
-            base[1] * base[3],
-            base[2] * base[3],
-            base[3],
-        ];
-        let out = painting::uv_layers::uv_over(*p, base_pm);
-        let rgb = if out[3] > 0. {
-            [out[0] / out[3], out[1] / out[3], out[2] / out[3]]
-        } else {
-            [0.; 3]
-        };
-        bytes.extend(rgb.map(linear_to_srgb));
-        bytes.push((out[3].clamp(0., 1.) * 255.).round() as u8);
+    pixels
+        .iter()
+        .enumerate()
+        .flat_map(|(i, pixel)| {
+            display_pixel(
+                *pixel,
+                color,
+                original.and_then(|v| v.get(i * 4..i * 4 + 4)),
+            )
+        })
+        .collect()
+}
+
+/// Convert packed region pixels using their original full-atlas coordinates.
+/// The original texture must not be indexed as though every tile starts at zero.
+pub(crate) fn display_region(
+    pixels: &[[f32; 4]],
+    color: [f32; 4],
+    original: Option<&[u8]>,
+    surface_width: u32,
+    region: (u32, u32, u32, u32),
+) -> Vec<u8> {
+    let (x, y, width, _) = region;
+    if width == 0 {
+        return Vec::new();
     }
-    bytes
+    pixels
+        .iter()
+        .enumerate()
+        .flat_map(|(i, pixel)| {
+            let index = ((y as usize + i / width as usize) * surface_width as usize
+                + x as usize
+                + i % width as usize)
+                * 4;
+            display_pixel(
+                *pixel,
+                color,
+                original.and_then(|v| v.get(index..index + 4)),
+            )
+        })
+        .collect()
+}
+
+fn display_pixel(pixel: [f32; 4], mut base: [f32; 4], raw: Option<&[u8]>) -> [u8; 4] {
+    if let Some(raw) = raw {
+        for c in 0..3 {
+            base[c] *= srgb_to_linear(raw[c]);
+        }
+        base[3] *= raw[3] as f32 / 255.;
+    }
+    let base_pm = [
+        base[0] * base[3],
+        base[1] * base[3],
+        base[2] * base[3],
+        base[3],
+    ];
+    let out = painting::uv_layers::uv_over(pixel, base_pm);
+    let rgb = if out[3] > 0. {
+        [out[0] / out[3], out[1] / out[3], out[2] / out[3]]
+    } else {
+        [0.; 3]
+    };
+    let [r, g, b] = rgb.map(linear_to_srgb);
+    [r, g, b, (out[3].clamp(0., 1.) * 255.).round() as u8]
 }
 fn srgb_to_linear(v: u8) -> f32 {
     let v = v as f32 / 255.;
@@ -64,6 +105,40 @@ fn linear_to_srgb(v: f32) -> u8 {
         1.055 * v.powf(1. / 2.4) - 0.055
     };
     (s * 255.).round() as u8
+}
+
+#[cfg(test)]
+mod blend_display_tests {
+    use super::*;
+    #[test]
+    fn lone_blended_layer_keeps_isolated_stack_over_colored_original() {
+        let mut d = UvLayers::new(2, 2).unwrap();
+        d.paint(0, vec![[0.08, 0.28, 0.16, 0.4]; 4]).unwrap();
+        let color = [0.2, 0.4, 0.7, 0.8];
+        let texture = [20, 128, 200, 175].repeat(4);
+        let normal = composite_display(d.document(), color, Some(&texture));
+        for mode in [
+            UvBlendMode::Multiply,
+            UvBlendMode::Screen,
+            UvBlendMode::Overlay,
+        ] {
+            d.edit(UvLayerOp::BlendMode(0, mode)).unwrap();
+            assert_eq!(
+                composite_display(d.document(), color, Some(&texture)),
+                normal
+            );
+        }
+        d.edit(UvLayerOp::Create("upper".into())).unwrap();
+        let id = d.document().active_layer;
+        d.paint(id, vec![[0.48, 0.18, 0.3, 0.6]; 4]).unwrap();
+        let under_normal = composite_display(d.document(), color, Some(&texture));
+        d.edit(UvLayerOp::BlendMode(id, UvBlendMode::Screen))
+            .unwrap();
+        assert_ne!(
+            composite_display(d.document(), color, Some(&texture)),
+            under_normal
+        );
+    }
 }
 
 pub(crate) fn validate_display(
@@ -123,12 +198,8 @@ pub(crate) fn validate_display(
     }
     if !r.has_active_stroke()
         && !r.preview_owned(p.mesh_id)
-        && r.get_uv_surface(p.mesh_id).is_none_or(|s| {
-            !painting::uv_layers::same_uv_pixels(
-                s.atlas.surface().pixels(),
-                &layers.active().pixels,
-            )
-        })
+        && r.get_uv_surface(p.mesh_id)
+            .is_none_or(|s| !layers.active().working_matches(s.atlas.surface().pixels()))
     {
         return Err("Selected UV pixels changed outside their layer owner".into());
     }
@@ -216,6 +287,18 @@ pub(crate) fn state(world: &mut World) -> UvLayerState {
                     visible: l.meta.visible,
                     opacity: l.meta.opacity,
                     locked: l.meta.locked,
+                    blend_mode: match l.meta.blend_mode {
+                        UvBlendMode::Normal => WireBlend::Normal,
+                        UvBlendMode::Multiply => WireBlend::Multiply,
+                        UvBlendMode::Screen => WireBlend::Screen,
+                        UvBlendMode::Overlay => WireBlend::Overlay,
+                    },
+                    has_mask: l.mask.is_some(),
+                    mask_enabled: l.meta.mask_enabled,
+                    paint_target: match l.meta.paint_target {
+                        UvPaintTarget::Color => WireTarget::Color,
+                        UvPaintTarget::Mask => WireTarget::Mask,
+                    },
                     is_active: l.meta.id == l_document_active(r, id),
                 })
                 .collect();
@@ -376,10 +459,14 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
             meta: UvLayerMeta {
                 id: data.len() as u32,
                 name: format!("Canvas {plane} snapshot"),
+                blend_mode: UvBlendMode::Normal,
                 visible: true,
                 opacity: 1.,
                 locked: false,
+                mask_enabled: false,
+                paint_target: UvPaintTarget::Color,
             },
+            mask: None,
             pixels,
         });
     }
@@ -387,10 +474,14 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
         meta: UvLayerMeta {
             id: data.len() as u32,
             name: "UV Layer 1".into(),
+            blend_mode: UvBlendMode::Normal,
             visible: true,
             opacity: 1.,
             locked: false,
+            mask_enabled: false,
+            paint_target: UvPaintTarget::Color,
         },
+        mask: None,
         pixels: raw,
     });
     for layer in &data {
@@ -444,9 +535,10 @@ pub(crate) fn enable(world: &mut World, entity: Entity) -> Result<(), String> {
         targets.detach_shared(entity, (w, h));
     }
     let mut material = world.resource_mut::<Assets<StandardMaterial>>();
-    let m = material.get_mut(&current_handle).unwrap();
+    let mut m = material.get_mut(&current_handle).unwrap();
     m.base_color = t.original_color_source;
     m.base_color_texture = t.original_texture.clone();
+    drop(m);
     drop(material);
     world.get_mut::<MeshPaintTexture>(entity).unwrap().has_paint = false;
     if let Some(mut p) = world.get_mut::<crate::ProjectionTarget>(entity) {
@@ -613,6 +705,18 @@ pub(crate) fn command(world: &mut World, command: &PaintCommand) -> bool {
             };
         }
         let op = match command {
+            Command::AddMask { layer_id } => UvLayerOp::AddMask(*layer_id),
+            Command::RemoveMask { layer_id } => UvLayerOp::RemoveMask(*layer_id),
+            Command::MaskEnabled { layer_id, enabled } => {
+                UvLayerOp::MaskEnabled(*layer_id, *enabled)
+            }
+            Command::PaintTarget { layer_id, target } => UvLayerOp::PaintTarget(
+                *layer_id,
+                match target {
+                    WireTarget::Color => UvPaintTarget::Color,
+                    WireTarget::Mask => UvPaintTarget::Mask,
+                },
+            ),
             Command::Create { name } => UvLayerOp::Create(name.clone()),
             Command::Duplicate { layer_id } => UvLayerOp::Duplicate(*layer_id),
             Command::Delete { layer_id } => UvLayerOp::Delete(*layer_id),
@@ -625,6 +729,15 @@ pub(crate) fn command(world: &mut World, command: &PaintCommand) -> bool {
             Command::Visible { layer_id, visible } => UvLayerOp::Visible(*layer_id, *visible),
             Command::Opacity { layer_id, opacity } => UvLayerOp::Opacity(*layer_id, *opacity),
             Command::Lock { layer_id, locked } => UvLayerOp::Lock(*layer_id, *locked),
+            Command::BlendMode { layer_id, mode } => UvLayerOp::BlendMode(
+                *layer_id,
+                match mode {
+                    WireBlend::Normal => UvBlendMode::Normal,
+                    WireBlend::Multiply => UvBlendMode::Multiply,
+                    WireBlend::Screen => UvBlendMode::Screen,
+                    WireBlend::Overlay => UvBlendMode::Overlay,
+                },
+            ),
             _ => unreachable!(),
         };
         world
@@ -650,8 +763,7 @@ pub(crate) fn install(
         .iter()
         .find(|l| l.meta.id == document.active_layer)
         .unwrap()
-        .pixels
-        .clone();
+        .working_pixels();
     let original = world
         .resource::<Assets<StandardMaterial>>()
         .get(&material)
@@ -692,7 +804,7 @@ pub(crate) fn install(
         .data = Some(display.clone());
     if bound {
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        let m = materials.get_mut(&material).unwrap();
+        let mut m = materials.get_mut(&material).unwrap();
         m.base_color = Color::WHITE;
         m.base_color_texture = Some(image);
     }

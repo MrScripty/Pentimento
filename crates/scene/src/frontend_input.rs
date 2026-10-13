@@ -12,11 +12,46 @@ use bevy::prelude::*;
 #[derive(Resource, Default)]
 pub struct FrontendScenePointerInput {
     batch: Option<(Entity, Vec<bevy::window::WindowEvent>)>,
+    canvas_history: Option<Vec<NativeCanvasHistoryInput>>,
+}
+
+/// A resolved shortcut bound to its admitted canvas and position in the native
+/// event stream. Modifiers must be resolved before later key releases or focus
+/// changes alter the frame-final state.
+#[derive(Clone, Copy)]
+pub struct NativeCanvasHistoryInput {
+    pub event_index: usize,
+    pub plane_entity: Entity,
+    pub redo: bool,
 }
 
 impl FrontendScenePointerInput {
+    /// Start a newly produced frame; unlike mid-frame invalidation, this also
+    /// releases the prior frame's history ownership marker.
+    pub fn begin_frame(&mut self) {
+        self.batch = None;
+        self.canvas_history = None;
+    }
     pub fn publish(&mut self, window: Entity, events: Vec<bevy::window::WindowEvent>) {
         self.batch = Some((window, events));
+        self.canvas_history = None;
+    }
+    /// Native Canvas history is consumed alongside pointer lifecycle events,
+    /// rather than mutating the pipeline before its queued release can settle.
+    pub fn publish_with_canvas_history(
+        &mut self,
+        window: Entity,
+        events: Vec<bevy::window::WindowEvent>,
+        history: Vec<NativeCanvasHistoryInput>,
+    ) {
+        self.publish(window, events);
+        self.canvas_history = Some(history);
+    }
+    pub fn owns_canvas_history(&self) -> bool {
+        self.canvas_history.is_some()
+    }
+    pub(crate) fn canvas_history(&self) -> &[NativeCanvasHistoryInput] {
+        self.canvas_history.as_deref().unwrap_or(&[])
     }
     /// A backend switch cannot reinterpret a prefix already admitted by native input.
     pub fn has_scene_press(&self) -> bool {
@@ -32,6 +67,11 @@ impl FrontendScenePointerInput {
     }
     pub fn clear(&mut self) {
         self.batch = None;
+        // Discard the intents without handing their typed keys back to the
+        // legacy hotkey reader later in this same frame (e.g. after Open).
+        if let Some(history) = &mut self.canvas_history {
+            history.clear();
+        }
     }
     pub fn events(&self, window: Entity) -> Option<&[bevy::window::WindowEvent]> {
         self.batch
@@ -39,6 +79,72 @@ impl FrontendScenePointerInput {
             .filter(|(owner, _)| *owner == window)
             .map(|(_, events)| events.as_slice())
     }
+}
+
+/// Native frontend's admitted keys for one frame, with modifiers at each event.
+/// Published egui frames are authoritative even when empty. Other frontends
+/// retain their existing raw-input route. Document replacement invalidates the
+/// frame. Cursor origins travel with keys so later movement cannot rewrite F.
+#[derive(Resource, Default)]
+pub struct FrontendSceneKeyboardInput {
+    generation: u64,
+    enabled: bool,
+    events: Vec<(pentimento_ipc::KeyboardEvent, Option<Vec2>)>,
+    pointer_origin: (bool, bool, Option<Vec2>),
+}
+impl FrontendSceneKeyboardInput {
+    pub fn begin_frame(&mut self, generation: u64, enabled: bool) {
+        self.generation = generation;
+        self.enabled = enabled;
+        self.events.clear();
+    }
+    /// The native producer supplies only admitted, nonrepeat events.
+    pub fn push(&mut self, event: pentimento_ipc::KeyboardEvent, cursor: Option<Vec2>) {
+        self.events.push((event, cursor));
+    }
+    pub fn set_pointer_origin(&mut self, focused: bool, left_down: bool, cursor: Option<Vec2>) {
+        self.pointer_origin = (focused, left_down, cursor);
+    }
+    pub(crate) fn pointer_origin(&self) -> (bool, bool, Option<Vec2>) {
+        self.pointer_origin
+    }
+    pub fn events(
+        &self,
+        generation: u64,
+    ) -> Option<&[(pentimento_ipc::KeyboardEvent, Option<Vec2>)]> {
+        self.enabled.then(|| {
+            if self.generation == generation {
+                self.events.as_slice()
+            } else {
+                &[]
+            }
+        })
+    }
+}
+
+/// Scene's native event dispatcher owns history when Sculpt is compiled in.
+/// Prevents a key spanning a mode transition from reaching two brush owners.
+#[derive(Resource, Default)]
+pub struct NativeSceneHistoryOwner;
+
+/// Private override used only while dispatching one admitted native segment.
+/// Never rewrites the public input frame, Window or global ButtonInput state.
+#[derive(Resource)]
+pub(crate) struct NativePointerSegment {
+    pub events: Vec<bevy::window::WindowEvent>,
+    pub focused: bool,
+    pub left_down: bool,
+    pub cursor: Option<Vec2>,
+    pub finish: bool,
+    pub sampled: bool,
+    pub reset_direct_contact: bool,
+}
+
+pub(crate) fn native_scene_managed(world: &World) -> bool {
+    world.contains_resource::<NativeSceneHistoryOwner>()
+        && world
+            .get_resource::<FrontendSceneKeyboardInput>()
+            .is_some_and(|input| input.events(crate::project_generation(world)).is_some())
 }
 
 /// Generic input blocking flags owned by the active frontend integration.
@@ -91,6 +197,29 @@ impl FrontendUiLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_canvas_history_is_cleared_without_replaying_legacy_keys() {
+        let mut input = FrontendScenePointerInput::default();
+        input.publish_with_canvas_history(
+            Entity::PLACEHOLDER,
+            vec![],
+            vec![NativeCanvasHistoryInput {
+                event_index: 0,
+                plane_entity: Entity::PLACEHOLDER,
+                redo: true,
+            }],
+        );
+        assert!(input.owns_canvas_history());
+        input.clear();
+        assert!(input.events(Entity::PLACEHOLDER).is_none());
+        assert!(input.canvas_history().is_empty());
+        assert!(input.owns_canvas_history());
+        input.begin_frame();
+        assert!(!input.owns_canvas_history());
+        input.publish(Entity::PLACEHOLDER, vec![]);
+        assert!(!input.owns_canvas_history());
+    }
+
     #[test]
     fn widget_drag_stays_captured_until_release() {
         let mut layout = FrontendUiLayout {

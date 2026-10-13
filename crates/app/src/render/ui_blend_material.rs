@@ -13,7 +13,7 @@ pub struct UiBlendMaterialPlugin;
 
 impl Plugin for UiBlendMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/ui_blend.wgsl");
+        embedded_asset!(app, "shaders/ui_blend.wesl");
         app.add_plugins(UiMaterialPlugin::<UiBlendMaterial>::default());
         info!("UiBlendMaterial plugin registered");
     }
@@ -32,6 +32,6 @@ pub struct UiBlendMaterial {
 
 impl UiMaterial for UiBlendMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://pentimento/render/shaders/ui_blend.wgsl".into()
+        "embedded://pentimento/render/shaders/ui_blend.wesl".into()
     }
 }

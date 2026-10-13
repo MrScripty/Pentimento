@@ -60,6 +60,12 @@ impl TiledSurface {
         );
     }
 
+    /// Read pending upload tiles without consuming them. Clear them only after
+    /// the target image has accepted the changed pixels.
+    pub fn dirty_tiles(&self) -> impl Iterator<Item = TileCoord> + '_ {
+        self.dirty_tiles.iter().copied()
+    }
+
     /// Get all dirty tiles and clear the dirty set
     pub fn take_dirty_tiles(&mut self) -> Vec<TileCoord> {
         self.dirty_tiles.drain().collect()
