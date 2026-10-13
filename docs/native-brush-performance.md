@@ -152,6 +152,33 @@ all-frontend launcher gate are therefore not claimed as passed. Existing
 Bevy-0.20 migration deprecation/debug-only warnings are still emitted in core
 checks. No dependencies or lockfiles were changed to hide this limitation.
 
+### Hosted CI follow-up
+
+Draft [PR #27](https://github.com/MrScripty/Pentimento/pull/27) published the exact
+locally tested tree as `daca0787deef4eac8cf1ced0cd89de0448f18de3`.
+Its [engine](https://github.com/MrScripty/Pentimento/actions/runs/38391193715) and
+[geometry](https://github.com/MrScripty/Pentimento/actions/runs/38391193697) gates
+passed on Rust 1.99.0. The broader frontend check compiled the native egui,
+Dioxus, CEF and WASM configurations, then failed its strict warning gate on an
+existing deprecated projection constructor and redundant feature-gated match
+arm. The follow-up uses Bevy's supported projection function, adds a tolerance-
+based projection/depth regression, and makes the unsupported Direct UV no-op
+explicit only in builds without mesh painting. Dependencies remain unchanged.
+The follow-up passed the same strict Scene `cargo rustc ... -- -D warnings`
+command locally, all 146 combined Scene tests (three manual tests ignored),
+the projection and 16 geometry-sync tests in the sculpting-only feature build,
+and `npm run verify` including all 58 Node tests.
+
+The [native CEF run](https://github.com/MrScripty/Pentimento/actions/runs/38391193784)
+built the app and passed 40 native input tests plus two framebuffer-contract
+tests. Its real-window check then **failed** before paint/sculpt interaction:
+the toolbar rectangle contained zero painted UI pixels despite DOM readiness.
+The strict runtime check is retained. No exact-base CEF run is available, so
+baseline reproduction and responsibility for that rendering failure are
+**unverified**. This is not a native egui runtime test and does not qualify local
+GPU, stylus, or end-to-end brush latency. The draft must not be described as
+fully CI-green while that qualification remains blocked.
+
 ## Measured CPU results
 
 Same-host sequential medians, optimized release with LTO disabled and 16 codegen

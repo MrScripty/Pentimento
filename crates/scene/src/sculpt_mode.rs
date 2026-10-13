@@ -1310,7 +1310,8 @@ fn handle_sculpt_events(
                             }
                         }
                     }
-                    _ => {}
+                    #[cfg(not(feature = "mesh_painting"))]
+                    pentimento_ipc::PaintTarget::DirectUv => {}
                 }
             }
             continue;
