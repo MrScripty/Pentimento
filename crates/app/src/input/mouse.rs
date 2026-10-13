@@ -125,8 +125,11 @@ pub fn forward_native_input(
     mut state: Local<NativeInputState>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     owner: Option<Res<pentimento_scene::ProjectOwner>>,
+    active_canvas: Res<pentimento_scene::ActiveCanvasPlane>,
+    edit_mode: Option<Res<pentimento_scene::EditModeState>>,
 ) {
     paint_history.actions.clear();
+    scene_input.begin_frame();
     scene_keyboard.begin_frame(
         owner.as_ref().map_or(0, |p| p.generation()),
         config.composite_mode == crate::config::CompositeMode::Egui,
@@ -174,6 +177,7 @@ pub fn forward_native_input(
         || (config.composite_mode == crate::config::CompositeMode::Dioxus && layout.received);
     let scene_ready = !region_frontend || layout.received;
     let mut scene_events = Vec::new();
+    let mut canvas_history = Vec::new();
     let direct = paint_mode.active && paint_mode.target == pentimento_ipc::PaintTarget::DirectUv;
     if !direct {
         close_scene_touch(&mut state, true, &mut scene_events);
@@ -415,18 +419,36 @@ pub fn forward_native_input(
                                 .then_some(Vec2::new(mouse.window_x, mouse.window_y)),
                         );
                     }
-                    if egui
-                        && admitted
+                    if admitted
                         && event.key_code == KeyCode::KeyZ
                         && translated.pressed
                         && !event.repeat
                         && translated.modifiers.ctrl
                     {
-                        paint_history.actions.push(if translated.modifiers.shift {
-                            super::hotkeys::PaintHistoryAction::Redo
-                        } else {
-                            super::hotkeys::PaintHistoryAction::Undo
-                        });
+                        if egui {
+                            paint_history.actions.push(if translated.modifiers.shift {
+                                super::hotkeys::PaintHistoryAction::Redo
+                            } else {
+                                super::hotkeys::PaintHistoryAction::Undo
+                            });
+                        }
+                        if !focus_lost
+                            && paint_mode.active
+                            && paint_mode.target == pentimento_ipc::PaintTarget::Canvas
+                            && let Some(plane_entity) = active_canvas.entity
+                        {
+                            debug!(
+                                "Native canvas history admitted: event_index={} plane={:?} redo={}",
+                                scene_events.len() - 1,
+                                plane_entity,
+                                translated.modifiers.shift
+                            );
+                            canvas_history.push(pentimento_scene::NativeCanvasHistoryInput {
+                                event_index: scene_events.len() - 1,
+                                plane_entity,
+                                redo: translated.modifiers.shift,
+                            });
+                        }
                     }
                     backend.send_keyboard_event(translated);
                 }
@@ -473,7 +495,29 @@ pub fn forward_native_input(
             let suspended = state.focus_suspended;
             close_scene_touch(&mut state, suspended, &mut scene_events);
         }
-        scene_input.publish(window_id, scene_events);
+        // Shift+Tab still belongs to the existing frame-final mode reducer.
+        // Keep that transition frame's prior hotkey route rather than drop an
+        // admitted history prefix when Update exits Paint before collecting it.
+        // Ordering mode transitions themselves is a separate owner contract.
+        let mode_transition = key_input.just_pressed(KeyCode::Tab)
+            && (key_input.pressed(KeyCode::ShiftLeft) || key_input.pressed(KeyCode::ShiftRight))
+            && !input_blocks.blocks_keyboard()
+            && edit_mode.as_ref().is_none_or(|edit| {
+                !matches!(
+                    edit.mode,
+                    pentimento_ipc::EditMode::Sculpt | pentimento_ipc::EditMode::MeshEdit
+                )
+            });
+        // The one-shot sampler reads pixels synchronously in the input
+        // collector; retain its existing history-before-sample behavior too.
+        let canvas_sampling = paint_mode.active
+            && paint_mode.target == pentimento_ipc::PaintTarget::Canvas
+            && paint_mode.sample_color;
+        if mode_transition || canvas_sampling {
+            scene_input.publish(window_id, scene_events);
+        } else {
+            scene_input.publish_with_canvas_history(window_id, scene_events, canvas_history);
+        }
         input_blocks.block_pointer = (region_frontend && !layout.received)
             || focus_lost
             || state.focus_suspended

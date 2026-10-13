@@ -504,6 +504,7 @@ run_verification_suite() {
         cargo test --locked -p pentimento-dioxus-ui --lib
         cargo test --locked -p pentimento-egui-ui --lib
         cargo test --locked -p pentimento --features egui depth
+        cargo test --locked -p pentimento --features egui input::
         cargo check --locked -p pentimento --features egui
         cargo check --locked -p pentimento --features dioxus
         cargo check --locked -p pentimento --features cef

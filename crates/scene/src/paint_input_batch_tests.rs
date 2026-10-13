@@ -913,3 +913,94 @@ fn integrated_sampled_preset_recall_paints_with_exact_history_and_consumed_press
         ColorSampleSource::VisibleLayers
     );
 }
+
+fn canvas_history_batch(app: &mut App, window: Entity, events: Vec<WindowEvent>, redo: bool) {
+    let plane_entity = app.world().resource::<ActiveCanvasPlane>().entity.unwrap();
+    let history = events
+        .iter()
+        .enumerate()
+        .filter_map(|(event_index, event)| {
+            matches!(event, WindowEvent::KeyboardInput(event) if event.key_code == KeyCode::KeyZ)
+                .then_some(crate::NativeCanvasHistoryInput {
+                    event_index,
+                    plane_entity,
+                    redo,
+                })
+        })
+        .collect();
+    app.world_mut()
+        .resource_mut::<crate::FrontendScenePointerInput>()
+        .publish_with_canvas_history(window, events.clone(), history);
+    batch(app, events);
+}
+
+#[test]
+fn native_canvas_history_settles_release_at_its_event_position() {
+    for history_first in [false, true] {
+        let (mut app, window) = fixture();
+        app.init_resource::<crate::FrontendScenePointerInput>();
+        canvas_history_batch(&mut app, window, gesture(window), false);
+        let accepted = pixels(&app);
+        let key = || {
+            WindowEvent::KeyboardInput(bevy::input::keyboard::KeyboardInput {
+                window,
+                key_code: KeyCode::KeyZ,
+                logical_key: bevy::input::keyboard::Key::Character("z".into()),
+                state: ButtonState::Pressed,
+                text: None,
+                repeat: false,
+            })
+        };
+        canvas_history_batch(&mut app, window, vec![key()], false);
+        let before = pixels(&app);
+        assert!(before != accepted);
+        let mut painting = app.world_mut().resource_mut::<PaintingResource>();
+        let mut preset = painting.brush_preset.clone();
+        preset.opacity = 0.;
+        painting.set_brush_preset(preset);
+        drop(painting);
+        canvas_history_batch(
+            &mut app,
+            window,
+            vec![movement(window, 450.), button(window, true)],
+            false,
+        );
+        assert!(
+            app.world()
+                .resource::<PaintingResource>()
+                .get_pipeline(7)
+                .unwrap()
+                .is_stroking()
+        );
+        let events = if history_first {
+            vec![key(), button(window, false)]
+        } else {
+            vec![button(window, false), key()]
+        };
+        canvas_history_batch(&mut app, window, events, true);
+        let pipeline = app
+            .world()
+            .resource::<PaintingResource>()
+            .get_pipeline(7)
+            .unwrap();
+        assert_eq!(
+            (pipeline.undo_count(), pipeline.redo_count()),
+            if history_first { (0, 1) } else { (1, 0) }
+        );
+        assert!(!pipeline.is_stroking());
+        let packets = pipeline.log().total_packet_count();
+        let expected = if history_first { &before } else { &accepted };
+        assert!(pixels(&app) == *expected);
+        canvas_history_batch(&mut app, window, vec![], false);
+        assert!(pixels(&app) == *expected);
+        assert_eq!(
+            app.world()
+                .resource::<PaintingResource>()
+                .get_pipeline(7)
+                .unwrap()
+                .log()
+                .total_packet_count(),
+            packets
+        );
+    }
+}

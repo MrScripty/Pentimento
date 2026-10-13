@@ -209,7 +209,7 @@ try {
     console.log(JSON.stringify({ type: 'pentimento.cef.configuration', cef_rendering: cefRendering, cef_args: cefRenderingArgs }));
     app = spawn('./launcher.sh', ['--run', '--frontend', 'cef', '--', '--remote-debugging-port=0', ...cefRenderingArgs], {
         cwd: root, detached: true, stdio: ['ignore', logFd, logFd],
-        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug', PENTIMENTO_NATIVE_DIAGNOSTICS: '1', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
+        env: { ...process.env, RUST_LOG: 'info,pentimento::input::mouse=debug,pentimento_scene::native_history=debug', PENTIMENTO_NATIVE_DIAGNOSTICS: '1', PENTIMENTO_LAUNCHER_STATE_ROOT: `${out}/state`, GDK_BACKEND: 'x11', LIBGL_ALWAYS_SOFTWARE: '1', WGPU_BACKEND: 'vulkan' },
     });
     const endpoint = await until(() => log().match(/DevTools listening on (ws:\/\/(?:127\.0\.0\.1|\[::1\]):\d+\/\S+)/)?.[1], 'ephemeral CEF DevTools endpoint', 120000);
     const url = new URL(endpoint);
@@ -228,7 +228,7 @@ try {
     await page.getByRole('button', { name: 'Reset Camera', exact: true }).waitFor();
     // Read-only trace: no input dispatch, focus changes, or backend commands.
     await page.evaluate(() => {
-        const evidence = { keys: [], focus: [], wheel: [] };
+        const evidence = { time_origin_ms: performance.timeOrigin, keys: [], focus: [], wheel: [] };
         window.__PENTIMENTO_NATIVE_INPUT_EVIDENCE__ = evidence;
         for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
             evidence.keys.push({ type, key: event.key, code: event.code, ctrl: event.ctrlKey,

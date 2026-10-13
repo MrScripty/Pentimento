@@ -243,3 +243,71 @@ rendering and reversible presentation in that software-rendered environment.
 It does not qualify hardware GPU drivers, quantitative depth accuracy, broader
 material/lighting correctness, or a later source head. Screenshots inspected
 include depth enabled/disabled, sculpted/undone, painted, and projected states.
+
+## Native history-ordering failure at `e368821`
+
+[Run 38414236795](https://github.com/MrScripty/Pentimento/actions/runs/38414236795)
+for `e368821a274bd6a544e132500887f81786126c43` passed 25/26 native checks,
+including both depth cycles, but failed the last `native paint Redo shortcut`
+condition at 14:59:32 UTC. The
+[inspected artifact 11824154560](https://github.com/MrScripty/Pentimento/actions/runs/38414236795/artifacts/11824154560)
+uses PR merge checkout `e25f035a7d65259311421cb85f9f83954365d293`.
+The failure was the unchanged 30-second shortcut acknowledgement deadline,
+not the workflow's total runtime limit.
+
+The final off-canvas click used to return keyboard focus starts a real no-dirty
+paint transaction: stroke 13 starts at 14:59:00.314, the native mouse release
+arrives at 14:59:01.409, `Stroke ended` follows at 14:59:01.424, and the receiver
+becomes inactive at 14:59:01.615. Its image remains `aa4250cd5d273b14`, with
+one undo and one redo entry. The click therefore does not clear redo. Retained
+DOM evidence shows the expected `Ctrl+Shift+Z` keydown targeted at `BODY` with
+both modifiers set; the failed screenshot still shows Redo available.
+
+Source ordering explains a synchronization hazard: the native history hotkey
+runs in `PreUpdate`, while `StrokeEnd` is applied in `Update`, and the painting
+pipeline refuses history exchange during an active stroke. The harness's
+250 ms post-mouseup pause is shorter than this run's roughly 545 ms frame
+cadence. A one-shot key in the mouse-release batch can consequently be refused
+before completion. This is consistent with the observed failure; the logs do
+not contain a direct hotkey-refusal diagnostic. DOM key timestamps are only
+relative `performance.now()` values, without a retained time origin, so this
+artifact cannot establish whether the actual key preceded the 14:59:01.615
+completion receipt. Replaying log prefixes through a proposed settlement
+barrier establishes when that barrier would finish, not when the original key
+was sent. Future native evidence records `performance.timeOrigin` passively to
+permit UTC correlation without changing input or assertion timing.
+
+The repair addresses production event ordering rather than serializing the
+qualification input. With stable Canvas ownership and the color sampler unarmed,
+native canvas-history intent is carried through the same ordered paint-event
+path as the pointer release, so the release's `StrokeEnd` is applied before a
+following history action. Frames containing the existing Shift+Tab mode toggle
+or an armed sampler retain their prior history route, preserving synchronous
+mode/sampling behavior without a separate input-dispatch redesign. The repair
+does not claim new chronology for those combined transition/sampling frames. The direct regression fails with
+the exact old input modules in the CEF configuration (history counts `(0, 2)`
+instead of `(1, 1)`) and passes with the repaired route. The completed lean native input suite passes48/48, including direct
+history, lifecycle, transition and sampled-color regressions;15 scene
+paint-input tests also pass. That deterministic red/green fixture
+establishes the product ordering defect independently; it does not retrospectively
+prove the unrecorded timing of the original hosted key event.
+
+The candidate test-side settlement barrier and its helper/tests were removed.
+The harness retains its original physical focus click followed by the same
+one-shot shortcut, 30-second acknowledgement deadline, and receiver-pixel
+assertions. Narrow debug-only admission/application diagnostics and the passive
+DOM time origin allow the rerun to show event order and accepted/refused history
+actions without altering input timing. A new hosted run is still required to
+establish all 26 checks for the corrected final head.
+
+Independent source review is clear, including an independent48/48 lean input
+rerun. The local harness compiles the exact production input modules and uses
+real scene/painting resources but replaces the GTK-dependent frontend wrapper;
+it does not establish native GUI/CEF or actual cfg(egui) integration. The normal
+hosted CEF input gate covers the new tests, and canonical verification now also
+runs the actual `--features egui input::` suite. Both require the new head.
+
+The expanded local harness also passed162 input tests with the actual egui,
+Sculpt and DirectUV input modules enabled; one existing browser-driver test is
+intentionally ignored. This adds CPU coverage of the established owners but
+does not replace the actual app binary and rendered hosted gates.

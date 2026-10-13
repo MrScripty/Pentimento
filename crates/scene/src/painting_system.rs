@@ -581,6 +581,32 @@ fn apply_paint_events(
                     }
                 }
             }
+            PaintEvent::History { plane_entity, redo } => {
+                if let Ok(canvas) = canvas_query.get(*plane_entity)
+                    && let Some(pipeline) = painting_res.get_pipeline_mut(canvas.plane_id)
+                {
+                    let active = pipeline.is_stroking();
+                    let before = (pipeline.undo_count(), pipeline.redo_count());
+                    let restored = if *redo {
+                        pipeline.redo()
+                    } else {
+                        pipeline.undo()
+                    };
+                    debug!(
+                        target: "pentimento_scene::native_history",
+                        "Native canvas history applied: plane={} redo={} restored={} active_before={} history_before={:?} history_after={:?}",
+                        canvas.plane_id,
+                        redo,
+                        restored,
+                        active,
+                        before,
+                        (pipeline.undo_count(), pipeline.redo_count())
+                    );
+                    if restored {
+                        info!("Paint history restored (redo={})", redo);
+                    }
+                }
+            }
         }
     }
 }

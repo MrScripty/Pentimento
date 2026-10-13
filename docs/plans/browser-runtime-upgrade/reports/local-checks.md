@@ -35,3 +35,7 @@ After the first hosted head exposed actual WebGL validation and native wheel-dir
 - Independent review cleared the renderer, lossless ID conversion, capability consumers and shared wheel sign conversion, with actual native and browser depth evidence remaining mandatory in the runtime jobs.
 
 These do not supersede the exact-head native/Electron rendered gates. The existing browser depth implementation remains unavailable and now reports that limitation truthfully. Native depth remains subject to actual Vulkan enable/disable qualification.
+
+## Hosted resolution of local verification limits
+
+The local development-library/display limitations remain. They do not imply the corresponding hosted checks are unrun: [aggregate run38414236123](https://github.com/MrScripty/Pentimento/actions/runs/38414236123) passes at e368821, including the previously locally blocked complete Dioxus4 suite, egui28 suite, native egui depth5 tests, all native/wasm frontend checks, strict warning builds and rendered Svelte interactions. [Electron run38414235793](https://github.com/MrScripty/Pentimento/actions/runs/38414235793) separately passes real production rendering, selection, ordinary sandbox and graceful shutdown on that head. Native CEF passes26/26 at713653f but its e368821 rerun exposes a history-input ordering hazard at the last check; see [the exact-head report](cef-readiness.md). The ensuing native input repair requires fresh qualification.

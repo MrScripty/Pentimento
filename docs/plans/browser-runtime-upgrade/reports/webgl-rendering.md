@@ -1,10 +1,11 @@
 # WebGL rendering repair
 
-Status: the repaired renderer produced the genuine scene and a visible selection
-outline in hosted CI; a shadowed-face segmentation mistake in the new outline
-oracle blocked completion. The bounded test correction is implemented; a new
-hosted run must still qualify stable selection and graceful shutdown. The strict
-scene-pixel criteria and Electron security settings are unchanged.
+Status: full hosted Electron qualification passed on source head
+`e368821a274bd6a544e132500887f81786126c43`, including the genuine scene, two
+stable selection-outline frames and graceful process-family shutdown. Earlier
+rendering and test-segmentation failures below are historical. The strict
+scene-pixel criteria and Electron security settings are unchanged. The subsequent
+native Canvas ordering repair creates a new head that still needs its own rerun.
 
 ## Observed failure
 
@@ -72,8 +73,9 @@ example found byte values 75 and 76 both quantizing to 148. The compensated
 path's CPU regression covers all 256 values in every channel with high-valued
 neighboring channels, including storage quantization and decode. The ID data
 camera also disables tone mapping, dithering and MSAA to avoid altering or
-mixing identities. These tests prove the encoding math; actual GPU behavior
-still requires runtime qualification.
+mixing identities. These tests prove the encoding math; the hosted selection
+qualification below separately exercises the actual ID material and outline
+path. It does not perform GPU readback of every possible 24-bit identity.
 
 The production Electron test now exercises that ID material by selecting the
 actual red scene object with Electron mouse input. Its click is derived from
@@ -134,10 +136,32 @@ among 1,225,275 outside pixels. A regression fixture uses that actual shadowed
 color; neutral, green, blue, wrong-object/color, fill and global-tint negatives
 remain rejected.
 
-This replay establishes the bounded oracle diagnosis, not a successful hosted
-job. The failed assertion prevented the production shutdown handshake; the
-process family exited without forced cleanup, but graceful production shutdown
-and two accepted consecutive selection frames still require the corrected run.
+This replay established the bounded oracle diagnosis, not a successful hosted
+job. In that historical run the failed assertion prevented the production
+shutdown handshake; the process family exited without forced cleanup. The
+corrected full run subsequently passed, as recorded below.
+
+## Successful corrected run
+
+[Run 38414235793](https://github.com/MrScripty/Pentimento/actions/runs/38414235793)
+completed successfully on source `e368821a274bd6a544e132500887f81786126c43`.
+Its recorded PR merge checkout `e25f035a7d65259311421cb85f9f83954365d293`
+has the same tree `64d9f9ac1a31ff9cb28b201380eb7d91a4cd9b50`.
+The inspected
+[artifact 11824680772](https://github.com/MrScripty/Pentimento/actions/runs/38414235793/artifacts/11824680772)
+records two accepted consecutive selection frames after a real click at DIP
+`(960,464)`: all 1,842 new orange pixels lie on the cube boundary, with no
+orange fill or meaningful outside changes. The genuine scene and authoritative
+depth-unavailable UI checks passed, with no renderer errors or network requests.
+Production recorded `willQuit: true`; supervision recorded exit 0, a completed
+handshake, no surviving processes and no forced cleanup.
+
+The [Electron qualification report](electron-qualification.md) provides exact
+environment, sandbox observations, artifact digest and coverage. This qualifies
+the software-rendered Ubuntu 22.04 Electron path at the identified source tree,
+not hardware performance, browser depth visualization or the separate native
+paint/sculpt workflow. The ongoing native Canvas ordering repair needs a fresh
+qualification at its new source head.
 
 ## Verification
 
@@ -147,8 +171,8 @@ and two accepted consecutive selection frames still require the corrected run.
   boundary fixtures. JavaScript syntax and whitespace checks also pass.
 - Four format descriptor/view-association tests, four depth capability tests,
   and the all-channel ID roundtrip test are present for native Rust execution.
-- Final canonical WASM rebuilds and native Rust test runs precede exact-head
-  CI requalification. Their final results must supersede
-  this implementation-stage status before acceptance.
+- The canonical WASM build and complete Electron runtime qualification passed
+  at the source tree identified above. Native test and workflow evidence is
+  tracked separately; later source changes do not inherit this exact-head pass.
 - No hardware-GPU performance, browser depth visualization, or unsupported
   platform claim is introduced.

@@ -101,6 +101,8 @@ pub enum PaintEvent {
     StrokeEnd,
     /// Stroke was cancelled (e.g., Escape key)
     StrokeCancel,
+    /// History intent at its chronological position among stroke events.
+    History { plane_entity: Entity, redo: bool },
 }
 
 /// Plugin for paint mode functionality
@@ -242,6 +244,14 @@ fn collect_paint_input(
         || arbitrated.map_or(raw_batch, |events| events.to_vec()),
         |segment| segment.events.clone(),
     );
+    // The shared egui/Sculpt dispatcher owns its segmented history separately.
+    let canvas_history = if segment.is_none() && arbitrated.is_some() {
+        scene_input
+            .as_ref()
+            .map_or(&[][..], |input| input.canvas_history())
+    } else {
+        &[]
+    };
     let focused = segment
         .as_ref()
         .map_or(window.focused, |segment| segment.focused);
@@ -324,7 +334,15 @@ fn collect_paint_input(
     let mut moved = false;
     let mut began = false;
     let mut focus_lost = first_focus.map_or(!focused, |focused| focused);
-    for event in batch {
+    for (event_index, event) in batch.into_iter().enumerate() {
+        for action in canvas_history.iter().filter(|action| {
+            action.event_index == event_index && action.plane_entity == plane_entity
+        }) {
+            paint_events.write(PaintEvent::History {
+                plane_entity: action.plane_entity,
+                redo: action.redo,
+            });
+        }
         match event {
             WindowEvent::CursorMoved(event) if event.window == window_entity => {
                 cursor = (!focus_lost).then_some(event.position);

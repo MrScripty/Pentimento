@@ -12,11 +12,46 @@ use bevy::prelude::*;
 #[derive(Resource, Default)]
 pub struct FrontendScenePointerInput {
     batch: Option<(Entity, Vec<bevy::window::WindowEvent>)>,
+    canvas_history: Option<Vec<NativeCanvasHistoryInput>>,
+}
+
+/// A resolved shortcut bound to its admitted canvas and position in the native
+/// event stream. Modifiers must be resolved before later key releases or focus
+/// changes alter the frame-final state.
+#[derive(Clone, Copy)]
+pub struct NativeCanvasHistoryInput {
+    pub event_index: usize,
+    pub plane_entity: Entity,
+    pub redo: bool,
 }
 
 impl FrontendScenePointerInput {
+    /// Start a newly produced frame; unlike mid-frame invalidation, this also
+    /// releases the prior frame's history ownership marker.
+    pub fn begin_frame(&mut self) {
+        self.batch = None;
+        self.canvas_history = None;
+    }
     pub fn publish(&mut self, window: Entity, events: Vec<bevy::window::WindowEvent>) {
         self.batch = Some((window, events));
+        self.canvas_history = None;
+    }
+    /// Native Canvas history is consumed alongside pointer lifecycle events,
+    /// rather than mutating the pipeline before its queued release can settle.
+    pub fn publish_with_canvas_history(
+        &mut self,
+        window: Entity,
+        events: Vec<bevy::window::WindowEvent>,
+        history: Vec<NativeCanvasHistoryInput>,
+    ) {
+        self.publish(window, events);
+        self.canvas_history = Some(history);
+    }
+    pub fn owns_canvas_history(&self) -> bool {
+        self.canvas_history.is_some()
+    }
+    pub(crate) fn canvas_history(&self) -> &[NativeCanvasHistoryInput] {
+        self.canvas_history.as_deref().unwrap_or(&[])
     }
     /// A backend switch cannot reinterpret a prefix already admitted by native input.
     pub fn has_scene_press(&self) -> bool {
@@ -32,6 +67,11 @@ impl FrontendScenePointerInput {
     }
     pub fn clear(&mut self) {
         self.batch = None;
+        // Discard the intents without handing their typed keys back to the
+        // legacy hotkey reader later in this same frame (e.g. after Open).
+        if let Some(history) = &mut self.canvas_history {
+            history.clear();
+        }
     }
     pub fn events(&self, window: Entity) -> Option<&[bevy::window::WindowEvent]> {
         self.batch
@@ -157,6 +197,29 @@ impl FrontendUiLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_canvas_history_is_cleared_without_replaying_legacy_keys() {
+        let mut input = FrontendScenePointerInput::default();
+        input.publish_with_canvas_history(
+            Entity::PLACEHOLDER,
+            vec![],
+            vec![NativeCanvasHistoryInput {
+                event_index: 0,
+                plane_entity: Entity::PLACEHOLDER,
+                redo: true,
+            }],
+        );
+        assert!(input.owns_canvas_history());
+        input.clear();
+        assert!(input.events(Entity::PLACEHOLDER).is_none());
+        assert!(input.canvas_history().is_empty());
+        assert!(input.owns_canvas_history());
+        input.begin_frame();
+        assert!(!input.owns_canvas_history());
+        input.publish(Entity::PLACEHOLDER, vec![]);
+        assert!(!input.owns_canvas_history());
+    }
+
     #[test]
     fn widget_drag_stays_captured_until_release() {
         let mut layout = FrontendUiLayout {

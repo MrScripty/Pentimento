@@ -1,11 +1,12 @@
 # Electron production qualification
 
-Status on 2026-10-13: the repaired renderer now produces the real scene and a
-visible selection outline in hosted CI. A shadowed-face geometry mistake in
-the new outline test blocked completion; its bounded correction and exact
-artifact replay are recorded in [WebGL rendering](webgl-rendering.md).
-The corrected full run, including graceful production shutdown, remains pending.
-This report does not mark BR3 accepted.
+Status on 2026-10-13: the complete Electron qualification passed on source head
+`e368821a274bd6a544e132500887f81786126c43`, including genuine scene rendering,
+two stable selection-outline frames and graceful process-family shutdown.
+The earlier rendering and oracle failures remain documented in
+[WebGL rendering](webgl-rendering.md). A subsequent native Canvas ordering
+repair is in progress; its new source head needs its own qualification rerun.
+This passing Electron slice does not by itself mark aggregate BR3 accepted.
 
 ## Source lineage
 
@@ -51,7 +52,7 @@ preload plus real `dist/ui/wasm/pentimento_wasm.js` and
   and require two stable orange-boundary frames. Keep before/after PNGs and
   input/pixel metrics; reject fills, unrelated scene changes, unchanged frames,
   and wrong-object/color borders. The combined focused suite now has 21 passing
-  tests. Exact-head hosted execution remains pending.
+  tests. Hosted execution passed on the source head identified below.
 - Preserve process ownership, shutdown handshake, orphan rejection, and
   PID/start-time tracking. Give each supervisor fixture its own evidence path,
   including when CI sets a shared artifact destination.
@@ -100,10 +101,52 @@ completed; the real local renderer remains unavailable. No sandbox/security
 workaround was attempted.
 
 The first exact-head hosted run exposed real texture-format and depth-shader
-failures, as detailed in the linked WebGL report. Passing source-branch checks,
-local pixel fixtures, binary version output, or shell typechecks do not replace
-successful strict scene capture and graceful process-family shutdown on the
-corrected commit.
+failures, as detailed in the linked WebGL report. The next run rendered correctly
+but exposed a shadowed-face silhouette error in the new test. Those historical
+failures were resolved before the successful full qualification below.
+
+## Verified hosted qualification
+
+[Run 38414235793, job 115354262783](https://github.com/MrScripty/Pentimento/actions/runs/38414235793/job/115354262783)
+completed successfully on source head `e368821a274bd6a544e132500887f81786126c43`.
+The retained `environment.log` records PR merge checkout
+`e25f035a7d65259311421cb85f9f83954365d293`; GitHub commit metadata verifies that
+its tree `64d9f9ac1a31ff9cb28b201380eb7d91a4cd9b50` equals the source head's tree.
+[Artifact 11824680772](https://github.com/MrScripty/Pentimento/actions/runs/38414235793/artifacts/11824680772)
+contains the inspected production/selection PNGs, JSON results, process-family
+records, environment, lockfiles and build/runtime logs. The downloaded ZIP's
+SHA-256 matches the artifact digest:
+`956b20e6b382a7beedfdbccd45fb841f6c73f9b44d7dfa91e8dd830ca5e57e35`.
+
+The artifact establishes:
+
+- Electron 44.7.0 / Chromium 152.0.7977.130 on Ubuntu 22.04 Linux x86_64,
+  with Xvfb and the existing ANGLE/SwiftShader software graphics switches.
+  The canonical production Svelte and real Bevy WASM build passed.
+- The ordinary environment preload reported `sandboxed: true` and
+  `contextIsolated: true`. Production reported sandbox/isolation enabled,
+  Node integration disabled, and absent renderer `process`/`require` globals.
+  No sandbox bypass, unsafe SwiftShader flag or host security change was used.
+- Both strict canvas captures contain the canonical red cube, green torus,
+  blue sphere and neutral ground. The full production PNG visibly contains
+  the genuine scene and UI; no dev server or substitute WASM was involved.
+- The actual WASM depth capability reached the disabled, unpressed control
+  with its visible accessible OpenGL/WebGL-unavailable reason.
+- A real Electron click at DIP `(960,464)`, followed by parking the pointer
+  away, produced two accepted consecutive selection frames. All 1,842 new
+  orange pixels localized to the cube boundary, with zero orange interior
+  pixels and zero meaningful changes among 1,225,275 outside pixels.
+  The inspected after PNG shows the clean cube outline.
+- `production.json` records `success: true`, `willQuit: true`,
+  `wasmInitialized: true`, and empty `errors` and `network` arrays. No Bevy
+  ERROR was observed. Nonfatal software-renderer warnings remain distinct.
+- Both environment and production supervision record main exit 0, a completed
+  shutdown handshake, observed process-family exit, no remaining processes,
+  no forced cleanup, and `success: true`.
+
+These results are tied to the stated source tree. They do not automatically
+qualify the subsequent native Canvas ordering repair or any new source head;
+that head still requires its own rerun.
 
 The qualified environment is software-rendered Linux x86_64. It cannot establish
 hardware GPU behavior/performance, stylus responsiveness, unsupported platforms,

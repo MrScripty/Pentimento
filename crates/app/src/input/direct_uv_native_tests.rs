@@ -5667,6 +5667,7 @@ fn shared_canvas_samples(
             PaintEvent::StrokeMove { .. } => "move",
             PaintEvent::StrokeEnd => "end",
             PaintEvent::StrokeCancel => "cancel",
+            PaintEvent::History { .. } => "history",
         });
     }
 }

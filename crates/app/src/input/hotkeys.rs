@@ -65,6 +65,7 @@ pub fn handle_paint_undo_hotkey(
     config: Option<Res<crate::config::PentimentoConfig>>,
     admitted: Option<Res<EguiPaintHistory>>,
     scene_history_owner: Option<Res<pentimento_scene::NativeSceneHistoryOwner>>,
+    scene_input: Option<Res<pentimento_scene::FrontendScenePointerInput>>,
     mut painting_res: Option<ResMut<pentimento_scene::PaintingResource>>,
     paint_mode: Res<pentimento_scene::PaintMode>,
     active_canvas: Res<pentimento_scene::ActiveCanvasPlane>,
@@ -77,7 +78,10 @@ pub fn handle_paint_undo_hotkey(
             bevy::window::WindowEvent::WindowFocused(event) if !event.focused)
     });
     let lost = keyboard_lost || window_lost;
-    if input_blocks.blocks_keyboard()
+    // The ordered native route queues this action beside StrokeEnd/Cancel.
+    // Drain the legacy readers above even when another owner handles the key.
+    if scene_input.is_some_and(|input| input.owns_canvas_history())
+        || input_blocks.blocks_keyboard()
         || lost
         || !paint_mode.active
         || paint_mode.target == pentimento_ipc::PaintTarget::DirectUv
