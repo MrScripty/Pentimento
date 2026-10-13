@@ -10,6 +10,8 @@ struct Harness {
     snapshot: EguiUiSnapshot,
     runtime: EguiUiRuntime,
     time: f64,
+    size: egui::Vec2,
+    textures: crate::test_render::Textures,
 }
 impl Harness {
     fn replace_hex(&mut self, text: &str) -> Vec<UiToBevy> {
@@ -45,15 +47,14 @@ impl Harness {
             snapshot: Default::default(),
             runtime: Default::default(),
             time: 0.0,
+            size: egui::vec2(1200.0, 1800.0),
+            textures: Default::default(),
         }
     }
     fn frame(&mut self, events: Vec<egui::Event>) -> (egui::FullOutput, Vec<UiToBevy>) {
         self.time += 0.05;
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1200.0, 1800.0),
-            )),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
             time: Some(self.time),
             events,
             ..Default::default()
@@ -62,9 +63,8 @@ impl Harness {
         let mut output = self.ctx.run_ui(input, |ui| {
             commands = show_root_ui(ui.ctx(), &mut self.snapshot, &mut self.runtime)
         });
-        // This CPU harness inspects shapes and commands without a texture renderer.
-        // egui 0.36 requires intentionally discarded texture updates to be cleared.
-        output.textures_delta.clear();
+        // Preserve real atlas deltas for optional CPU capture, then acknowledge them.
+        self.textures.apply(&mut output.textures_delta);
         (output, commands)
     }
     fn click(&mut self, label: &str) -> Vec<UiToBevy> {
@@ -82,7 +82,7 @@ impl Harness {
         let position = output
             .shapes
             .iter()
-            .find_map(|s| locate(&s.shape, label))
+            .find_map(|s| locate(&s.shape, label).filter(|p| s.clip_rect.contains(*p)))
             .unwrap_or_else(|| panic!("No widget text: {label}"));
         self.frame(vec![egui::Event::PointerMoved(position)]);
         self.frame(vec![egui::Event::PointerButton {
@@ -219,8 +219,6 @@ fn saved_brush_selection_requires_use_and_displays_only_acknowledged_current_bru
         } else {
             h.snapshot.saved_brushes.paint = vec![entry];
         }
-        h.click("Saved brushes");
-        assert!(h.click("Choose saved brush").is_empty());
         assert!(
             h.click("Owned custom brush").is_empty(),
             "choosing must not recall"
@@ -677,4 +675,522 @@ fn canvas_rename_refusal_and_undo_restore_the_authoritative_edit_field() {
     h.snapshot.layers[0].name = "Restored by backend".into();
     h.frame(vec![]);
     assert_eq!(h.runtime.canvas_layer_names[&2].1, "Restored by backend");
+}
+
+fn visible_text_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    fn find(
+        shape: &egui::epaint::Shape,
+        label: &str,
+        clip: egui::Rect,
+        rects: &mut Vec<egui::Rect>,
+    ) {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.text() == label => {
+                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                if clip.contains(rect.center()) {
+                    rects.push(rect);
+                }
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    find(shape, label, clip, rects);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut rects = Vec::new();
+    for clipped in &output.shapes {
+        find(&clipped.shape, label, clipped.clip_rect, &mut rects);
+    }
+    rects
+}
+
+fn workspace_fixture(h: &mut Harness, sculpt: bool) {
+    h.project();
+    if sculpt {
+        h.sculpt();
+    } else {
+        h.paint();
+        h.snapshot.paint.as_mut().unwrap().presets =
+            ["Round", "Soft", "Ink", "Airbrush", "Pencil", "Marker"]
+                .into_iter()
+                .enumerate()
+                .map(|(id, name)| PaintBrushPresetInfo {
+                    id: id as u32 + 7,
+                    name: name.into(),
+                })
+                .collect();
+        h.snapshot.layers = vec![
+            LayerInfo {
+                id: 1,
+                name: "Base color".into(),
+                visible: true,
+                opacity: 1.0,
+                is_active: false,
+            },
+            LayerInfo {
+                id: 2,
+                name: "Details".into(),
+                visible: true,
+                opacity: 0.8,
+                is_active: true,
+            },
+        ];
+    }
+    h.snapshot.saved_brushes.available = true;
+}
+
+#[test]
+fn narrow_and_wide_workspaces_keep_tools_and_layers_visible_without_overlap() {
+    for size in [
+        egui::vec2(640.0, 720.0),
+        egui::vec2(800.0, 900.0),
+        egui::vec2(1440.0, 900.0),
+    ] {
+        for sculpt in [false, true] {
+            let mut h = Harness::new();
+            h.size = size;
+            workspace_fixture(&mut h, sculpt);
+            h.frame(vec![]);
+            let (output, _) = h.frame(vec![]);
+            let labels: &[&str] = if sculpt {
+                &[
+                    "Pentimento",
+                    "Sculpt brushes",
+                    "Grab",
+                    "Crease",
+                    "Falloff",
+                    "Auto smoothing %",
+                    "Saved brushes",
+                    "Undo sculpt stroke",
+                ]
+            } else {
+                &[
+                    "Pentimento",
+                    "Brush presets",
+                    "Round",
+                    "Marker",
+                    "Canvas layers",
+                    "Details",
+                    "Layer opacity %",
+                    "Saved brushes",
+                    "Radius (canvas px)",
+                    "Undo canvas stroke",
+                ]
+            };
+            let mut widgets = Vec::new();
+            for label in labels {
+                let rects = visible_text_rects(&output, label);
+                assert!(
+                    !rects.is_empty(),
+                    "{label} must be visible without opening anything at {size:?}"
+                );
+                for rect in rects {
+                    assert!(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(rect),
+                        "{label} is outside {size:?}: {rect:?}"
+                    );
+                    assert!(
+                        h.runtime
+                            .ui_regions()
+                            .iter()
+                            .any(|region| region.contains_rect(rect)),
+                        "{label} escapes the input capture contract"
+                    );
+                    widgets.push((label, rect));
+                }
+            }
+            for (i, (label, rect)) in widgets.iter().enumerate() {
+                for (other, other_rect) in &widgets[i + 1..] {
+                    assert!(
+                        rect.intersect(*other_rect).area() <= 0.0,
+                        "{label} overlaps {other} at {size:?}"
+                    );
+                }
+            }
+            let regions = h.runtime.ui_regions();
+            assert_eq!(
+                regions.len(),
+                4,
+                "toolbar, context bar, shelf, properties dock"
+            );
+            for (i, rect) in regions.iter().enumerate() {
+                for other in &regions[i + 1..] {
+                    assert!(
+                        rect.intersect(*other).area() <= 1.0,
+                        "overlapping docks: {regions:?}"
+                    );
+                }
+            }
+            let viewport_point = if size.x < 1100.0 {
+                egui::pos2(200.0, 300.0)
+            } else {
+                egui::pos2(700.0, 400.0)
+            };
+            assert!(
+                !regions.iter().any(|rect| rect.contains(viewport_point)),
+                "canvas must remain available"
+            );
+        }
+    }
+}
+
+#[test]
+fn shelf_reflows_on_resize_without_reopening_or_losing_dispatch() {
+    let mut h = Harness::new();
+    workspace_fixture(&mut h, true);
+    for size in [
+        egui::vec2(1440.0, 900.0),
+        egui::vec2(800.0, 900.0),
+        egui::vec2(1440.0, 900.0),
+    ] {
+        h.size = size;
+        for _ in 0..2 {
+            let commands = h.click("Grab");
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|c| matches!(
+                        c,
+                        UiToBevy::SculptCommand(SculptCommand::SetTool {
+                            tool: SculptTool::Grab
+                        })
+                    ))
+                    .count(),
+                1
+            );
+            assert_eq!(h.snapshot.sculpt.as_ref().unwrap().tool, SculptTool::Push);
+        }
+    }
+}
+
+#[test]
+fn built_in_preset_tiles_dispatch_once_and_obey_the_owner_lock() {
+    let mut h = Harness::new();
+    workspace_fixture(&mut h, false);
+    for _ in 0..3 {
+        let commands = h.click("Marker");
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            commands[0],
+            UiToBevy::PaintCommand(PaintCommand::SelectBrushPreset { preset_id: 12 })
+        ));
+        assert_eq!(h.snapshot.paint.as_ref().unwrap().settings.preset_id, 7);
+    }
+    h.snapshot.saved_brushes.active = true;
+    assert!(h.click("Marker").is_empty());
+    h.snapshot.saved_brushes.active = false;
+    h.snapshot.paint.as_mut().unwrap().target.active = true;
+    h.snapshot.paint.as_mut().unwrap().target.mode = PaintTarget::DirectUv;
+    assert!(h.click("Marker").is_empty());
+}
+
+#[test]
+fn canvas_stack_edits_only_the_acknowledged_selected_layer() {
+    let mut h = Harness::new();
+    workspace_fixture(&mut h, false);
+    let (output, _) = h.frame(vec![]);
+    assert_eq!(visible_text_rects(&output, "Layer opacity %").len(), 1);
+    assert_eq!(visible_text_rects(&output, "Rename").len(), 1);
+    assert!(h.click("Down").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::ReorderLayer {
+            layer_id: 2,
+            new_index: 0
+        })
+    )));
+    assert!(h.click("Base color").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::SetActiveLayer { layer_id: 1 })
+    )));
+    assert!(h.snapshot.layers[1].is_active);
+    // Receipt changes selection; subsequent actions must use that identity.
+    h.snapshot.layers[0].is_active = true;
+    h.snapshot.layers[1].is_active = false;
+    assert!(h.click("Up").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::ReorderLayer {
+            layer_id: 1,
+            new_index: 1
+        })
+    )));
+    assert!(h.click("Delete").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::RemoveLayer { layer_id: 1 })
+    )));
+    h.snapshot.paint.as_mut().unwrap().target.active = true;
+    assert!(h.click("Delete").is_empty());
+}
+
+#[test]
+fn uv_stack_uses_owner_order_and_selected_properties_after_repeated_switching() {
+    let mut h = Harness::new();
+    h.paint();
+    h.snapshot.paint.as_mut().unwrap().target.mode = PaintTarget::DirectUv;
+    h.snapshot.paint.as_mut().unwrap().target.uv_layers = Some(UvLayerState {
+        receiver: Some(3),
+        enabled: true,
+        can_undo: true,
+        layers: ["Top", "Middle", "Bottom"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| UvLayerInfo {
+                id: index as u32 + 1,
+                name: name.into(),
+                visible: true,
+                opacity: 1.0,
+                locked: false,
+                is_active: index == 1,
+                blend_mode: UvLayerBlendMode::Normal,
+                has_mask: true,
+                mask_enabled: true,
+                paint_target: UvLayerPaintTarget::Color,
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let (output, _) = h.frame(vec![]);
+    assert_eq!(visible_text_rects(&output, "UV opacity %").len(), 1);
+    assert_eq!(visible_text_rects(&output, "Rename UV layer").len(), 1);
+    assert!(h.click("Move UV up").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::UvLayers {
+            command: UvLayerCommand::Reorder {
+                layer_id: 2,
+                new_index: 2
+            }
+        })
+    )));
+    assert!(h.click("Move UV down").iter().any(|c| matches!(
+        c,
+        UiToBevy::PaintCommand(PaintCommand::UvLayers {
+            command: UvLayerCommand::Reorder {
+                layer_id: 2,
+                new_index: 0
+            }
+        })
+    )));
+    for id in [1, 3, 2] {
+        let name = ["Top", "Middle", "Bottom"][(id - 1) as usize];
+        assert!(h.click(name).iter().any(|c| matches!(c, UiToBevy::PaintCommand(PaintCommand::UvLayers { command: UvLayerCommand::Select { layer_id } }) if *layer_id == id)));
+        for layer in &mut h
+            .snapshot
+            .paint
+            .as_mut()
+            .unwrap()
+            .target
+            .uv_layers
+            .as_mut()
+            .unwrap()
+            .layers
+        {
+            layer.is_active = layer.id == id;
+        }
+        assert!(h.click("Duplicate UV layer").iter().any(|c| matches!(c, UiToBevy::PaintCommand(PaintCommand::UvLayers { command: UvLayerCommand::Duplicate { layer_id } }) if *layer_id == id)));
+    }
+}
+
+#[test]
+fn full_stacks_and_catalogs_stay_bounded_and_preserve_toolbar_access() {
+    let mut h = Harness::new();
+    workspace_fixture(&mut h, false);
+    h.size = egui::vec2(800.0, 900.0);
+    h.snapshot.layers = (0..200)
+        .map(|id| LayerInfo {
+            id,
+            name: format!("Layer {id}: a deliberately long layer name to test clipping"),
+            visible: true,
+            opacity: 1.0,
+            is_active: id == 199,
+        })
+        .collect();
+    h.snapshot.saved_brushes.paint = (0..64)
+        .map(|id| PaintBrushPresetInfo {
+            id,
+            name: format!("Saved brush {id}"),
+        })
+        .collect();
+    h.frame(vec![]);
+    let (output, _) = h.frame(vec![]);
+    assert_eq!(visible_text_rects(&output, "Layer opacity %").len(), 1);
+    assert_eq!(visible_text_rects(&output, "Rename").len(), 1);
+    assert!(!visible_text_rects(&output, "Add canvas layer").is_empty());
+    assert!(
+        h.click("Undo canvas stroke")
+            .iter()
+            .any(|c| matches!(c, UiToBevy::PaintCommand(PaintCommand::Undo)))
+    );
+    for region in h.runtime.ui_regions() {
+        assert!(region.max.x <= h.size.x && region.max.y <= h.size.y);
+    }
+}
+
+#[test]
+fn capture_actual_egui_workspaces_when_requested() {
+    let Ok(directory) = std::env::var("PENTIMENTO_EGUI_EVIDENCE_DIR") else {
+        return;
+    };
+    let directory = std::path::Path::new(&directory);
+    std::fs::create_dir_all(directory).unwrap();
+    for (name, size, sculpt) in [
+        ("paint-wide", egui::vec2(1440.0, 900.0), false),
+        ("paint-narrow", egui::vec2(800.0, 900.0), false),
+        ("sculpt-wide", egui::vec2(1440.0, 900.0), true),
+        ("sculpt-narrow", egui::vec2(800.0, 900.0), true),
+        ("uv-wide", egui::vec2(1440.0, 900.0), false),
+        ("uv-narrow", egui::vec2(800.0, 900.0), false),
+    ] {
+        let mut h = Harness::new();
+        h.size = size;
+        workspace_fixture(&mut h, sculpt);
+        let entries = ["Detail brush", "Soft shading"]
+            .into_iter()
+            .enumerate()
+            .map(|(id, name)| PaintBrushPresetInfo {
+                id: id as u32 + 30,
+                name: name.into(),
+            })
+            .collect();
+        if sculpt {
+            h.snapshot.saved_brushes.sculpt = entries;
+            h.snapshot.saved_brushes.selected_sculpt = Some(30);
+        } else {
+            h.snapshot.saved_brushes.paint = entries;
+            h.snapshot.saved_brushes.selected_paint = Some(30);
+        }
+        if name.starts_with("uv-") {
+            let target = &mut h.snapshot.paint.as_mut().unwrap().target;
+            target.mode = PaintTarget::DirectUv;
+            target.uv_layers = Some(UvLayerState {
+                receiver: Some(3),
+                enabled: true,
+                can_undo: true,
+                can_redo: true,
+                receivers: vec![UvReceiverInfo {
+                    mesh_id: 3,
+                    name: "Sculpted mesh".into(),
+                    layered: true,
+                }],
+                layers: ["Surface detail", "Base color"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, name)| UvLayerInfo {
+                        id: index as u32 + 1,
+                        name: name.into(),
+                        visible: true,
+                        opacity: 1.0,
+                        locked: false,
+                        is_active: index == 0,
+                        blend_mode: UvLayerBlendMode::Normal,
+                        has_mask: index == 0,
+                        mask_enabled: true,
+                        paint_target: UvLayerPaintTarget::Color,
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+        }
+        h.frame(vec![]);
+        let (output, _) = h.frame(vec![]);
+        h.textures
+            .write_frame(&directory.join(format!("{name}.ppm")), &h.ctx, output, size);
+    }
+}
+
+#[test]
+fn startup_exposes_real_paint_creation_and_sculpt_entry_guidance() {
+    let mut h = Harness::new();
+    let (output, _) = h.frame(vec![]);
+    assert!(!visible_text_rects(&output, "Sculpt a mesh").is_empty());
+    assert!(!visible_text_rects(&output, "Select a mesh in the viewport, then press Ctrl+Tab to enter Sculpt. Ctrl+Tab leaves Sculpt.").is_empty());
+    for _ in 0..2 {
+        assert!(h.click("Paint Canvas").iter().any(|c| matches!(
+            c,
+            UiToBevy::AddPaintCanvas(AddPaintCanvasRequest {
+                width: None,
+                height: None
+            })
+        )));
+        assert_eq!(
+            h.snapshot.edit_mode,
+            EditMode::None,
+            "entry is never optimistic"
+        );
+    }
+    assert!(h.click("Sphere").iter().any(|c| matches!(
+        c,
+        UiToBevy::AddObject(AddObjectRequest {
+            primitive_type: PrimitiveType::Sphere,
+            ..
+        })
+    )));
+}
+
+#[test]
+fn numeric_toolbar_edits_dispatch_real_values_without_optimistic_snapshots() {
+    fn enter_value(h: &mut Harness, accepted_text: &str, edited_text: &str) -> Vec<UiToBevy> {
+        assert!(h.click(accepted_text).is_empty());
+        // DragValue switches into its actual text editor on a click.
+        h.frame(vec![]);
+        assert!(h.ctx.egui_wants_keyboard_input());
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        h.frame(vec![
+            key(
+                egui::Key::A,
+                egui::Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Default::default()
+                },
+            ),
+            egui::Event::Text(edited_text.into()),
+            key(egui::Key::Enter, Default::default()),
+        ])
+        .1
+    }
+
+    let mut paint = Harness::new();
+    paint.paint();
+    let accepted = paint.snapshot.paint.as_ref().unwrap().settings.clone();
+    for (text, expected) in [("40", 0.4), ("55", 0.55)] {
+        let commands = enter_value(&mut paint, "75.0", text);
+        assert_eq!(commands.len(), 1, "commands={commands:?}");
+        assert!(
+            matches!(commands[0], UiToBevy::PaintCommand(PaintCommand::SetBrushOpacity { opacity }) if (opacity - expected).abs() < 0.000001)
+        );
+        assert_eq!(paint.snapshot.paint.as_ref().unwrap().settings, accepted);
+        let (output, _) = paint.frame(vec![]);
+        assert!(
+            !visible_text_rects(&output, "75.0").is_empty(),
+            "a pending/refused edit displays the accepted value again"
+        );
+    }
+    // A backend receipt, rather than widget interaction, supplies the next value.
+    paint.snapshot.paint.as_mut().unwrap().settings.opacity = 0.4;
+    let commands = enter_value(&mut paint, "40.0", "80");
+    assert!(
+        matches!(commands.as_slice(), [UiToBevy::PaintCommand(PaintCommand::SetBrushOpacity { opacity })] if (*opacity - 0.8).abs() < 0.000001)
+    );
+    assert_eq!(paint.snapshot.paint.as_ref().unwrap().settings.opacity, 0.4);
+
+    let mut sculpt = Harness::new();
+    sculpt.sculpt();
+    let accepted = sculpt.snapshot.sculpt.clone();
+    for (text, expected) in [("2.25", 2.25), ("3.5", 3.5)] {
+        let commands = enter_value(&mut sculpt, "1.0", text);
+        assert_eq!(commands.len(), 1, "commands={commands:?}");
+        assert!(
+            matches!(commands[0], UiToBevy::SculptCommand(SculptCommand::SetRadius { radius }) if (radius - expected).abs() < 0.000001)
+        );
+        assert_eq!(sculpt.snapshot.sculpt, accepted);
+        let (output, _) = sculpt.frame(vec![]);
+        assert!(!visible_text_rects(&output, "1.0").is_empty());
+    }
 }

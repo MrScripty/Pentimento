@@ -7,6 +7,7 @@
 use crate::constants::DEFAULT_TILE_SIZE;
 use crate::tiles::TiledSurface;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +68,7 @@ impl LayerStackDocument {
         self.validate()?;
         let mut stack = LayerStack {
             layers: Vec::new(),
+            composited_layout: Vec::new(),
             active_layer_id: self.active_layer_id,
             next_id: self.next_id,
             composite: TiledSurface::with_default_tile_size(self.width, self.height),
@@ -134,6 +136,8 @@ impl Layer {
 pub struct LayerStack {
     /// Ordered layers, index 0 = bottom
     layers: Vec<Layer>,
+    /// Exact visible layout at the last composite; catches public metadata edits.
+    composited_layout: Vec<(u32, bool, u32)>,
     /// ID of the currently active (painting target) layer
     active_layer_id: u32,
     /// Next ID to assign
@@ -182,6 +186,7 @@ impl LayerStack {
         let background = Layer::new(0, "Background".to_string(), width, height);
         Self {
             layers: vec![background],
+            composited_layout: Vec::new(),
             active_layer_id: 0,
             next_id: 1,
             composite: TiledSurface::with_default_tile_size(width, height),
@@ -197,8 +202,7 @@ impl LayerStack {
 
     /// Get mutable reference to the active layer
     pub fn active_layer_mut(&mut self) -> Option<&mut Layer> {
-        let id = self.active_layer_id;
-        self.layers.iter_mut().find(|l| l.id == id)
+        self.layer_mut(self.active_layer_id)
     }
 
     /// Get the active layer ID
@@ -213,6 +217,17 @@ impl LayerStack {
 
     /// Get a mutable layer by ID
     pub fn layer_mut(&mut self, layer_id: u32) -> Option<&mut Layer> {
+        let layer = self.layer_mut_for_paint(layer_id)?;
+        // Public mutable access can edit raw pixels without tile tracking. Treat
+        // it conservatively as a full edit; the stroke/undo paths use the private
+        // tracked accessor and retain their small dirty footprint.
+        let width = layer.surface.surface().width;
+        let height = layer.surface.surface().height;
+        layer.surface.mark_region_dirty(0, 0, width, height);
+        Some(layer)
+    }
+
+    pub(crate) fn layer_mut_for_paint(&mut self, layer_id: u32) -> Option<&mut Layer> {
         self.layers.iter_mut().find(|l| l.id == layer_id)
     }
 
@@ -311,6 +326,61 @@ impl LayerStack {
         }
     }
 
+    fn layout_matches_composite(&self) -> bool {
+        self.composited_layout.len() == self.layers.len()
+            && self.composited_layout.iter().zip(&self.layers).all(
+                |(&(id, visible, opacity), layer)| {
+                    id == layer.id && visible == layer.visible && opacity == layer.opacity.to_bits()
+                },
+            )
+    }
+
+    /// Includes pending full composites and metadata edits, without allocating
+    /// UI layer names or consuming dirty flags.
+    pub fn has_dirty_tiles(&self) -> bool {
+        !self.layout_matches_composite()
+            || self.composite.has_dirty_tiles()
+            || self
+                .layers
+                .iter()
+                .any(|layer| layer.surface.has_dirty_tiles())
+    }
+
+    /// Refresh only source dirty tiles when the layer layout is unchanged.
+    /// Layer order/visibility/opacity edits require a full recomposite. Pixels
+    /// outside changed tiles and pending composite upload flags are preserved.
+    pub fn composite_dirty(&mut self) {
+        if !self.layout_matches_composite() {
+            self.composite();
+            return;
+        }
+        let dirty: HashSet<_> = self
+            .layers
+            .iter()
+            .flat_map(|layer| layer.surface.dirty_tiles.iter().copied())
+            .collect();
+        for coord in dirty {
+            let (x, y, width, height) = self.composite.get_tile_bounds(coord);
+            for row in y..y + height {
+                let start = row as usize * self.width as usize + x as usize;
+                let end = start + width as usize;
+                let dst = &mut self.composite.surface_mut().pixels_mut()[start..end];
+                dst.fill([0.; 4]);
+                for layer in &self.layers {
+                    if layer.visible && layer.opacity > 0. {
+                        for (dst, src) in dst
+                            .iter_mut()
+                            .zip(&layer.surface.surface().pixels()[start..end])
+                        {
+                            composite_pixel(dst, *src, layer.opacity);
+                        }
+                    }
+                }
+            }
+            self.composite.mark_dirty(x, y);
+        }
+    }
+
     /// Composite all visible layers bottom-to-top into the composite surface.
     ///
     /// This flattens the layer stack for GPU upload. All composite tiles
@@ -339,6 +409,12 @@ impl LayerStack {
                 composite_pixel(dst, *src, layer_opacity);
             }
         }
+
+        self.composited_layout = self
+            .layers
+            .iter()
+            .map(|layer| (layer.id, layer.visible, layer.opacity.to_bits()))
+            .collect();
 
         // Mark all composite tiles as dirty
         for ty in 0..tiles_y {

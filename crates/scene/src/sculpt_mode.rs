@@ -9,7 +9,7 @@
 use bevy::ecs::message::Message;
 use bevy::input::mouse::MouseButton;
 use bevy::math::{Affine3A, Isometry3d};
-use bevy::mesh::{Indices, VertexAttributeValues};
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 #[cfg(test)]
 use bevy::window::CursorMoved;
@@ -34,6 +34,7 @@ use crate::frontend_input::{
 use crate::paint_mode::StrokeIdGenerator;
 use crate::pixel_coverage::{PixelCoverageState, estimate_pixel_coverage_cpu};
 use crate::render_camera::{ActiveRenderCamera, RenderCamera};
+use crate::sculpt_picking::ray_mesh_intersection;
 #[cfg(feature = "selection")]
 use crate::selection::Selected;
 
@@ -828,7 +829,7 @@ fn handle_sculpt_input(
         camera
             .viewport_to_world(camera_transform, position)
             .ok()
-            .and_then(|ray| ray_mesh_intersection_simple(&ray, mesh, mesh_transform))
+            .and_then(|ray| ray_mesh_intersection(&ray, mesh, mesh_transform))
     };
 
     // Event handling follows after this system, so a stroke started in this
@@ -902,147 +903,6 @@ fn handle_sculpt_input(
     }
 }
 
-/// Simple ray-mesh intersection returning world position and normal
-fn ray_mesh_intersection_simple(
-    ray: &Ray3d,
-    mesh: &Mesh,
-    transform: &GlobalTransform,
-) -> Option<(Vec3, Vec3)> {
-    // Get vertex positions
-    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
-        Some(VertexAttributeValues::Float32x3(v)) => v,
-        _ => return None,
-    };
-
-    // Get indices
-    let indices = match mesh.indices() {
-        Some(Indices::U32(i)) => i.iter().map(|&x| x as usize).collect::<Vec<_>>(),
-        Some(Indices::U16(i)) => i.iter().map(|&x| x as usize).collect::<Vec<_>>(),
-        None => return None,
-    };
-
-    // Get optional normals
-    let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
-        Some(VertexAttributeValues::Float32x3(v)) => Some(v),
-        _ => None,
-    };
-
-    // Transform ray to local space
-    let inv_transform = transform.affine().inverse();
-    let local_ray_origin = inv_transform.transform_point3(ray.origin);
-    let local_ray_dir = inv_transform.transform_vector3(*ray.direction).normalize();
-
-    let mut closest_hit: Option<(f32, Vec3, Vec3)> = None; // (t, local_pos, barycentric)
-
-    // Iterate through triangles
-    for triangle in indices.chunks(3) {
-        if triangle.len() != 3 {
-            continue;
-        }
-
-        let i0 = triangle[0];
-        let i1 = triangle[1];
-        let i2 = triangle[2];
-
-        let v0 = Vec3::from(positions[i0]);
-        let v1 = Vec3::from(positions[i1]);
-        let v2 = Vec3::from(positions[i2]);
-
-        // Möller–Trumbore intersection
-        if let Some((t, u, v)) =
-            ray_triangle_intersection(local_ray_origin, local_ray_dir, v0, v1, v2)
-        {
-            if t > 0.0 && (closest_hit.is_none() || t < closest_hit.as_ref().unwrap().0) {
-                let w = 1.0 - u - v;
-                let local_pos = v0 * w + v1 * u + v2 * v;
-                closest_hit = Some((t, local_pos, Vec3::new(w, u, v)));
-            }
-        }
-    }
-
-    let (_t, local_pos, barycentric) = closest_hit?;
-
-    // Transform position to world space
-    let world_pos = transform.transform_point(local_pos);
-
-    // Get normal - find the triangle again to interpolate normal
-    let mut normal = Vec3::Y;
-    for triangle in indices.chunks(3) {
-        if triangle.len() != 3 {
-            continue;
-        }
-
-        let i0 = triangle[0];
-        let i1 = triangle[1];
-        let i2 = triangle[2];
-
-        let v0 = Vec3::from(positions[i0]);
-        let v1 = Vec3::from(positions[i1]);
-        let v2 = Vec3::from(positions[i2]);
-
-        // Check if this is the triangle we hit
-        let test_pos = v0 * barycentric.x + v1 * barycentric.y + v2 * barycentric.z;
-        if test_pos.distance(local_pos) < 0.001 {
-            if let Some(normals) = normals {
-                let n0 = Vec3::from(normals[i0]);
-                let n1 = Vec3::from(normals[i1]);
-                let n2 = Vec3::from(normals[i2]);
-                let local_normal =
-                    (n0 * barycentric.x + n1 * barycentric.y + n2 * barycentric.z).normalize();
-                normal = (transform.rotation() * local_normal).normalize();
-            } else {
-                let edge1 = v1 - v0;
-                let edge2 = v2 - v0;
-                let local_normal = edge1.cross(edge2).normalize();
-                normal = (transform.rotation() * local_normal).normalize();
-            }
-            break;
-        }
-    }
-
-    Some((world_pos, normal))
-}
-
-/// Möller–Trumbore ray-triangle intersection
-fn ray_triangle_intersection(
-    ray_origin: Vec3,
-    ray_dir: Vec3,
-    v0: Vec3,
-    v1: Vec3,
-    v2: Vec3,
-) -> Option<(f32, f32, f32)> {
-    const EPSILON: f32 = 1e-8;
-
-    let edge1 = v1 - v0;
-    let edge2 = v2 - v0;
-
-    let h = ray_dir.cross(edge2);
-    let a = edge1.dot(h);
-
-    if a.abs() < EPSILON {
-        return None;
-    }
-
-    let f = 1.0 / a;
-    let s = ray_origin - v0;
-    let u = f * s.dot(h);
-
-    if !(0.0..=1.0).contains(&u) {
-        return None;
-    }
-
-    let q = s.cross(edge1);
-    let v = f * ray_dir.dot(q);
-
-    if v < 0.0 || u + v > 1.0 {
-        return None;
-    }
-
-    let t = f * edge2.dot(q);
-
-    if t > EPSILON { Some((t, u, v)) } else { None }
-}
-
 fn native_sculpt_hit(
     position: Vec2,
     target: Option<Entity>,
@@ -1057,7 +917,7 @@ fn native_sculpt_hit(
     let (camera, transform) = cameras.single().ok()?;
     let (handle, mesh_transform, _) = mesh_query.get(target?).ok()?;
     let ray = camera.viewport_to_world(transform, position).ok()?;
-    ray_mesh_intersection_simple(&ray, meshes.get(&handle.0)?, mesh_transform)
+    ray_mesh_intersection(&ray, meshes.get(&handle.0)?, mesh_transform)
 }
 
 /// Handle sculpt mode events
@@ -2428,7 +2288,7 @@ fn render_sculpt_brush_gizmo(
         return;
     };
 
-    let Some((world_pos, normal)) = ray_mesh_intersection_simple(&ray, mesh, mesh_transform) else {
+    let Some((world_pos, normal)) = ray_mesh_intersection(&ray, mesh, mesh_transform) else {
         return;
     };
 

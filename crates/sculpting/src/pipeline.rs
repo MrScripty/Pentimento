@@ -31,7 +31,9 @@ use glam::Vec3;
 use painting::half_edge::VertexId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::{debug, error, trace};
+#[cfg(debug_assertions)]
+use tracing::error;
+use tracing::{debug, trace};
 
 /// Result of processing a single dab through the pipeline.
 #[derive(Debug, Default)]
@@ -135,6 +137,8 @@ impl SculptSnapshot {
 struct ActiveStrokeState {
     mesh_id: u32,
     checkpoint: Option<ChunkedMesh>,
+    /// Admission of the immutable rollback endpoint, never updated by dabs.
+    checkpoint_witness: Option<Arc<GeometryWitness>>,
     admitted_surface: Option<Surface>,
     admitted_witness: Option<Arc<GeometryWitness>>,
     budget_checkpoint: Option<VertexBudget>,
@@ -152,6 +156,7 @@ impl Default for ActiveStrokeState {
         Self {
             mesh_id: 0,
             checkpoint: None,
+            checkpoint_witness: None,
             admitted_surface: None,
             admitted_witness: None,
             budget_checkpoint: None,
@@ -261,6 +266,7 @@ impl SculptingPipeline {
         self.active_stroke_state = Some(ActiveStrokeState {
             mesh_id,
             checkpoint: None,
+            checkpoint_witness: None,
             admitted_surface: None,
             admitted_witness: None,
             budget_checkpoint: None,
@@ -328,7 +334,10 @@ impl SculptingPipeline {
                 (surface, Arc::new(GeometryWitness::capture(chunked_mesh)))
             };
             let state = self.active_stroke_state.as_mut().unwrap();
-            state.checkpoint = Some(chunked_mesh.clone());
+            // The detached baseline was captured above for history comparison;
+            // transfer it into rollback instead of cloning the complete mesh twice.
+            state.checkpoint = Some(baseline.mesh);
+            state.checkpoint_witness = Some(witness.clone());
             state.admitted_surface = Some(surface);
             state.admitted_witness = Some(witness);
             state.budget_checkpoint = Some(self.budget.clone());
@@ -339,6 +348,7 @@ impl SculptingPipeline {
         // Generate dabs from brush input
         debug!("process_input: generating dabs");
         let dabs = self.brush_engine.update_stroke(input);
+        let processed_dabs = !dabs.is_empty();
         debug!("process_input: generated {} dabs", dabs.len());
 
         // Get stroke state info for direction calculation (copy what we need)
@@ -382,6 +392,21 @@ impl SculptingPipeline {
         // Track the last emitted dab, not a sub-spacing input that emitted none.
         if let Some(state) = &mut self.active_stroke_state {
             state.last_dab_position = previous_dab;
+            if processed_dabs {
+                // All dabs above held one exclusive mesh borrow. Capture the
+                // next externally observable boundary once, rather than cloning
+                // the entire topology witness after every interpolated dab.
+                let witness = Arc::new(GeometryWitness::capture(chunked_mesh));
+                self.last_admitted_surface = Some((
+                    state.mesh_id,
+                    state
+                        .admitted_surface
+                        .clone()
+                        .expect("accepted dab surface"),
+                    witness.clone(),
+                ));
+                state.admitted_witness = Some(witness);
+            }
         }
 
         result
@@ -424,10 +449,27 @@ impl SculptingPipeline {
                 if let Some(before) = &state.checkpoint {
                     let before = SculptSnapshot::capture(state.mesh_id, before);
                     let after = SculptSnapshot::capture(state.mesh_id, chunked_mesh);
-                    match self
-                        .history
-                        .record_accepted(before, after, SculptSnapshot::validate)
-                    {
+                    // Both endpoints were geometrically admitted already. Reuse
+                    // that proof only after exact geometry/map equality, while
+                    // still validating all snapshot-owned identities/counters.
+                    // Rebalanced or externally changed snapshots fall back to the
+                    // full guard. Undo/Redo always revalidate afresh in prepare().
+                    let witnesses = [
+                        state.checkpoint_witness.as_deref(),
+                        state.admitted_witness.as_deref(),
+                    ];
+                    match self.history.record_accepted(before, after, |snapshot| {
+                        snapshot.mesh.validate_snapshot_identity()?;
+                        if witnesses
+                            .iter()
+                            .flatten()
+                            .any(|witness| witness.matches(&snapshot.mesh))
+                        {
+                            Ok(())
+                        } else {
+                            Surface::read(&snapshot.mesh)?.validate()
+                        }
+                    }) {
                         Ok(RecordOutcome::NoChange) => {
                             self.brush_engine.cancel_stroke();
                         }
@@ -873,9 +915,13 @@ impl SculptingPipeline {
             self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
         }
 
-        let before_deformation = match candidate_surface.deformed(chunked_mesh) {
-            Ok(surface) => surface,
-            Err(error) => return self.reject_stroke(chunked_mesh, error),
+        let before_deformation = if result.chunks_affected.is_empty() {
+            candidate_surface
+        } else {
+            match candidate_surface.deformed(chunked_mesh) {
+                Ok(surface) => surface,
+                Err(error) => return self.reject_stroke(chunked_mesh, error),
+            }
         };
 
         // ===== PASS 2: DEFORM all affected chunks =====
@@ -1013,11 +1059,7 @@ impl SculptingPipeline {
         match validation {
             Ok(surface) => {
                 if let Some(state) = &mut self.active_stroke_state {
-                    let witness = Arc::new(GeometryWitness::capture(chunked_mesh));
-                    self.last_admitted_surface =
-                        Some((state.mesh_id, surface.clone(), witness.clone()));
                     state.admitted_surface = Some(surface);
-                    state.admitted_witness = Some(witness);
                 }
             }
             Err(error) => return self.reject_stroke(chunked_mesh, error),
@@ -1754,6 +1796,38 @@ mod native_history_tests {
                 .unwrap()
                 .contains("cannot be undone")
         );
+    }
+
+    #[test]
+    fn cached_geometry_proof_does_not_admit_changed_snapshot_counters() {
+        let (mut mesh, mut pipeline) = fixture();
+        pipeline.config.tessellation_enabled = false;
+        let before = mesh.clone();
+        pipeline.begin_stroke(7, input(0.));
+        assert!(
+            pipeline
+                .process_input(input(0.), &mut mesh)
+                .rejected
+                .is_none()
+        );
+        mesh.next_original_vertex_id = 0;
+        // Counters are deliberately outside the geometry witness. Fresh history
+        // identity validation must still reject this exact-geometry endpoint.
+        assert!(
+            pipeline
+                .active_stroke_state
+                .as_ref()
+                .unwrap()
+                .admitted_witness
+                .as_ref()
+                .unwrap()
+                .matches(&mesh)
+        );
+        let end = pipeline.end_stroke(&mut mesh);
+        assert!(end.rejected.is_some());
+        assert!(end.packets.is_empty());
+        assert!(mesh.same_authoritative_state(&before));
+        assert_eq!(pipeline.history_status().undo_strokes, 0);
     }
 
     #[test]

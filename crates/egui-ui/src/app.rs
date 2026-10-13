@@ -1,4 +1,4 @@
-use egui::{self, Align, Layout, Vec2};
+use egui::{self, Vec2};
 use pentimento_ipc::{
     AddObjectRequest, AmbientOcclusionSettings, CameraCommand, EditMode, LightingSettings,
     PrimitiveType, ProjectCommand, UiToBevy,
@@ -6,8 +6,9 @@ use pentimento_ipc::{
 
 use crate::state::{EguiUiRuntime, EguiUiSnapshot};
 
-const TOP_PANEL_HEIGHT: f32 = 44.0;
-const SIDE_PANEL_WIDTH: f32 = 340.0;
+const SIDE_PANEL_WIDTH: f32 = 310.0;
+const BRUSH_SHELF_WIDTH: f32 = 220.0;
+const WIDE_WORKSPACE: f32 = 1100.0;
 const WINDOW_PADDING: f32 = 12.0;
 const ADD_MENU_DEFAULT_X: f32 = 24.0;
 const ADD_MENU_DEFAULT_Y: f32 = 72.0;
@@ -40,6 +41,10 @@ pub fn show_root_ui(
             .max_rect(ctx.viewport_rect()),
     );
     draw_top_panel(&mut viewport_ui, snapshot, runtime, &mut commands);
+    if matches!(snapshot.edit_mode, EditMode::Paint | EditMode::Sculpt) {
+        draw_context_toolbar(&mut viewport_ui, snapshot, runtime, &mut commands);
+        draw_brush_shelf(&mut viewport_ui, snapshot, runtime, &mut commands);
+    }
     draw_side_panel(&mut viewport_ui, snapshot, runtime, &mut commands);
     draw_add_object_menu(ctx, snapshot, runtime, &mut commands);
 
@@ -69,16 +74,29 @@ fn draw_top_panel(
     commands: &mut Vec<UiToBevy>,
 ) {
     let panel = egui::Panel::top("egui_toolbar")
-        .exact_size(TOP_PANEL_HEIGHT)
+        .resizable(false)
         .show(viewport_ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("Pentimento");
                 crate::project_dialog::toolbar(ui, snapshot, runtime, commands);
                 ui.separator();
                 ui.label(edit_mode_label(snapshot.edit_mode));
-
+                ui.separator();
+                if ui.button("Add").clicked() {
+                    runtime.add_object_menu_open = true;
+                }
+                if ui.button("Reset Camera").clicked() {
+                    commands.push(UiToBevy::CameraCommand(CameraCommand::Reset));
+                }
+                if ui
+                    .selectable_label(snapshot.depth_view_enabled, "Depth View")
+                    .clicked()
+                {
+                    commands.push(UiToBevy::SetDepthView {
+                        enabled: !snapshot.depth_view_enabled,
+                    });
+                }
                 if snapshot.mesh_edit_active {
-                    ui.separator();
                     ui.label(format!(
                         "{}:{}:{}  {:?}/{:?}",
                         snapshot.selected_vertex_count,
@@ -88,31 +106,51 @@ fn draw_top_panel(
                         snapshot.mesh_edit_tool
                     ));
                 }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let depth_toggle = if snapshot.depth_view_enabled {
-                        "Depth View: On"
-                    } else {
-                        "Depth View: Off"
-                    };
-
-                    if ui.button(depth_toggle).clicked() {
-                        commands.push(UiToBevy::SetDepthView {
-                            enabled: !snapshot.depth_view_enabled,
-                        });
-                    }
-
-                    if ui.button("Reset Camera").clicked() {
-                        commands.push(UiToBevy::CameraCommand(CameraCommand::Reset));
-                    }
-
-                    if ui.button("Add").clicked() {
-                        runtime.add_object_menu_open = true;
-                    }
-                });
             });
         });
     runtime.ui_regions.push(panel.response.rect);
+}
+
+fn draw_context_toolbar(
+    viewport_ui: &mut egui::Ui,
+    snapshot: &EguiUiSnapshot,
+    runtime: &mut EguiUiRuntime,
+    commands: &mut Vec<UiToBevy>,
+) {
+    let panel = egui::Panel::top("brush_options_toolbar")
+        .resizable(false)
+        .show(viewport_ui, |ui| match snapshot.edit_mode {
+            EditMode::Paint => crate::paint_panel::toolbar(ui, snapshot, commands),
+            EditMode::Sculpt => crate::sculpt_panel::toolbar(ui, snapshot, commands),
+            _ => {}
+        });
+    runtime.ui_regions.push(panel.response.rect);
+}
+
+fn draw_brush_shelf(
+    viewport_ui: &mut egui::Ui,
+    snapshot: &EguiUiSnapshot,
+    runtime: &mut EguiUiRuntime,
+    commands: &mut Vec<UiToBevy>,
+) {
+    // On smaller screens the shelf moves below the viewport rather than stealing
+    // another side column or disappearing into a disclosure/menu.
+    let wide = viewport_ui.ctx().viewport_rect().width() >= WIDE_WORKSPACE;
+    let panel = if wide {
+        egui::Panel::left("brush_shelf_wide").exact_size(BRUSH_SHELF_WIDTH)
+    } else {
+        egui::Panel::bottom("brush_shelf_compact").exact_size(190.0)
+    };
+    let response = panel.resizable(false).show(viewport_ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("brush_shelf_scroll")
+            .show(ui, |ui| match snapshot.edit_mode {
+                EditMode::Paint => crate::paint_panel::shelf(ui, snapshot, runtime, commands),
+                EditMode::Sculpt => crate::sculpt_panel::shelf(ui, snapshot, runtime, commands),
+                _ => {}
+            });
+    });
+    runtime.ui_regions.push(response.response.rect);
 }
 
 fn draw_side_panel(
@@ -123,35 +161,48 @@ fn draw_side_panel(
 ) {
     let panel = egui::Panel::right("egui_side_panel")
         .resizable(false)
-        .exact_size(SIDE_PANEL_WIDTH)
+        .exact_size(SIDE_PANEL_WIDTH.min(viewport_ui.available_width() * 0.48))
         .show(viewport_ui, |ui| {
             ui.add_space(WINDOW_PADDING);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                match snapshot.edit_mode {
-                    EditMode::Paint => crate::paint_panel::show(ui, snapshot, runtime, commands),
-                    EditMode::Sculpt => crate::sculpt_panel::show(ui, snapshot, runtime, commands),
-                    _ => draw_scene_panel(ui, runtime, commands),
-                }
-                if let Some(error) = &snapshot.error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-            });
+            egui::ScrollArea::vertical()
+                .id_salt("properties_scroll")
+                .show(ui, |ui| {
+                    match snapshot.edit_mode {
+                        EditMode::Paint => {
+                            crate::paint_panel::show(ui, snapshot, runtime, commands)
+                        }
+                        EditMode::Sculpt => {
+                            crate::sculpt_panel::show(ui, snapshot, runtime, commands)
+                        }
+                        _ => draw_scene_panel(ui, runtime, commands),
+                    }
+                    if let Some(error) = &snapshot.error {
+                        ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    }
+                });
         });
     runtime.ui_regions.push(panel.response.rect);
 }
 
 fn draw_scene_panel(ui: &mut egui::Ui, runtime: &mut EguiUiRuntime, commands: &mut Vec<UiToBevy>) {
-    ui.collapsing("Add Object", |ui| {
+    ui.heading("Create & edit");
+    if ui.button("Paint Canvas").clicked() {
+        commands.push(UiToBevy::AddPaintCanvas(
+            pentimento_ipc::AddPaintCanvasRequest {
+                width: None,
+                height: None,
+            },
+        ));
+    }
+    ui.small("Creates a canvas and enters Paint. Shift+Tab leaves or returns to Paint mode.");
+    ui.separator();
+    ui.strong("Sculpt a mesh");
+    ui.label("Select a mesh in the viewport, then press Ctrl+Tab to enter Sculpt. Ctrl+Tab leaves Sculpt.");
+    ui.small("Finish the current stroke before changing modes. Tab toggles mesh editing for a selected mesh.");
+    ui.separator();
+    ui.strong("Add Object");
+    ui.horizontal_wrapped(|ui| {
         let _ = primitive_buttons(ui, commands);
-
-        if ui.button("Paint Canvas").clicked() {
-            commands.push(UiToBevy::AddPaintCanvas(
-                pentimento_ipc::AddPaintCanvasRequest {
-                    width: None,
-                    height: None,
-                },
-            ));
-        }
     });
 
     ui.add_space(WINDOW_PADDING);

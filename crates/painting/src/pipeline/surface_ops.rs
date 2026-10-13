@@ -7,25 +7,17 @@ use super::PaintingPipeline;
 impl PaintingPipeline {
     /// Take dirty tiles for GPU upload
     ///
-    /// Composites all layers first, then returns the list of tile coordinates
+    /// Re-composites changed tiles first, then returns the list of tile coordinates
     /// that have been modified. The dirty flags are cleared.
     pub fn take_dirty_tiles(&mut self) -> Vec<TileCoord> {
-        self.layers.composite();
+        self.layers.composite_dirty();
         self.layers.clear_layer_dirty_flags();
         self.layers.composited_surface_mut().take_dirty_tiles()
     }
 
     /// Check if there are any dirty tiles (on any layer)
     pub fn has_dirty_tiles(&self) -> bool {
-        // Check if any layer has dirty tiles
-        for info in self.layers.layer_info() {
-            if let Some(layer) = self.layers.layer(info.id) {
-                if layer.surface.has_dirty_tiles() {
-                    return true;
-                }
-            }
-        }
-        false
+        self.layers.has_dirty_tiles()
     }
 
     /// Get tile data for upload from the composited surface

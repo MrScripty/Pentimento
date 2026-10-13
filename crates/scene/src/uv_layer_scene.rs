@@ -24,31 +24,70 @@ pub(crate) fn display_pixels(
     color: [f32; 4],
     original: Option<&[u8]>,
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(pixels.len() * 4);
-    for (i, p) in pixels.iter().enumerate() {
-        let mut base = color;
-        if let Some(raw) = original.and_then(|v| v.get(i * 4..i * 4 + 4)) {
-            for c in 0..3 {
-                base[c] *= srgb_to_linear(raw[c]);
-            }
-            base[3] *= raw[3] as f32 / 255.;
-        }
-        let base_pm = [
-            base[0] * base[3],
-            base[1] * base[3],
-            base[2] * base[3],
-            base[3],
-        ];
-        let out = painting::uv_layers::uv_over(*p, base_pm);
-        let rgb = if out[3] > 0. {
-            [out[0] / out[3], out[1] / out[3], out[2] / out[3]]
-        } else {
-            [0.; 3]
-        };
-        bytes.extend(rgb.map(linear_to_srgb));
-        bytes.push((out[3].clamp(0., 1.) * 255.).round() as u8);
+    pixels
+        .iter()
+        .enumerate()
+        .flat_map(|(i, pixel)| {
+            display_pixel(
+                *pixel,
+                color,
+                original.and_then(|v| v.get(i * 4..i * 4 + 4)),
+            )
+        })
+        .collect()
+}
+
+/// Convert packed region pixels using their original full-atlas coordinates.
+/// The original texture must not be indexed as though every tile starts at zero.
+pub(crate) fn display_region(
+    pixels: &[[f32; 4]],
+    color: [f32; 4],
+    original: Option<&[u8]>,
+    surface_width: u32,
+    region: (u32, u32, u32, u32),
+) -> Vec<u8> {
+    let (x, y, width, _) = region;
+    if width == 0 {
+        return Vec::new();
     }
-    bytes
+    pixels
+        .iter()
+        .enumerate()
+        .flat_map(|(i, pixel)| {
+            let index = ((y as usize + i / width as usize) * surface_width as usize
+                + x as usize
+                + i % width as usize)
+                * 4;
+            display_pixel(
+                *pixel,
+                color,
+                original.and_then(|v| v.get(index..index + 4)),
+            )
+        })
+        .collect()
+}
+
+fn display_pixel(pixel: [f32; 4], mut base: [f32; 4], raw: Option<&[u8]>) -> [u8; 4] {
+    if let Some(raw) = raw {
+        for c in 0..3 {
+            base[c] *= srgb_to_linear(raw[c]);
+        }
+        base[3] *= raw[3] as f32 / 255.;
+    }
+    let base_pm = [
+        base[0] * base[3],
+        base[1] * base[3],
+        base[2] * base[3],
+        base[3],
+    ];
+    let out = painting::uv_layers::uv_over(pixel, base_pm);
+    let rgb = if out[3] > 0. {
+        [out[0] / out[3], out[1] / out[3], out[2] / out[3]]
+    } else {
+        [0.; 3]
+    };
+    let [r, g, b] = rgb.map(linear_to_srgb);
+    [r, g, b, (out[3].clamp(0., 1.) * 255.).round() as u8]
 }
 fn srgb_to_linear(v: u8) -> f32 {
     let v = v as f32 / 255.;

@@ -9,14 +9,15 @@ experimental Bevy-integrated frontend path.
 |-------------|-------------|
 | `lib.rs` | Public facade for the egui UI crate and its exported state types. |
 | `state.rs` | Framework-neutral egui-facing snapshot/runtime state and inbound message application. |
-| `app.rs` | Toolbar, panels, popup/modal capture geometry and startup state requests. |
+| `app.rs` | Responsive context toolbar, brush shelf, properties dock, startup guidance and native capture geometry. |
 | `paint_panel.rs` | Acknowledged Canvas/DirectUV brushes, sampling, projection and Canvas layers. |
 | `sculpt_panel.rs` | Supported sculpt tools, controls and actual stroke Undo/Redo commands. |
 | `uv_layer_panel.rs` | Receiver stacks, linear blend modes, Color/Mask targeting and shared UV history. |
 | `presets.rs` | Backend-owned saved paint/sculpt catalogs. |
 | `project_dialog.rs` | Local Save/Open/New workflows, frozen owner confirmation and pending receipts. |
 | `controls.rs` | Shared typed command and widget helpers. |
-| `tests.rs` | Actual headless egui frames and pointer/key interaction regressions. |
+| `tests.rs` | Actual headless egui interaction, responsive layout, repeated dispatch and lifecycle regressions. |
+| `test_render.rs` | Test-only CPU capture of actual egui triangles, clipping and font-atlas output. |
 
 ## Problem
 Pentimento needs an egui implementation path that can mirror the existing native
@@ -91,6 +92,13 @@ let _commands = show_root_ui(&egui::Context::default(), &mut snapshot, &mut runt
   Backend notices expose expiration, admission refusal and external-edit conflicts.
   Sculpt Undo/Redo restores committed strokes through the existing validated owner;
   these controls do not add nondestructive sculpt deformation layers.
+
+## Native Workspace
+
+Paint and Sculpt use an always-visible context toolbar and brush shelf, plus a
+right properties/layer dock. Layers are compact identity rows with a single
+active-layer editor and action bar. The shelf moves below the viewport on narrow
+windows. See [workspace design and evidence](../WORKSPACE.md).
 
 ## Validation
 `cargo test -p pentimento-egui-ui --lib` exercises real egui widgets without the

@@ -38,46 +38,51 @@ pub(crate) fn show(
     {
         choice.1 = None;
     }
-    ui.collapsing("Saved brushes", |ui| {
-        let mode = if sculpt_mode { "sculpt" } else { "paint" };
-        ui.add_enabled_ui(saved.available && !saved.active, |ui| {
-            egui::ComboBox::from_id_salt(if sculpt_mode {
-                "saved_sculpt"
-            } else {
-                "saved_paint"
-            })
-            .selected_text(
-                catalog
-                    .iter()
-                    .find(|p| Some(p.id) == choice.1)
-                    .map_or("Choose saved brush", |p| p.name.as_str()),
-            )
-            .show_ui(ui, |ui| {
-                for preset in catalog {
-                    if ui
-                        .selectable_label(Some(preset.id) == choice.1, &preset.name)
-                        .clicked()
-                    {
-                        choice.1 = Some(preset.id);
-                    }
+    ui.separator();
+    ui.strong("Saved brushes");
+    let mode = if sculpt_mode { "sculpt" } else { "paint" };
+    ui.add_enabled_ui(saved.available && !saved.active, |ui| {
+        if catalog.is_empty() {
+            ui.small("Save a brush to build your shelf.");
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt(("saved_brush_tiles", sculpt_mode))
+                .max_height(if ui.available_width() > 260.0 {
+                    64.0
+                } else {
+                    104.0
+                })
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for preset in catalog {
+                            if crate::controls::tile(ui, Some(preset.id) == choice.1, &preset.name)
+                                .clicked()
+                            {
+                                choice.1 = Some(preset.id);
+                            }
+                        }
+                    });
+                });
+        }
+        if button(ui, choice.1.is_some(), &format!("Use {mode} brush")) {
+            if let Some(preset_id) = choice.1 {
+                if sculpt_mode {
+                    sculpt(
+                        commands,
+                        SculptCommand::SelectSavedBrushPreset { preset_id },
+                    );
+                } else {
+                    paint(commands, PaintCommand::SelectSavedBrushPreset { preset_id });
                 }
-            });
-            if button(ui, choice.1.is_some(), &format!("Use {mode} brush")) {
-                if let Some(preset_id) = choice.1 {
-                    if sculpt_mode {
-                        sculpt(
-                            commands,
-                            SculptCommand::SelectSavedBrushPreset { preset_id },
-                        );
-                    } else {
-                        paint(commands, PaintCommand::SelectSavedBrushPreset { preset_id });
-                    }
-                }
-                // Display accepted selection again until the backend acknowledges recall.
-                choice.1 = selected;
             }
+            // Display accepted selection again until the backend acknowledges recall.
+            choice.1 = selected;
+        }
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(name)
+                    .desired_width(140.0)
                     .char_limit(64)
                     .hint_text(if sculpt_mode {
                         "Sculpt preset name"
@@ -103,17 +108,12 @@ pub(crate) fn show(
                 }
             }
         });
-        if let Some(preset) = catalog.iter().find(|preset| Some(preset.id) == selected) {
-            ui.small(format!("Current saved brush: {}", preset.name));
-        }
-        if let Some(notice) = &saved.notice {
-            ui.label(notice);
-        }
-        ui.small(if sculpt_mode {
-            "Saves tool, radius, strength, hardness, falloff and auto smoothing."
-        } else {
-            "Saves tip settings, pressure sizes, color and Brush / Eraser."
-        });
-        ui.small("Saved on this computer. Reusing a name replaces that brush. Up to 64 per mode.");
     });
+    if let Some(preset) = catalog.iter().find(|preset| Some(preset.id) == selected) {
+        ui.small(format!("Current saved brush: {}", preset.name));
+    }
+    if let Some(notice) = &saved.notice {
+        ui.label(notice);
+    }
+    ui.small("Device-local · Up to 64 per mode · Reusing a name replaces it.");
 }

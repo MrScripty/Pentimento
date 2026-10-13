@@ -58,8 +58,8 @@ no-op redo retention, rejected collapsing Smooth rollback/replay suppression,
 normal refresh outside the moved query and normal-only dirty chunks.
 
 These are CPU pipeline results. Each smoothing pass scans all mesh faces and
-local vertex copies; temporary storage holds selected one-rings and targets and
-can grow with the brush footprint. The existing bounded history snapshot
+resolves selected global vertex targets in each chunk; temporary storage holds
+selected one-rings and targets and can grow with the brush footprint. The existing bounded history snapshot
 accounting is unchanged and does not bound these working buffers or process RSS.
 Other primary tools retain their existing chunk-local behavior, including
 Flatten's local plane estimate. This work does not claim identical rendered

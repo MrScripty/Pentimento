@@ -254,6 +254,77 @@ impl UvLayersDocument {
     }
     pub fn composite_active(&self, active: Option<&[[f32; 4]]>) -> Vec<[f32; 4]> {
         let mut output = vec![[0.; 4]; self.width as usize * self.height as usize];
+        self.composite_span(active, 0, &mut output);
+        output
+    }
+
+    /// Composite only the clipped rectangle, packed row-major with no full-atlas
+    /// intermediate. `active` is the complete active-layer working surface, as
+    /// in `composite_active`. Mask, opacity and blend arithmetic are identical.
+    /// Empty or wholly out-of-bounds rectangles return an empty vector.
+    pub fn composite_active_region(
+        &self,
+        active: Option<&[[f32; 4]]>,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> Vec<[f32; 4]> {
+        let end_x = x.saturating_add(width).min(self.width);
+        let end_y = y.saturating_add(height).min(self.height);
+        if x >= end_x || y >= end_y {
+            return Vec::new();
+        }
+        let row_width = (end_x - x) as usize;
+        let mut output = vec![[0.; 4]; row_width * (end_y - y) as usize];
+        for (row, dst) in output.chunks_exact_mut(row_width).enumerate() {
+            let start = (y as usize + row) * self.width as usize + x as usize;
+            self.composite_span(active, start, dst);
+        }
+        output
+    }
+
+    /// Whether any visible composite alpha is positive, without materializing
+    /// an atlas. All supported blends share the same source-over alpha rule.
+    pub fn has_visible_paint(&self, active: Option<&[[f32; 4]]>) -> bool {
+        self.layers.iter().any(|layer| {
+            if !layer.meta.visible || layer.meta.opacity == 0. {
+                return false;
+            }
+            let pixels = if layer.meta.id == self.active_layer
+                && layer.meta.paint_target == UvPaintTarget::Color
+            {
+                active.unwrap_or(&layer.pixels)
+            } else {
+                &layer.pixels
+            };
+            pixels
+                .iter()
+                .take(self.width as usize * self.height as usize)
+                .enumerate()
+                .any(|(i, p)| {
+                    let alpha = if layer.meta.mask_enabled {
+                        let coverage = if layer.meta.id == self.active_layer
+                            && layer.meta.paint_target == UvPaintTarget::Mask
+                        {
+                            active.map_or_else(
+                                || layer.mask.as_ref().unwrap()[i],
+                                |p| uv_mask_coverage(p[i]),
+                            )
+                        } else {
+                            layer.mask.as_ref().unwrap()[i]
+                        };
+                        p[3] * coverage
+                    } else {
+                        p[3]
+                    };
+                    alpha * layer.meta.opacity > 0.
+                })
+        })
+    }
+
+    #[inline]
+    fn composite_span(&self, active: Option<&[[f32; 4]]>, start: usize, output: &mut [[f32; 4]]) {
         for l in &self.layers {
             if !l.meta.visible || l.meta.opacity == 0. {
                 continue;
@@ -264,7 +335,9 @@ impl UvLayersDocument {
                 } else {
                     &l.pixels
                 };
-            for (i, (dst, src)) in output.iter_mut().zip(pixels).enumerate() {
+            for (offset, (dst, src)) in output.iter_mut().zip(pixels.iter().skip(start)).enumerate()
+            {
+                let i = start + offset;
                 let coverage = if l.meta.mask_enabled {
                     if l.meta.id == self.active_layer && l.meta.paint_target == UvPaintTarget::Mask
                     {
@@ -285,7 +358,6 @@ impl UvLayersDocument {
                 *dst = uv_blend_over(source.map(|v| v * l.meta.opacity), *dst, l.meta.blend_mode);
             }
         }
-        output
     }
 }
 

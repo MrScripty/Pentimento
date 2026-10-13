@@ -59,6 +59,8 @@ mod projection_painting;
 mod render_camera;
 #[cfg(feature = "sculpting")]
 mod sculpt_mode;
+#[cfg(feature = "sculpting")]
+mod sculpt_picking;
 #[cfg(feature = "selection")]
 mod selection;
 #[cfg(feature = "mesh_painting")]

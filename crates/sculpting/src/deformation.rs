@@ -361,13 +361,14 @@ pub(crate) fn apply_chunked_smoothing(
     // Scratch storage covers selected one-rings, not a merged full-mesh clone.
     for chunk in mesh.chunks.values() {
         for face in chunk.mesh.faces() {
-            let vertices = chunk.mesh.get_face_vertices(face.id);
-            let [a, b, c] = vertices.as_slice() else {
+            let Some(vertices) = chunk.mesh.get_triangle_vertices(face.id) else {
                 continue;
             };
-            let mut ids = [*a, *b, *c].map(|local| chunk.local_to_original[&local].0);
-            let mut positions =
-                [*a, *b, *c].map(|local| chunk.mesh.vertex(local).unwrap().position);
+            let mut ids = vertices.map(|local| chunk.local_to_original[&local].0);
+            if ids.iter().all(|id| !rings.contains_key(id)) {
+                continue;
+            }
+            let mut positions = vertices.map(|local| chunk.mesh.vertex(local).unwrap().position);
             let first = (0..3).min_by_key(|&index| ids[index]).unwrap();
             ids.rotate_left(first);
             positions.rotate_left(first);
@@ -416,8 +417,8 @@ pub(crate) fn apply_chunked_smoothing(
     }
     let mut changed = HashMap::new();
     for (&id, chunk) in &mut mesh.chunks {
-        for (&local, global) in &chunk.local_to_original {
-            if let Some(&target) = targets.get(&global.0)
+        for (&global, &target) in &targets {
+            if let Some(&local) = chunk.original_to_local.get(&VertexId(global))
                 && chunk.mesh.vertex(local).unwrap().position != target
             {
                 chunk.mesh.set_vertex_position(local, target);

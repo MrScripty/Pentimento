@@ -39,8 +39,7 @@ pub fn build_ui_scene(world: &mut World) {
 
     // Process input events and poll the document (needs mutable access, separate scope)
     let viewport_clicked = {
-        let Some(mut doc_resource) = world.get_non_send_mut::<BlitzDocumentResource>()
-        else {
+        let Some(mut doc_resource) = world.get_non_send_mut::<BlitzDocumentResource>() else {
             return;
         };
 

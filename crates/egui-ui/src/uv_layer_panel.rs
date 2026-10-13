@@ -14,7 +14,7 @@ pub(crate) fn show(
     commands: &mut Vec<UiToBevy>,
 ) {
     ui.separator();
-    ui.heading("UV layers");
+    ui.strong("UV layers");
     ui.add_enabled_ui(!state.active && !state.projection_preview, |ui| {
         egui::ComboBox::from_id_salt("uv_receiver")
             .selected_text(
@@ -24,6 +24,7 @@ pub(crate) fn show(
                     .find(|r| Some(r.mesh_id) == state.receiver)
                     .map_or("Choose receiver", |r| r.name.as_str()),
             )
+            .width(ui.available_width().min(270.0))
             .show_ui(ui, |ui| {
                 for receiver in &state.receivers {
                     if ui
@@ -45,37 +46,84 @@ pub(crate) fn show(
     }
     let ready = !state.active && !state.conflicted && !state.projection_preview;
     if !state.enabled {
-        ui.small("Enabling keeps existing pixels but interprets them with linear compositing; legacy appearance may change. Existing projections become independent snapshots.");
+        ui.small("Enable to edit independent layers. Existing pixels are preserved and use linear compositing; their appearance may change.");
         if button(ui, ready && state.receiver.is_some(), "Enable UV layers") {
             uv(commands, UvLayerCommand::Enable);
         }
         return;
     }
     ui.add_enabled_ui(ready, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            if button(ui, state.can_undo, "Undo UV layer edit") {
-                uv(commands, UvLayerCommand::Undo);
-            }
-            if button(ui, state.can_redo, "Redo UV layer edit") {
-                uv(commands, UvLayerCommand::Redo);
-            }
-        });
-        for (index, layer) in state.layers.iter().enumerate() {
-            ui.push_id(("uv", layer.id), |ui| {
-                if ui.selectable_label(layer.is_active, &layer.name).clicked() {
-                    uv(commands, UvLayerCommand::Select { layer_id: layer.id });
+        // Receiver snapshots already arrive top-to-bottom; commands use the
+        // owner's bottom-to-top indices. Never reorder the accepted snapshot.
+        egui::ScrollArea::vertical()
+            .id_salt("uv_stack")
+            .max_height(140.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for layer in &state.layers {
+                    ui.push_id(("uv_row", layer.id), |ui| {
+                        ui.horizontal(|ui| {
+                            let mut visible = layer.visible;
+                            if ui
+                                .checkbox(&mut visible, "")
+                                .on_hover_text("UV layer visibility")
+                                .changed()
+                            {
+                                uv(
+                                    commands,
+                                    UvLayerCommand::Visible {
+                                        layer_id: layer.id,
+                                        visible,
+                                    },
+                                );
+                            }
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 26.0],
+                                    egui::Button::selectable(layer.is_active, &layer.name)
+                                        .truncate(),
+                                )
+                                .on_hover_text(format!(
+                                    "{} · {:.0}%{}{}",
+                                    layer.name,
+                                    layer.opacity * 100.0,
+                                    if layer.locked { " · paint locked" } else { "" },
+                                    if layer.has_mask { " · mask" } else { "" }
+                                ))
+                                .clicked()
+                            {
+                                uv(commands, UvLayerCommand::Select { layer_id: layer.id });
+                            }
+                        });
+                    });
                 }
-                ui.horizontal(|ui| {
-                    let mut visible = layer.visible;
-                    if ui.checkbox(&mut visible, "Visible").changed() {
-                        uv(
-                            commands,
-                            UvLayerCommand::Visible {
-                                layer_id: layer.id,
-                                visible,
-                            },
-                        );
-                    }
+            });
+        if let Some((index, layer)) = state.layers.iter().enumerate().find(|(_, l)| l.is_active) {
+            ui.push_id(("uv_properties", layer.id), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    egui::ComboBox::from_id_salt("blend")
+                        .selected_text(format!("{:?}", layer.blend_mode))
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                UvLayerBlendMode::Normal,
+                                UvLayerBlendMode::Multiply,
+                                UvLayerBlendMode::Screen,
+                                UvLayerBlendMode::Overlay,
+                            ] {
+                                if ui
+                                    .selectable_label(mode == layer.blend_mode, format!("{mode:?}"))
+                                    .clicked()
+                                {
+                                    uv(
+                                        commands,
+                                        UvLayerCommand::BlendMode {
+                                            layer_id: layer.id,
+                                            mode,
+                                        },
+                                    );
+                                }
+                            }
+                        });
                     let mut locked = layer.locked;
                     if ui.checkbox(&mut locked, "Lock paint").changed() {
                         uv(
@@ -98,29 +146,6 @@ pub(crate) fn show(
                         },
                     );
                 }
-                egui::ComboBox::from_id_salt("blend")
-                    .selected_text(format!("{:?}", layer.blend_mode))
-                    .show_ui(ui, |ui| {
-                        for mode in [
-                            UvLayerBlendMode::Normal,
-                            UvLayerBlendMode::Multiply,
-                            UvLayerBlendMode::Screen,
-                            UvLayerBlendMode::Overlay,
-                        ] {
-                            if ui
-                                .selectable_label(mode == layer.blend_mode, format!("{mode:?}"))
-                                .clicked()
-                            {
-                                uv(
-                                    commands,
-                                    UvLayerCommand::BlendMode {
-                                        layer_id: layer.id,
-                                        mode,
-                                    },
-                                );
-                            }
-                        }
-                    });
                 let name = runtime
                     .uv_layer_names
                     .entry(layer.id)
@@ -131,7 +156,7 @@ pub(crate) fn show(
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut name.1)
-                            .desired_width((ui.available_width() - 120.0).max(80.0)),
+                            .desired_width((ui.available_width() - 120.0).max(40.0)),
                     );
                     if button(ui, !name.1.trim().is_empty(), "Rename UV layer") {
                         uv(
@@ -181,7 +206,7 @@ pub(crate) fn show(
                             },
                         );
                     }
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if ui
                             .selectable_label(
                                 layer.paint_target == UvLayerPaintTarget::Color,
@@ -222,22 +247,37 @@ pub(crate) fn show(
                 } else if ui.button("Add mask").clicked() {
                     uv(commands, UvLayerCommand::AddMask { layer_id: layer.id });
                 }
-                ui.separator();
             });
+        } else {
+            ui.small("Select a layer to edit its properties.");
         }
-        ui.text_edit_singleline(&mut runtime.new_uv_layer_name);
-        if ui.button("Create UV layer").clicked() {
-            uv(
-                commands,
-                UvLayerCommand::Create {
-                    name: runtime.new_uv_layer_name.trim().into(),
-                },
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut runtime.new_uv_layer_name)
+                    .hint_text("New UV layer name")
+                    .desired_width((ui.available_width() - 115.0).max(40.0)),
             );
-        }
+            if ui.button("Create UV layer").clicked() {
+                uv(
+                    commands,
+                    UvLayerCommand::Create {
+                        name: runtime.new_uv_layer_name.trim().into(),
+                    },
+                );
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            if button(ui, state.can_undo, "Undo UV layer edit") {
+                uv(commands, UvLayerCommand::Undo);
+            }
+            if button(ui, state.can_redo, "Redo UV layer edit") {
+                uv(commands, UvLayerCommand::Redo);
+            }
+        });
     });
-    ui.small("White mask reveals; black conceals. UV edits share one bounded Undo/Redo history. External edits require receiver reconciliation.");
+    ui.small("White masks reveal; black conceals. All UV edits share one Undo/Redo history.");
     if state.projection_preview {
-        ui.label("Live preview owns this receiver, layer and paint target. Apply or Cancel preview before changing the stack.");
+        ui.label("Apply or Cancel the live preview before editing this stack.");
     }
     if state.conflicted {
         ui.label("UV ownership changed. Reopen the owned project before editing this receiver.");

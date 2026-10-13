@@ -12,6 +12,8 @@ mod project_dialog;
 mod sculpt_panel;
 mod state;
 #[cfg(test)]
+mod test_render;
+#[cfg(test)]
 mod tests;
 mod uv_layer_panel;
 

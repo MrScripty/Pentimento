@@ -112,7 +112,7 @@ impl PaintingPipeline {
             return false;
         };
         // Refusal leaves the cursor intact if an external layer edit removed the owner.
-        let Some(layer) = self.layers.layer_mut(entry.layer_id) else {
+        let Some(layer) = self.layers.layer_mut_for_paint(entry.layer_id) else {
             return false;
         };
         let inverse = UndoEntry {
