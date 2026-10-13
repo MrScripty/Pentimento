@@ -5,7 +5,8 @@
 //!
 //! # Setup
 //!
-//! CEF binaries must be downloaded before use:
+//! The locked cef-dll-sys build provisions matching binaries and resources.
+//! To provision them and build the subprocess helper separately:
 //! ```bash
 //! ./scripts/setup-cef.sh
 //! ```
@@ -346,7 +347,10 @@ fn ensure_cef_initialized() -> Result<(), WebviewError> {
         }
 
         // Validate CEF API version (like OSR example does)
-        let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+        if api_hash(sys::CEF_API_VERSION_LAST, 0).is_null() {
+            tracing::error!("CEF runtime does not support the compiled API version");
+            return false;
+        }
 
         // Create Args from command line (important for proper CEF setup)
         let args = Args::new();

@@ -11,4 +11,4 @@ path = "src/main.rs"
 
 [dependencies]
 # CEF (Chromium Embedded Framework) bindings
-cef = "143.7"
+cef = { workspace = true }

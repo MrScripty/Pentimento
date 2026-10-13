@@ -13,7 +13,8 @@ pentimento-frontend-core = { path = "../frontend-core" }
 pentimento-ipc = { path = "../ipc" }
 
 # CEF bindings
-cef = "143.7"
+# Standalone adapter must match the application host/helper CEF release.
+cef = "=154.5.0"
 
 # Utilities
 urlencoding = "2.1"

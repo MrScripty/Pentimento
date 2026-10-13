@@ -14,6 +14,13 @@
 use cef::args::Args;
 
 fn main() {
+    // Select the same versioned API as the host before any subprocess CEF call.
+    // cef-rs's official startup example performs this in every process.
+    if cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0).is_null() {
+        eprintln!("CEF helper cannot initialize the compiled API version");
+        std::process::exit(1);
+    }
+
     // Create Args from command line (captures argc/argv properly)
     let args = Args::new();
 

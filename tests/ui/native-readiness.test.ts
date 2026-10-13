@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, waitForUiPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from '../native/readiness.mjs';
 
 test('open modal capture requires four UI-owned idle frames without relaxing scene capture', () => {
     const frame = (blocked = true, latched = false, received = true) =>
@@ -41,6 +41,52 @@ test('invisible controls and sparse world lines fail native UI framebuffer evide
     assert.throws(() => assertPaintedUiRegion(frame, 100, 100, rect, 'toolbar'), /does not show/);
     frame.pixels.fill(30);
     assert.equal(assertPaintedUiRegion(frame, 100, 100, rect, 'toolbar').painted_pixels, 10000);
+});
+
+// Advance a fake clock instead of spending thirty seconds on the negative case.
+// Like the native harness's until(), assertion failures are retried only within
+// one deadline; the helper must request the unchanged 30-second bound.
+async function presentationDeadline(observe, description, timeout) {
+    assert.equal(timeout, 30000);
+    let lastError;
+    for (let elapsed = 0; elapsed < timeout; elapsed += 1000) {
+        try {
+            const result = await observe();
+            if (result) return result;
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    throw new Error(`Timed out: ${description}`, { cause: lastError });
+}
+
+test('startup waits for delayed native presentation without relaxing the pixel threshold', async () => {
+    const rect = { x: 0, y: 0, width: 100, height: 100 };
+    const frames = [0, 1500, 1501].map(painted => {
+        const pixels = new Uint8Array(100 * 100 * 3);
+        pixels.fill(30, 0, painted * 3);
+        return { pixels, screenshot: `frame-${painted}.jpg` };
+    });
+    let captures = 0;
+    const result = await waitForUiPresentation(presentationDeadline, {
+        capture: async () => frames[captures++], width: 100, height: 100, rect, name: 'toolbar',
+    });
+    assert.equal(captures, 3, 'black and exactly 15% painted frames must both be rejected');
+    assert.equal(result.frame, frames[2], 'evidence must retain the frame that actually passed');
+    assert.deepEqual(result.pixels, { name: 'toolbar', painted_pixels: 1501, sampled_pixels: 10000 });
+});
+
+test('a native framebuffer that stays blank fails at the original deadline', async () => {
+    let captures = 0;
+    await assert.rejects(waitForUiPresentation(presentationDeadline, {
+        capture: async () => { captures++; return { pixels: new Uint8Array(100 * 100 * 3) }; },
+        width: 100, height: 100, rect: { x: 0, y: 0, width: 100, height: 100 }, name: 'toolbar',
+    }), error => {
+        assert.match(error.message, /Timed out: toolbar: painted native framebuffer/);
+        assert.match(error.cause.message, /0\/10000 painted pixels/);
+        return true;
+    });
+    assert.equal(captures, 30, 'the deadline must not restart after blank observations');
 });
 
 test('software OSR configuration is bounded to rendering flags only', () => {

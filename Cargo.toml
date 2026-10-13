@@ -32,6 +32,9 @@ serde_json = { version = "1.0", features = ["float_roundtrip"] }
 thiserror = "2.0"
 tracing = "0.1"
 
+# CEF host and subprocess helper share one exact binding/runtime release.
+cef = "=154.5.0"
+
 # Webview
 wry = "0.53"
 raw-window-handle = "0.6"

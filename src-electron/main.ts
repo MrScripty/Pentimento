@@ -10,6 +10,7 @@ function createWindow() {
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
+            sandbox: true,
             preload: path.join(__dirname, 'preload.js'),
         },
     });
@@ -19,7 +20,7 @@ function createWindow() {
         mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
         mainWindow.webContents.openDevTools();
     } else {
-        mainWindow.loadFile(path.join(__dirname, '../dist/ui/index.html'));
+        mainWindow.loadFile(path.join(__dirname, '../../dist/ui/index.html'));
     }
 
     mainWindow.on('closed', () => {

@@ -1,0 +1,92 @@
+name: Electron runtime qualification
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: electron-runtime-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  electron-runtime:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Prepare runner-local evidence path
+        run: echo "PENTIMENTO_EVIDENCE_DIR=$RUNNER_TEMP/electron-runtime-evidence" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src-electron/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install Linux runtime prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev libudev-dev libwayland-dev libwebkit2gtk-4.1-dev libxkbcommon-dev pkg-config xvfb xauth libnss3 libgbm1
+      - name: Install and verify binary readiness without changing locks
+        run: |
+          sha256sum Cargo.lock package-lock.json src-electron/package-lock.json > "$RUNNER_TEMP/electron-locks.sha256"
+          ./launcher.sh --install
+          node src-electron/check-runtime.cjs
+          ./launcher.sh --install
+          sha256sum --check "$RUNNER_TEMP/electron-locks.sha256"
+          node --test tests/ui/electron-shell.test.mjs tests/contracts/electron-render.test.mjs
+          python3 tests/electron/test_supervise.py
+      - name: Record exact qualification environment
+        run: |
+          mkdir -p "$PENTIMENTO_EVIDENCE_DIR"
+          {
+            git rev-parse HEAD
+            node --version
+            rustc --version
+            wasm-bindgen --version
+            uname -a
+            dpkg-query -W libgtk-3-dev libnss3 libgbm1 xvfb
+            echo 'Software graphics qualification: --use-gl=angle --use-angle=swiftshader; sandbox unchanged'
+          } > "$PENTIMENTO_EVIDENCE_DIR/environment.log"
+          cp Cargo.lock package-lock.json "$PENTIMENTO_EVIDENCE_DIR/"
+          cp src-electron/package-lock.json "$PENTIMENTO_EVIDENCE_DIR/electron-package-lock.json"
+      - name: Check ordinary Linux renderer sandbox
+        shell: bash
+        run: |
+          set -o pipefail
+          electron="$(node src-electron/check-runtime.cjs)"
+          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' \
+            python3 tests/electron/supervise.py environment "$electron" --use-gl=angle --use-angle=swiftshader tests/electron/runtime-smoke.cjs --preflight \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/environment-smoke.log"
+      - name: Build genuine production UI and Bevy WASM
+        shell: bash
+        run: |
+          set -o pipefail
+          ./launcher.sh --build --frontend electron 2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/build.log"
+      - name: Qualify production rendering and shutdown
+        shell: bash
+        run: |
+          set -o pipefail
+          electron="$(node src-electron/check-runtime.cjs)"
+          env -u ELECTRON_RUN_AS_NODE -u VITE_DEV_SERVER_URL xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' \
+            python3 tests/electron/supervise.py production "$electron" --use-gl=angle --use-angle=swiftshader tests/electron/runtime-smoke.cjs \
+            2>&1 | tee "$PENTIMENTO_EVIDENCE_DIR/production-smoke.log"
+          sha256sum --check "$RUNNER_TEMP/electron-locks.sha256"
+      - name: Preserve runtime qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-runtime-evidence
+          path: ${{ runner.temp }}/electron-runtime-evidence/
+          if-no-files-found: warn
+          retention-days: 7

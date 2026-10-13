@@ -52,6 +52,7 @@ sudo apt-get install -y \
   libasound2-dev \
   libgtk-3-dev \
   libudev-dev \
+  libwebkit2gtk-4.1-dev \
   libwayland-dev \
   libxkbcommon-dev \
   pkg-config
@@ -64,7 +65,16 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli
 ```
 
-Node.js 22+ is required for the Svelte and Electron tooling.
+Node.js 22.12.0+ is required for the Svelte and Electron tooling.
+
+The browser runtimes are pinned to CEF 154.0.34 (Rust bindings 154.5.0) and
+Electron 44.7.0, verified latest stable on 2026-10-13. `./launcher.sh --install`
+explicitly downloads Electron after `npm ci`. CEF's locked build provisions its
+matching distribution, helper, and resources; `./scripts/setup-cef.sh` can build
+that helper separately. Do not reuse an older `CEF_PATH` distribution. The
+launcher rejects mismatched or incomplete adjacent CEF resources rather than
+searching stale build caches. See the [upgrade evidence](docs/plans/browser-runtime-upgrade/plan.md)
+for verification status and remaining acceptance requirements.
 
 ## Verification
 

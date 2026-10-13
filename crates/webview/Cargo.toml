@@ -34,7 +34,7 @@ glib = "0.18"
 gio = "0.18"
 
 # CEF (Chromium Embedded Framework) bindings - optional dependency for cef feature
-cef = { version = "143.7", optional = true }
+cef = { workspace = true, optional = true }
 urlencoding = { version = "2.1", optional = true }
 
 # Dioxus (native Rust UI) - optional dependency for dioxus feature

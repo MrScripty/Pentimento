@@ -44,6 +44,17 @@ export function assertPaintedUiRegion(frame, width, height, rect, name) {
     return { name, painted_pixels: painted, sampled_pixels: sampled };
 }
 
+// The CPU upload receipt and main-thread input frames can precede presentation
+// while the native renderer starts up. The supplied wait retries
+// the same pixel assertion; neither the oracle nor its deadline is relaxed.
+export async function waitForUiPresentation(wait, { capture, width, height, rect, name }) {
+    return wait(async () => {
+        const frame = await capture();
+        const pixels = assertPaintedUiRegion(frame, width, height, rect, name);
+        return { frame, pixels };
+    }, `${name}: painted native framebuffer`, 30000);
+}
+
 // Qualification-only rendering choice, matching CEF's official software OSR
 // sample. No sandbox, certificate, network, origin or other security switches.
 export function cefRenderingArguments(mode) {

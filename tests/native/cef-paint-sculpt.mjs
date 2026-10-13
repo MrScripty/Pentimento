@@ -10,7 +10,7 @@ import { chromium } from 'playwright-core';
 import { deformationRegion, assertRegionRestored } from './sculpt-history-pixels.mjs';
 import { assertContinuousPaint } from './paint-stroke-pixels.mjs';
 import { projectionReceipts, assertRenderedTarget, receiverHistoryRegion, assertReceiverEndpoint } from './projection-target-evidence.mjs';
-import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
+import { cefFramebufferReceipt, startedStroke, completedStroke, assertAcceptedStroke, waitForSculptPresentation, waitForUiPresentation, parkedPointerFrames, holdNativeKey, tapNativeShortcut, assertNativeClickBounds, assertPaintedUiRegion, cefRenderingArguments } from './readiness.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const cefRendering = process.env.PENTIMENTO_CEF_RENDERING ?? 'default';
@@ -67,13 +67,16 @@ async function waitForStrokeCompletion(offset, description) {
     assert.notEqual(completed.outcome, 'rejected', `${description}: transaction ${started.id} was rejected`);
     return completed;
 }
-async function capture(name, { synchronize = true, uiOwned = false } = {}) {
+async function parkPointer(name, { synchronize = true, uiOwned = false } = {}) {
     // Move to empty viewport so brush gizmos/hover highlights cannot masquerade
     // as a geometry change in before/after viewport comparisons.
     const parkedLogOffset = log().length;
     xdo('mousemove', '--window', windowId, 20, height - 30);
     if (synchronize) await until(() => parkedPointerFrames(log().slice(parkedLogOffset), 20, height - 30, { uiOwned }),
         `${name}: off-target hover through gizmo/presentation update frames`, 30000);
+}
+async function capture(name, { synchronize = true, uiOwned = false } = {}) {
+    await parkPointer(name, { synchronize, uiOwned });
     const pixels = command('import', ['-window', windowId, '-depth', '8', 'rgb:-']);
     assert.equal(pixels.length, width * height * 3, 'Unexpected X11 capture dimensions');
     command('convert', ['-size', `${width}x${height}`, '-depth', '8', 'rgb:-', '-quality', '85', `${out}/${name}.jpg`], { input: pixels });
@@ -240,9 +243,14 @@ try {
     await until(() => page.evaluate(() => typeof window.ipc?.postMessage === 'function' && typeof window.__PENTIMENTO_RECEIVE__ === 'function'), 'real native bridge readiness');
     stage = 'cef_framebuffer_readiness';
     const framebuffer = await until(() => cefFramebufferReceipt(log()), 'CEF first painted framebuffer (DOM readiness alone is insufficient)', 30000);
-    const startup = await capture('native-startup');
+    await parkPointer('native-startup');
+    const { frame: startup, pixels: toolbarPixels } = await waitForUiPresentation(until, {
+        // Keep the pointer barrier above; do not nest another 30s wait inside
+        // the single deadline for observing actual native presentation.
+        capture: () => capture('native-startup', { synchronize: false }),
+        width, height, rect: await page.locator('header.toolbar').boundingBox(), name: 'toolbar',
+    });
     record('native_startup', { screenshot: startup.screenshot, pixels_sha256: startup.sha256, width, height, cdp_bindings: sockets });
-    const toolbarPixels = assertPaintedUiRegion(startup, width, height, await page.locator('header.toolbar').boundingBox(), 'toolbar');
     record('cef_framebuffer_ready', { ...framebuffer, ...toolbarPixels, screenshot: startup.screenshot });
 
     stage = 'sculpt_entry';

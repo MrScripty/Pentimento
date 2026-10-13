@@ -165,7 +165,7 @@ check_npm() {
 }
 
 install_npm() {
-    echo "Install Node.js 22+ and npm from https://nodejs.org/" >&2
+    echo "Install Node.js 22.12.0+ and npm from https://nodejs.org/" >&2
     return 1
 }
 
@@ -190,13 +190,14 @@ install_root_node_modules() {
 }
 
 check_electron_node_modules() {
-    [[ -x "${PROJECT_ROOT}/src-electron/node_modules/.bin/electron" ]]
+    node "${PROJECT_ROOT}/src-electron/check-runtime.cjs" >/dev/null 2>&1
 }
 
 install_electron_node_modules() {
     (
-        cd "${PROJECT_ROOT}/src-electron"
-        npm ci
+        cd "${PROJECT_ROOT}/src-electron" &&
+            npm ci &&
+            npm run install:runtime
     )
 }
 
@@ -335,7 +336,7 @@ build_wasm_bundle() {
 
     (
         cd "$PROJECT_ROOT"
-        cargo build --target wasm32-unknown-unknown "${cargo_args[@]}" -p pentimento-wasm --features selection
+        cargo build --locked --target wasm32-unknown-unknown "${cargo_args[@]}" -p pentimento-wasm --features selection
     )
 
     local wasm_file="${PROJECT_ROOT}/target/wasm32-unknown-unknown/${profile}/pentimento_wasm.wasm"
@@ -365,14 +366,15 @@ build_native_app() {
 
     (
         cd "$PROJECT_ROOT"
-        cargo build "${cargo_args[@]}" -p "$APP_BIN" "${feature_args[@]}"
+        cargo build --locked "${cargo_args[@]}" -p "$APP_BIN" "${feature_args[@]}"
     )
 
     if [[ "$FRONTEND" == "cef" ]]; then
         (
             cd "$PROJECT_ROOT"
-            cargo build "${cargo_args[@]}" -p "$CEF_HELPER_BIN"
+            cargo build --locked "${cargo_args[@]}" -p "$CEF_HELPER_BIN"
         )
+        setup_cef_runtime_env "$profile"
     fi
 }
 
@@ -399,13 +401,10 @@ build_frontend() {
 setup_cef_runtime_env() {
     local profile="$1"
     local cef_lib_dir
-    cef_lib_dir="$(find "${PROJECT_ROOT}/target/${profile}/build" -type d -name "cef_linux_x86_64" 2>/dev/null | head -n 1 || true)"
-
-    if [[ -z "$cef_lib_dir" || ! -f "${cef_lib_dir}/libcef.so" ]]; then
-        echo "[error] Missing CEF runtime libraries. Build the CEF frontend first with ./launcher.sh --build --frontend cef." >&2
+    if ! cef_lib_dir="$(node "${PROJECT_ROOT}/scripts/cef-runtime.mjs" "${PROJECT_ROOT}/target/${profile}" "${PROJECT_ROOT}/Cargo.lock")"; then
+        echo "[error] Missing or mismatched CEF runtime. Run ./launcher.sh --build --frontend cef." >&2
         exit 3
     fi
-
     export LD_LIBRARY_PATH="${cef_lib_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 }
 
@@ -415,7 +414,7 @@ native_binary_path() {
 }
 
 electron_binary_path() {
-    printf '%s/src-electron/node_modules/.bin/electron\n' "$PROJECT_ROOT"
+    node "${PROJECT_ROOT}/src-electron/check-runtime.cjs"
 }
 
 require_release_artifacts() {
@@ -431,7 +430,9 @@ require_release_artifacts() {
             ;;
         electron)
             local electron_bin
-            electron_bin="$(electron_binary_path)"
+            if ! electron_bin="$(electron_binary_path)"; then
+                exit 4
+            fi
             if [[ ! -x "$electron_bin" ]]; then
                 echo "[error] Electron runtime missing. Run ./launcher.sh --install." >&2
                 exit 4
@@ -471,7 +472,9 @@ run_native_binary() {
 
 run_electron_app() {
     local electron_bin
-    electron_bin="$(electron_binary_path)"
+    if ! electron_bin="$(electron_binary_path)"; then
+        exit 3
+    fi
     unset ELECTRON_RUN_AS_NODE
 
     cd "${PROJECT_ROOT}/src-electron"
@@ -480,7 +483,7 @@ run_electron_app() {
 
 run_verification_suite() {
     require_dependency 1 "cargo" check_cargo "Install Rust and Cargo first."
-    require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+    require_dependency 1 "npm" check_npm "Install Node.js 22.12.0+ and npm first."
     require_dependency 1 "repo npm dependencies" check_root_node_modules "Run ./launcher.sh --install."
     require_dependency 1 "Electron npm dependencies" check_electron_node_modules "Run ./launcher.sh --install."
     require_dependency 1 "wasm32 target" check_wasm_target "Run ./launcher.sh --install."
@@ -560,21 +563,21 @@ case "$ACTION" in
     build)
         require_dependency 1 "cargo" check_cargo "Install Rust and Cargo first."
         if [[ "$FRONTEND" != "egui" ]]; then
-            require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+            require_dependency 1 "npm" check_npm "Install Node.js 22.12.0+ and npm first."
         fi
         build_frontend "debug"
         ;;
     build-release)
         require_dependency 1 "cargo" check_cargo "Install Rust and Cargo first."
         if [[ "$FRONTEND" != "egui" ]]; then
-            require_dependency 1 "npm" check_npm "Install Node.js 22+ and npm first."
+            require_dependency 1 "npm" check_npm "Install Node.js 22.12.0+ and npm first."
         fi
         build_frontend "release"
         ;;
     run)
         require_dependency 3 "cargo" check_cargo "Install Rust and Cargo first."
         if [[ "$FRONTEND" != "egui" ]]; then
-            require_dependency 3 "npm" check_npm "Install Node.js 22+ and npm first."
+            require_dependency 3 "npm" check_npm "Install Node.js 22.12.0+ and npm first."
         fi
         build_frontend "debug"
         setup_managed_state_env "run-${FRONTEND}"
@@ -590,7 +593,7 @@ case "$ACTION" in
     run-release)
         require_dependency 3 "cargo" check_cargo "Install Rust and Cargo first."
         if [[ "$FRONTEND" == "electron" ]]; then
-            require_dependency 3 "npm" check_npm "Install Node.js 22+ and npm first."
+            require_dependency 3 "npm" check_npm "Install Node.js 22.12.0+ and npm first."
         fi
         require_release_artifacts
         setup_managed_state_env "run-release-${FRONTEND}"
