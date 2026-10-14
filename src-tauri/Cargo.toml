@@ -15,6 +15,8 @@ tauri = { version = "=2.11.6", default-features = false, features = [
 ] }
 tauri-runtime = "=2.11.3"
 tauri-runtime-wry = { version = "=2.11.4", default-features = false }
+# Macro expansions are host APIs too; the 2.7 helpers target Tauri 2.12.
+tauri-macros = { version = "=2.6.3", default-features = false }
 tauri-plugin-shell = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -22,7 +24,11 @@ tracing = { workspace = true }
 pentimento-ipc = { path = "../crates/ipc" }
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "=2.6.3", features = [] }
+# Constrain the same official 2.11.6 build/macro helper cohort when regenerating.
+tauri-codegen = { version = "=2.6.3", default-features = false }
+tauri-utils = { version = "=2.9.3", default-features = false }
+tauri-plugin = { version = "=2.6.3", default-features = false }
 
 [features]
 default = ["custom-protocol"]

@@ -60,8 +60,8 @@ versions are the stable pair declared by the official
 [Tauri 2.11.6 host manifest](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri/Cargo.toml)
 and [runtime-wry manifest](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri-runtime-wry/Cargo.toml).
 Exact constraints in `src-tauri/Cargo.toml` prevent independent regeneration
-from reintroducing incompatible runtime traits. Its build/macros/utils and shell
-plugin retain their existing locked versions.
+from reintroducing incompatible runtime traits. Its companion macros/codegen/build/plugin helpers are constrained to **2.6.3**
+and utils to **2.9.3**, matching that tag; shell-plugin remains locked to 2.3.4.
 
 #### Advisory and observed reachability
 
@@ -87,6 +87,33 @@ the moderate Windows/Android local-origin confusion advisory affecting Tauri
 2.0 through 2.11.0 and patched in 2.11.1. The current source inspection does not
 demonstrate an attacker-controlled remote page, and Linux-only hosted build/
 capture results do not establish Windows/Android runtime acceptance.
+
+#### Macro producer and host consumer compatibility
+
+The first native compile exposed a second independent mismatch: permissive
+transitive constraints had kept macros 2.7.1 with host 2.11.6. The host imports
+`tauri_macros::do_menu_item`, whose 2.7 expansion names
+`Error::UnexpectedMenuKind`; the
+[2.11.6 host Error enum](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri/src/error.rs)
+has no such variant in any feature configuration. It is not a missing tray-icon
+feature. Enabling tray or another optional feature cannot repair that producer/
+consumer mismatch without expanding the product's feature boundary.
+
+The official
+[2.6.3 macros manifest](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri-macros/Cargo.toml)
+and [menu expansion](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri-macros/src/menu.rs)
+match this host. Code generation is also a host API: the exact constraints cover
+[codegen](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri-codegen/Cargo.toml),
+[build](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri-build/Cargo.toml),
+[plugin helpers](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.6/crates/tauri-plugin/Cargo.toml)
+and their shared utils producer rather than leaving the next regeneration able
+to select a newer incompatible generator.
+
+Tauri 2.12.2 was considered: its Error enum has the new variant, but its official
+cohort also changes runtime/runtime-wry, Wry to 0.57, Tao to 0.37, Muda to 0.20
+and tray-icon to 0.25. Matching the complete official patched 2.11.6 cohort
+preserves the already selected native framework boundary and original features.
+No framework or application source is vendored or patched to mask the mismatch.
 
 #### Native compatibility and features
 
@@ -119,7 +146,10 @@ are preserved.
 
 The focused update used exact host/runtime/Wry manifest constraints and
 `cargo update --manifest-path legacy/Cargo.toml -p tauri --precise 2.11.6`.
-It did not regenerate or broadly update the workspace. The
+The separate focused helper update used
+`cargo update --manifest-path legacy/Cargo.toml -p tauri-macros --precise 2.6.3`
+under the official companion constraints. Neither operation regenerated or
+broadly updated the workspace. The
 [normalized lock delta](tauri-cohort-delta.json) records the complete package
 identity, checksum and resolved-edge review against the original retained lock.
 
@@ -131,8 +161,11 @@ identity, checksum and resolved-edge review against the original retained lock.
   getrandom 0.1 subtree is removed.
 - Apple binding feature changes add core-location/user-notifications and remove
   unused core-video/javascript-core/security packages.
-- Package count changes from 950 to 911: 57 old identities leave and 18 enter;
-  unchanged package identities retain their checksums. There are 11 meaningful
+- The official helper cohort selects its matching config, compression, JSON and
+  URL-pattern dependencies. The newer helper-only DOM/parser versions leave;
+  Wry's 0.27 DOM/parser cohort remains.
+- Package count changes from 950 to 915: 80 old identities leave and 45 enter;
+  unchanged package identities retain their checksums. There are 10 meaningful
   unchanged-package edge changes; other lock diff lines normalize references
   after obsolete versions are removed.
 - The root lock is unchanged. Retained GTK/glib advisory findings are not
@@ -140,6 +173,10 @@ identity, checksum and resolved-edge review against the original retained lock.
 
 Locked full Linux Cargo metadata, reverse consumer trees, resolved feature
 inspection and the focused workspace/entrypoint contracts pass locally. The
+genuine selected macros crate passes `cargo check` and `cargo build`; a narrow
+compiler consumer using its actual `do_menu_item` macro compiles and dispatches
+against an Error shape without the newer variant. This verifies the causal
+macro/host Error compatibility seam, not the complete native application. The
 strict hosted native all-target check, tests and actual capture smoke remain
 required before acceptance because this local environment lacks genuine
 GTK/WebKit development libraries. No gate is skipped or weakened.

@@ -75,3 +75,40 @@ test('retained standalone manifest entrypoints select the same legacy workspace'
         assert.equal(metadata(manifest).workspace_root, path.join(root, 'legacy'), manifest);
     }
 });
+
+test('Cargo retains the official patched Tauri host and generator cohort without new host features', () => {
+    const legacy = metadata('legacy/Cargo.toml');
+    const app = legacy.packages.find((pkg) => pkg.name === 'pentimento-tauri');
+    // The tauri-v2.11.6 tagged helpers match the host API. Macros 2.7 generate
+    // Error::UnexpectedMenuKind, which this host does not define. Exact Cargo
+    // requirements protect that seam even when the independent lock is rebuilt.
+    // https://github.com/tauri-apps/tauri/tree/tauri-v2.11.6/crates
+    for (const [name, version, kind, defaults] of [
+        ['tauri', '2.11.6', null, false],
+        ['tauri-runtime', '2.11.3', null, true],
+        ['tauri-runtime-wry', '2.11.4', null, false],
+        ['tauri-macros', '2.6.3', null, false],
+        ['tauri-build', '2.6.3', 'build', true],
+        ['tauri-codegen', '2.6.3', 'build', false],
+        ['tauri-plugin', '2.6.3', 'build', false],
+        ['tauri-utils', '2.9.3', 'build', false],
+    ]) {
+        const edges = app.dependencies.filter((dep) => dep.name === name);
+        assert.equal(edges.length, 1, `${name} must have one constrained dependency`);
+        const [dep] = edges;
+        assert.equal(dep.req, `=${version}`, `${name} must not float independently`);
+        assert.equal(dep.kind, kind, `${name} must retain its dependency role`);
+        assert.equal(dep.uses_default_features, defaults, `${name} default feature policy`);
+        assert.equal(dep.optional, false, `${name} constraint must always apply`);
+        assert.equal(dep.target, null, `${name} constraint must apply on every target`);
+        if (name !== 'tauri') assert.deepEqual(dep.features, [], `${name} feature policy`);
+    }
+    const host = app.dependencies.find((dep) => dep.name === 'tauri');
+    assert.deepEqual([...host.features].sort(), [
+        'common-controls-v6', 'compression', 'devtools', 'dynamic-acl', 'wry', 'x11',
+    ], 'retain historical host defaults explicitly, without dbus or tray-icon');
+    assert.deepEqual(app.features, {
+        'custom-protocol': ['tauri/custom-protocol'],
+        default: ['custom-protocol'],
+    }, 'retain the original custom-protocol entrypoint and default');
+});
