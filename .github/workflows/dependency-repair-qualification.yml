@@ -112,6 +112,8 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/wayland/test_title_pixels.py \
             2>&1 | tee evidence/pixel-oracle-tests.log
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/wayland/test_compositor_shutdown.py \
+            2>&1 | tee evidence/compositor-shutdown-tests.log
           cargo test --locked --manifest-path vendor/sctk-adwaita/Cargo.toml --lib \
             2>&1 | tee evidence/default-title-tests.log
           cargo test --locked --manifest-path vendor/sctk-adwaita/Cargo.toml \
