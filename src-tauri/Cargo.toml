@@ -7,7 +7,14 @@ license.workspace = true
 description = "Pentimento Tauri desktop app (Bevy WASM + Svelte)"
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+# This patched stable cohort is selected together; do not independently float
+# the implementation and runtime traits. See legacy/README.md.
+# Enumerate the historical defaults to avoid adding the newer dbus default.
+tauri = { version = "=2.11.6", default-features = false, features = [
+    "wry", "compression", "common-controls-v6", "dynamic-acl", "x11", "devtools",
+] }
+tauri-runtime = "=2.11.3"
+tauri-runtime-wry = { version = "=2.11.4", default-features = false }
 tauri-plugin-shell = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
