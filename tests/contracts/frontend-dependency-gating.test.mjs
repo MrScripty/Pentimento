@@ -151,6 +151,20 @@ test('native webview backends compile only with webkit', () => {
     assertCfgGated(lib, 'crates/webview/src/lib.rs', 'pub struct OverlayWebview', ['webkit']);
 });
 
+test('webview channel and capture trait imports follow their backend owners', () => {
+    const lib = read('crates/webview/src/lib.rs');
+    assertCfgGated(lib, 'crates/webview/src/lib.rs',
+        'use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};', ['webkit', 'cef']);
+    assertCfgGated(lib, 'crates/webview/src/lib.rs', 'use tokio::sync::mpsc;', ['webkit', 'cef']);
+    for (const declaration of [
+        'use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};',
+        'use std::sync::Arc;',
+        'use std::sync::atomic::{AtomicBool, Ordering};',
+    ]) {
+        assertCfgGated(lib, 'crates/webview/src/lib.rs', declaration, ['webkit', 'cef', 'dioxus']);
+    }
+});
+
 test('app web UI modules compile only for web-backed frontends', () => {
     const main = read('crates/app/src/main.rs');
     assertCfgGated(main, 'crates/app/src/main.rs', 'mod embedded_ui;', ['webkit', 'cef']);

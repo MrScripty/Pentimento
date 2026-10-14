@@ -31,10 +31,15 @@ pub use platform_linux_dioxus::LinuxDioxusRenderer;
 #[cfg(all(target_os = "linux", feature = "webkit"))]
 pub use platform_linux_overlay::LinuxOverlayWebview;
 
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
+#[cfg(any(feature = "webkit", feature = "cef", feature = "dioxus"))]
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
+#[cfg(any(feature = "webkit", feature = "cef", feature = "dioxus"))]
 use std::sync::Arc;
+#[cfg(any(feature = "webkit", feature = "cef", feature = "dioxus"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use tokio::sync::mpsc;
 
 /// Offscreen webview that can be captured as a texture

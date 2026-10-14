@@ -104,3 +104,48 @@ dependency repair workflow:
 Every job records its actual candidate SHA, lock/toolchain facts and artifacts.
 Required unavailable/failed observations block acceptance. Software graphics
 does not establish hardware GPU, stylus or interactive performance qualification.
+
+## First repair execution and bounded follow-up (2026-10-14)
+
+Published candidate `0591f8adf5074b7fe3b9d9c60def01fe7dbc94f7` passed the
+[strict pinned audit](https://github.com/MrScripty/Pentimento/actions/runs/38493211493).
+The inspected audit artifact records that exact source and root lock above,
+scanner 0.22.2, database `ef6173cbc5c50ec8166f9a5b28f07834144373ee`, exit 0,
+937 locked dependencies, zero vulnerabilities, zero warnings, an empty ignore
+list and empty stderr, with no incomplete-coverage receipt. Electron runtime,
+paint/sculpt and geometry workflows also passed. These observations qualify
+that earlier source, not an unpublished follow-up or the entire PR.
+
+The new gates exposed three packaging/observation/cohort defects, and the
+focused warning gate exposed one feature-ownership defect:
+
+- Existing `dist/` ignore rules excluded nine genuine rav1e assembly Rust
+  modules from the published Git tree although they existed locally. Narrow
+  vendored-source exceptions restore every reviewed module. A new regression
+  compares actual Git-index blobs against complete pinned release-archive
+  inventories and documented deltas, including negative missing-source,
+  license/font and expanded-omission cases. Filesystem presence alone no longer
+  establishes published-source completeness.
+- At scale 2, Sway's logical output becomes 640x400 but its floating client
+  retained x=400, y=280 and size 480x240. The original capture was correctly
+  rejected as clipped. The harness now observes actual output geometry, asks
+  the compositor to recenter, and requires successful, fully-contained actual
+  client geometry before capture. Strict pixel predicates remain unchanged or
+  strengthened. The original four unscaled captures pass; title update changes
+  1,568 pixels and protected close-control changes are exactly zero.
+- The separate legacy lock mixed Tauri 2.9.5/runtime-wry 2.9.3 with runtime
+  2.12.1. The official historical host tag pairs runtime 2.9.2, explaining
+  the native trait/API failure. Further review also identified known host
+  security advisories. A separate focused maintained-cohort repair must retain
+  the native consumer source/configuration and qualify it; legacy remains
+  explicitly security-unqualified. See [the cohort evidence](../../../../legacy/README.md).
+- Channel/capture imports now follow WebKit/CEF ownership; shared IPC/dirty
+  imports follow WebKit/CEF/Dioxus ownership. No warning allowance was added.
+  Featureless locked Webview Clippy with `-D warnings` passes locally.
+
+The follow-up additionally passes five tracked-source completeness regressions,
+fifteen synthetic Wayland oracle/geometry tests and full local Node verification
+(162 tests), plus warning-free featureless Webview Clippy.
+Its final published source must repeat the full strict audit and supported
+frontend gates, and pass actual assembly/independent decoder, scaled compositor/
+natural shutdown and retained native consumer/capture observations before merge.

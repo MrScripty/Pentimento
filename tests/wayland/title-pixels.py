@@ -30,24 +30,42 @@ def assert_client_absent(tree):
         "Compositor still owns the closed client"
 
 
-def observe(directory, name):
-    tree = json.loads((directory / f"{name}-tree.json").read_text())
+def visible_geometry(tree, outputs, expected_scale=None, expected_size=None):
+    """Require the actual client to fit the actual logical output before capture."""
     nodes = [node for node in objects(tree) if node.get("app_id") == APP_ID]
     assert len(nodes) == 1, "Expected one real compositor client"
     node = nodes[0]
-    outputs = json.loads((directory / f"{name}-outputs.json").read_text())
     output = [item for item in outputs if item.get("name") == "HEADLESS-1"]
     assert len(output) == 1 and output[0]["active"], "Headless output unavailable"
     scale = output[0]["scale"]
     assert scale in (1, 2), "Unexpected compositor scale"
     rect = node["rect"]
     assert rect["width"] > 240 and rect["height"] > HEADER_LOGICAL_HEIGHT
+    bounds = output[0]["rect"]
+    assert bounds["x"] <= rect["x"] < rect["x"] + rect["width"] <= bounds["x"] + bounds["width"], \
+        "Window was clipped by output bounds horizontally"
+    assert bounds["y"] <= rect["y"] < rect["y"] + rect["height"] <= bounds["y"] + bounds["height"], \
+        "Window was clipped by output bounds vertically"
+    if expected_scale is not None:
+        assert scale == expected_scale, "Expected compositor scale not observed"
+    if expected_size is not None:
+        assert (rect["width"], rect["height"]) == expected_size, \
+            "Expected configured compositor size not observed"
+    return node, output[0]
+
+
+def observe(directory, name):
+    tree = json.loads((directory / f"{name}-tree.json").read_text())
+    outputs = json.loads((directory / f"{name}-outputs.json").read_text())
+    node, output = visible_geometry(tree, outputs)
+    scale = output["scale"]
+    rect = node["rect"]
     with Image.open(directory / f"{name}.png") as source:
         assert source.size == (1280, 800), "Unexpected physical screenshot dimensions"
         image = source.convert("RGB")
     x, y = round(rect["x"] * scale), round(rect["y"] * scale)
     width, height = round(rect["width"] * scale), round(rect["height"] * scale)
-    assert 0 <= x < x + width <= image.width
+    assert 0 <= x < x + width <= image.width, "Window was clipped by output bounds horizontally"
     assert 0 <= y < y + height <= image.height, "Window was clipped by output bounds"
     box = (x + 70 * scale, y + 3 * scale,
            x + width - 120 * scale, y + (HEADER_LOGICAL_HEIGHT - 3) * scale)
@@ -102,5 +120,13 @@ def qualify(directory, source):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--closed":
         assert_client_absent(json.loads(pathlib.Path(sys.argv[2]).read_text()))
+    elif len(sys.argv) == 7 and sys.argv[1] == "--geometry":
+        node, output = visible_geometry(
+            json.loads(pathlib.Path(sys.argv[5]).read_text()),
+            json.loads(pathlib.Path(sys.argv[6]).read_text()),
+            expected_scale=float(sys.argv[2]),
+            expected_size=(int(sys.argv[3]), int(sys.argv[4])))
+        print(json.dumps({"rect": node["rect"], "output_rect": output["rect"],
+                          "scale": output["scale"], "fully_visible": True}))
     else:
         qualify(pathlib.Path(sys.argv[1]), "real Wayland compositor captures")

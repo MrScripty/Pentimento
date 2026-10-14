@@ -116,6 +116,47 @@ for _ in $(seq 1 100); do
 done
 grep -Fq 'output scale=2' "$EVIDENCE/client.log"
 wait_width 480
+# Wait for the compositor's actual output layout before centering; a client
+# scale event alone does not establish the output's completed logical geometry.
+output_observed=false
+for _ in $(seq 1 150); do
+  kill -0 "$client_pid"
+  swaymsg -t get_outputs > "$runtime/scale-outputs.json"
+  if jq -e '[.[] | select(.name == "HEADLESS-1" and .active)] |
+    length == 1 and .[0].scale == 2 and .[0].rect.width == 640 and .[0].rect.height == 400' \
+    "$runtime/scale-outputs.json" >/dev/null; then
+    output_observed=true
+    break
+  fi
+  sleep 0.2
+done
+if [[ "$output_observed" != true ]]; then
+  echo 'Compositor did not attain the configured scale2 logical output geometry' >&2
+  exit 1
+fi
+# Scale 2 shrinks this output's logical area from 1280x800 to 640x400.
+# Sway preserves floating coordinates across that change; explicitly position
+# the real client again, then wait for its acknowledged geometry to fit.
+swaymsg "[app_id=\"$app_id\"] move position center" > "$EVIDENCE/scaled-position-command.json"
+jq -e 'length > 0 and all(.[]; .success == true)' \
+  "$EVIDENCE/scaled-position-command.json" >/dev/null
+position_observed=false
+for _ in $(seq 1 150); do
+  kill -0 "$client_pid"
+  swaymsg -t get_tree > "$EVIDENCE/scaled-position-tree.json"
+  swaymsg -t get_outputs > "$EVIDENCE/scaled-position-outputs.json"
+  if python3 "$ROOT/tests/wayland/title-pixels.py" --geometry 2 480 240 \
+    "$EVIDENCE/scaled-position-tree.json" "$EVIDENCE/scaled-position-outputs.json" \
+    > "$EVIDENCE/scaled-position-observation.json" 2> "$EVIDENCE/scaled-position-error.log"; then
+    position_observed=true
+    break
+  fi
+  sleep 0.2
+done
+if [[ "$position_observed" != true ]]; then
+  echo 'Scaled client did not attain fully visible acknowledged compositor geometry' >&2
+  exit 1
+fi
 snapshot scaled
 python3 "$ROOT/tests/wayland/title-pixels.py" "$EVIDENCE"
 

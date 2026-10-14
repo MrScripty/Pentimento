@@ -2,6 +2,8 @@
 import importlib.util
 import json
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -27,7 +29,8 @@ class TitlePixelsTests(unittest.TestCase):
             node = {"app_id": oracle.APP_ID, "name": title, "rect": rect}
             (self.directory / f"{name}-tree.json").write_text(json.dumps({"nodes": [node]}))
             (self.directory / f"{name}-outputs.json").write_text(json.dumps([
-                {"name": "HEADLESS-1", "active": True, "scale": scale}]))
+                {"name": "HEADLESS-1", "active": True, "scale": scale,
+                 "rect": {"x": 0, "y": 0, "width": 1280 // scale, "height": 800 // scale}}]))
             image = Image.new("RGB", (1280, 800), (32, 32, 32))
             draw = ImageDraw.Draw(image)
             x, y = rect["x"] * scale, rect["y"] * scale
@@ -74,7 +77,8 @@ class TitlePixelsTests(unittest.TestCase):
 
     def test_unobserved_scale_is_rejected(self):
         (self.directory / "scaled-outputs.json").write_text(json.dumps([
-            {"name": "HEADLESS-1", "active": True, "scale": 1}]))
+            {"name": "HEADLESS-1", "active": True, "scale": 1,
+             "rect": {"x": 0, "y": 0, "width": 1280, "height": 800}}]))
         with self.assertRaises(AssertionError):
             self.qualify()
 
@@ -97,6 +101,64 @@ class TitlePixelsTests(unittest.TestCase):
         path.write_text(json.dumps(tree))
         with self.assertRaises(AssertionError):
             self.qualify()
+
+    def test_scale_transition_with_preserved_floating_position_is_rejected(self):
+        # Actual failed hosted geometry: scale2 output is 640x400 logical, but
+        # pre-transition floating x400/y280 plus size480x240 remains offscreen.
+        path = self.directory / "scaled-tree.json"
+        tree = json.loads(path.read_text())
+        tree["nodes"][0]["rect"].update(x=400, y=280)
+        path.write_text(json.dumps(tree))
+        with self.assertRaisesRegex(AssertionError, "clipped by output bounds horizontally"):
+            self.qualify()
+        tree["nodes"][0]["rect"]["x"] = 80
+        path.write_text(json.dumps(tree))
+        with self.assertRaisesRegex(AssertionError, "clipped by output bounds vertically"):
+            self.qualify()
+
+    def test_centered_scaled_geometry_and_capture_preserve_full_acceptance(self):
+        path = self.directory / "scaled-tree.json"
+        tree = json.loads(path.read_text())
+        tree["nodes"][0]["rect"].update(x=80, y=80)
+        path.write_text(json.dumps(tree))
+        outputs = json.loads((self.directory / "scaled-outputs.json").read_text())
+        node, output = oracle.visible_geometry(tree, outputs, expected_scale=2,
+                                               expected_size=(480, 240))
+        self.assertEqual(node["rect"], {"x": 80, "y": 80, "width": 480, "height": 240})
+        self.assertEqual(output["rect"], {"x": 0, "y": 0, "width": 640, "height": 400})
+        with Image.open(self.directory / "scaled.png") as old:
+            window = old.crop((120, 120, 1080, 600))
+        centered = Image.new("RGB", (1280, 800), (32, 32, 32))
+        centered.paste(window, (160, 160))
+        centered.save(self.directory / "scaled.png")
+        self.assertEqual(self.qualify()["status"], "passed")
+
+    def test_geometry_gate_requires_actual_scale_and_configured_size(self):
+        tree = json.loads((self.directory / "scaled-tree.json").read_text())
+        outputs = json.loads((self.directory / "scaled-outputs.json").read_text())
+        with self.assertRaisesRegex(AssertionError, "Expected compositor scale"):
+            oracle.visible_geometry(tree, outputs, expected_scale=1,
+                                    expected_size=(480, 240))
+        with self.assertRaisesRegex(AssertionError, "Expected configured compositor size"):
+            oracle.visible_geometry(tree, outputs, expected_scale=2,
+                                    expected_size=(720, 360))
+
+    def test_capture_geometry_command_accepts_only_visible_acknowledged_geometry(self):
+        script = pathlib.Path(__file__).with_name("title-pixels.py")
+        tree_path = self.directory / "scaled-tree.json"
+        command = [sys.executable, str(script), "--geometry", "2", "480", "240",
+                   str(tree_path), str(self.directory / "scaled-outputs.json")]
+        observed = subprocess.run(command, capture_output=True, text=True, check=True)
+        receipt = json.loads(observed.stdout)
+        self.assertTrue(receipt["fully_visible"])
+        self.assertEqual(receipt["scale"], 2)
+        tree = json.loads(tree_path.read_text())
+        tree["nodes"][0]["rect"].update(x=400, y=280)
+        tree_path.write_text(json.dumps(tree))
+        rejected = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("Window was clipped by output bounds horizontally", rejected.stderr)
+        self.assertEqual(rejected.stdout, "")
 
     def test_wrong_resize_is_rejected(self):
         path = self.directory / "wide-tree.json"
