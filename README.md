@@ -35,9 +35,10 @@ delete or regenerate lockfiles to work around a failed install.
 | `dioxus` | Native Bevy app + Rust-native Dioxus UI | Active |
 | `egui` | Native Bevy app + `bevy_egui` overlay UI | Experimental |
 
-Discontinued paths such as capture, overlay, and Tauri remain in the repository
-for historical context only and are not part of the canonical
-standards-aligned workflow.
+Discontinued capture, overlay, and Tauri paths are retained in the independent
+[legacy workspace](legacy/README.md), with their source and explicit entry points
+preserved. Their dependencies and lockfile are outside the canonical
+standards-aligned workflow and the root workspace dependency audit.
 
 ## Support Matrix
 
@@ -135,3 +136,8 @@ docs/adr/                  Recorded architecture decisions
 ## License
 
 MIT
+
+Vendored compatibility forks and fonts retain their own MIT/BSD/MPL-2.0/OFL
+terms and notices; the project license does not replace those obligations.
+See [vendor ownership and licenses](vendor/README.md) and the SCTK
+[exact-source distribution instructions](vendor/sctk-adwaita/SOURCE_AVAILABILITY.md).

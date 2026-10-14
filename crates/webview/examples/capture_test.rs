@@ -1,6 +1,6 @@
 //! Test example for webview capture functionality
 //!
-//! Run with: cargo run -p pentimento-webview --example capture_test
+//! Run with: cargo run --manifest-path legacy/Cargo.toml -p pentimento-webview-legacy --example capture_test
 
 use pentimento_webview::OffscreenWebview;
 use std::time::Duration;
@@ -86,6 +86,7 @@ fn main() {
         if let Some(image) = webview.capture() {
             println!("Capture successful on attempt {}!", attempt + 1);
             println!("Image dimensions: {}x{}", image.width(), image.height());
+            assert_eq!((image.width(), image.height()), (800, 600));
 
             // Save the image for inspection
             let path = "/tmp/pentimento_webview_test.png";
@@ -100,12 +101,12 @@ fn main() {
                 image.width() * image.height()
             );
 
+            assert!(non_transparent > 0, "Capture must contain rendered pixels");
             return;
         }
 
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    println!("Warning: Capture did not complete within timeout.");
-    println!("This may be expected if running headless without a display.");
+    panic!("Capture did not complete within timeout; a working display is required");
 }

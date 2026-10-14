@@ -10,6 +10,7 @@ on:
       - 'package*.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'vendor/**'
       - 'scripts/cef-runtime.mjs'
       - 'scripts/setup-cef.sh'
       - 'launcher.sh'

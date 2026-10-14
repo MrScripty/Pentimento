@@ -13,8 +13,10 @@ members = [
     "crates/egui-ui",
     "crates/painting",
     "crates/sculpting",
-    "src-tauri",
+    "crates/dependency-regressions",
 ]
+
+exclude = ["legacy", "crates/frontend-webkit", "crates/frontend-overlay", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -35,8 +37,7 @@ tracing = "0.1"
 # CEF host and subprocess helper share one exact binding/runtime release.
 cef = "=154.5.0"
 
-# Webview
-wry = "0.53"
+# Native window handles
 raw-window-handle = "0.6"
 
 # Image handling
@@ -70,3 +71,9 @@ unsafe_code = "warn"
 lto = true
 codegen-units = 1
 strip = true
+
+# API-compatible maintained backports; provenance and tests live with each fork.
+[patch.crates-io]
+pulp = { path = "vendor/pulp-0.22.3" }
+rav1e = { path = "vendor/rav1e-0.7.1" }
+sctk-adwaita = { path = "vendor/sctk-adwaita" }

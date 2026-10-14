@@ -1,6 +1,8 @@
 # Main integration qualification
 
-Date: 2026-10-13. State: verifying; not merge or security acceptance.
+Date: 2026-10-13. First integrated source: d1fc564. Its runtime/frontend
+qualification passed; strict audit blocked merge. The subsequent approved
+[dependency repair](dependency-repair.md) needs its own final-head qualification.
 
 ## Source and integration boundary
 
@@ -104,3 +106,9 @@ Independent reviews found no concrete production regression in reviewed app,
 input, egui, Scene depth/outline, GPU lifecycle and dependency crossings. This
 review conclusion is supporting evidence; pending required runtime, full
 frontend and security claims remain unsatisfied.
+
+## Actual d1fc564 hosted qualification
+
+The first integrated source passed [full launcher verify](https://github.com/MrScripty/Pentimento/actions/runs/38478308859), [Electron](https://github.com/MrScripty/Pentimento/actions/runs/38478308919), [native CEF](https://github.com/MrScripty/Pentimento/actions/runs/38478308816), [paint/sculpt](https://github.com/MrScripty/Pentimento/actions/runs/38478308780) and [geometry](https://github.com/MrScripty/Pentimento/actions/runs/38478308885). Electron/native screenshots, selection/depth/input/stroke/history and lifecycle evidence were inspected; these are software-graphics observations, not hardware performance qualification.
+
+[Cohort resolution/focused checks](https://github.com/MrScripty/Pentimento/actions/runs/38478308963) passed on actual head d1fc564 and exact lock fd9a2b11..., including default/hot-reload/library/app/warning checks. Its complete strict audit failed with zero listed vulnerabilities, two unsound warnings (glib/rand) and four unmaintained warnings (fxhash/paste/proc-macro-error/ttf-parser). Scanner stderr was empty and coverage complete. These findings caused the approved compatible repair; no merge or security acceptance followed from the runtime passes.

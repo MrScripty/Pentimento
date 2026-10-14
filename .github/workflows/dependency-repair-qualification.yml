@@ -1,0 +1,210 @@
+name: Dependency repair qualification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-repair-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  codec-backports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - name: Provision official independent decoder and assembler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libavif-bin nasm
+      - name: Record exact source, lock and toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          printf '%s\n' "$CANDIDATE_SHA" > evidence/source-sha.txt
+          sha256sum Cargo.lock > evidence/Cargo.lock.sha256
+          cp Cargo.lock evidence/
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          ffmpeg -version > evidence/ffmpeg.txt
+          avifdec --version > evidence/avifdec.txt
+          nasm -v > evidence/nasm.txt
+      - name: Test retained formats, maintained macros and actual SIMD paths
+        run: |
+          set -euo pipefail
+          cargo test --locked -p dependency-regressions --features asm \
+            2>&1 | tee evidence/codec-macro-tests.log
+          cargo test --locked -p dependency-regressions --features asm \
+            --test independent_decoders -- --ignored \
+            2>&1 | tee evidence/independent-decoder-tests.log
+          sha256sum --check evidence/Cargo.lock.sha256
+      - name: Verify retained lock after attempted tests
+        if: always()
+        run: sha256sum --check evidence/Cargo.lock.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codec-backports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  wayland-titles:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - name: Provision official compositor and font prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sway grim jq libwayland-dev libxkbcommon-dev \
+            pkg-config fontconfig fonts-dejavu-core dbus-x11 python3-pil
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/wayland-title-target" >> "$GITHUB_ENV"
+      - name: Record source, production and separate regression locks
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          printf '%s\n' "$CANDIDATE_SHA" > evidence/source-sha.txt
+          sha256sum Cargo.lock vendor/sctk-adwaita/Cargo.lock \
+            vendor/sctk-adwaita/Cargo.toml > evidence/locks-manifest.sha256
+          cp vendor/sctk-adwaita/Cargo.lock evidence/sctk-regression-Cargo.lock
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          sway --version > evidence/sway.txt
+          grim -h > evidence/grim.txt 2>&1
+          fc-match sans-serif > evidence/font.txt
+          printf '%s\n' 'Real headless Wayland compositor; explicit pixman software rendering' \
+            > evidence/rendering-scope.txt
+      - name: Test real title renderer and retained API configurations
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/wayland/test_title_pixels.py \
+            2>&1 | tee evidence/pixel-oracle-tests.log
+          cargo test --locked --manifest-path vendor/sctk-adwaita/Cargo.toml --lib \
+            2>&1 | tee evidence/default-title-tests.log
+          cargo test --locked --manifest-path vendor/sctk-adwaita/Cargo.toml \
+            --no-default-features --features skrifa --lib \
+            2>&1 | tee evidence/skrifa-title-tests.log
+          cargo check --locked --manifest-path vendor/sctk-adwaita/Cargo.toml \
+            --no-default-features 2>&1 | tee evidence/no-title-api-check.log
+          cargo build --locked --manifest-path vendor/sctk-adwaita/Cargo.toml \
+            --example wayland_title_smoke 2>&1 | tee evidence/client-build.log
+      - name: Observe actual client decoration, title pixels and owned shutdown
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          export PENTIMENTO_WAYLAND_CLIENT="$CARGO_TARGET_DIR/debug/examples/wayland_title_smoke"
+          export PENTIMENTO_WAYLAND_EVIDENCE="$GITHUB_WORKSPACE/evidence"
+          test -x "$PENTIMENTO_WAYLAND_CLIENT"
+          timeout --signal=TERM --kill-after=10s 240s \
+            dbus-run-session -- bash tests/wayland/title-smoke.sh \
+            2>&1 | tee evidence/wayland-observation.log
+          test -s evidence/pixel-result.json
+          test -s evidence/process-result.json
+          sha256sum --check evidence/locks-manifest.sha256
+      - name: Verify retained source and locks after attempted checks
+        if: always()
+        run: sha256sum --check evidence/locks-manifest.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wayland-titles-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  legacy-consumers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.99.0'
+      - name: Provision official Linux legacy consumer prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev libudev-dev \
+            libwayland-dev libwebkit2gtk-4.1-dev libxkbcommon-dev pkg-config xvfb xauth
+      - name: Record separate workspace provenance and build real UI assets
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          printf '%s\n' "$CANDIDATE_SHA" > evidence/source-sha.txt
+          sha256sum Cargo.lock legacy/Cargo.lock package-lock.json > evidence/locks.sha256
+          cp legacy/Cargo.lock evidence/legacy-Cargo.lock
+          rustc -Vv > evidence/rustc.txt
+          cargo -V > evidence/cargo.txt
+          npm ci 2>&1 | tee evidence/npm-ci.log
+          npm run build 2>&1 | tee evidence/ui-build.log
+          test -s dist/ui/index.html
+      - name: Check retained WebKit, overlay and Tauri entrypoints
+        run: |
+          set -euo pipefail
+          cargo check --locked --manifest-path legacy/Cargo.toml --workspace --all-targets \
+            --features pentimento-legacy/webkit 2>&1 | tee evidence/legacy-check.log
+          cargo test --locked --manifest-path legacy/Cargo.toml -p pentimento-legacy \
+            --features webkit --no-run 2>&1 | tee evidence/legacy-test-build.log
+      - name: Observe genuine retained WebKit capture
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 600s xvfb-run -a env GDK_BACKEND=x11 \
+            cargo run --locked --manifest-path legacy/Cargo.toml \
+              -p pentimento-webview-legacy --example capture_test \
+              2>&1 | tee evidence/legacy-capture.log
+          test -s /tmp/pentimento_webview_test.png
+          cp /tmp/pentimento_webview_test.png evidence/
+          sha256sum --check evidence/locks.sha256
+      - name: Verify retained locks after attempted checks
+        if: always()
+        run: sha256sum --check evidence/locks.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy-consumers-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14

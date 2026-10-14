@@ -1,10 +1,13 @@
 //! Webview management for Pentimento
 //!
 //! Provides platform-specific implementations for webview compositing:
-//! - Capture mode: Renders webview offscreen and captures framebuffer for texture upload
-//! - Overlay mode: Creates transparent child window that composites via desktop compositor
+//! - Retained legacy capture mode: Renders WebKit offscreen for texture upload
+//! - Retained legacy overlay mode: Composites via a transparent child window
 //! - CEF mode: Uses Chromium Embedded Framework for offscreen rendering (requires `cef` feature)
 //! - Dioxus mode: Native Rust UI with Dioxus (requires `dioxus` feature)
+//!
+//! WebKit sources are enabled only by `legacy/webview/Cargo.toml`. The active
+//! crate has no WebKit feature or GTK dependency and defaults to no backend.
 
 mod error;
 
@@ -16,7 +19,7 @@ mod platform_linux_cef;
 mod platform_linux_dioxus;
 #[cfg(all(target_os = "linux", feature = "webkit"))]
 mod platform_linux_overlay;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "webkit"))]
 mod platform_windows;
 
 pub use error::WebviewError;
@@ -35,7 +38,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 /// Offscreen webview that can be captured as a texture
-#[cfg(any(target_os = "windows", feature = "webkit"))]
+#[cfg(feature = "webkit")]
 pub struct OffscreenWebview {
     #[cfg(all(target_os = "linux", feature = "webkit"))]
     inner: platform_linux::LinuxWebview,
@@ -50,7 +53,7 @@ pub struct OffscreenWebview {
     from_ui_rx: mpsc::UnboundedReceiver<UiToBevy>,
 }
 
-#[cfg(any(target_os = "windows", feature = "webkit"))]
+#[cfg(feature = "webkit")]
 impl OffscreenWebview {
     /// Create a new offscreen webview with the given HTML content
     pub fn new(html_content: &str, size: (u32, u32)) -> Result<Self, WebviewError> {
@@ -513,7 +516,7 @@ impl DioxusWebview {
 // CompositeBackend trait implementations
 // ============================================================================
 
-#[cfg(any(target_os = "windows", feature = "webkit"))]
+#[cfg(feature = "webkit")]
 impl CompositeBackend for OffscreenWebview {
     fn poll(&mut self) {
         self.poll();

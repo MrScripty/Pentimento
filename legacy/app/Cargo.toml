@@ -1,0 +1,60 @@
+[package]
+name = "pentimento-legacy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pentimento-config = { path = "../../crates/config", features = ["bevy"] }
+pentimento-webview = { package = "pentimento-webview-legacy", path = "../webview", default-features = false, optional = true }
+pentimento-frontend-core = { path = "../../crates/frontend-core" }
+pentimento-scene = { path = "../../crates/scene" }
+pentimento-ipc = { path = "../../crates/ipc" }
+painting = { path = "../../crates/painting", features = ["bevy"], optional = true }
+
+bevy = { workspace = true, features = [
+    "3d",
+    "bevy_ui",
+    "bevy_ui_render",
+    "wayland",
+    "x11",
+    "ktx2",
+    "png",
+] }
+
+raw-window-handle = { workspace = true }
+
+# Embed UI assets (web-backed frontends only)
+rust-embed = { version = "8.7", features = ["debug-embed", "compression"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+default = ["wayland", "wireframe", "selection", "mesh_painting", "mesh_editing", "sculpting", "atmosphere"]
+sculpting = ["pentimento-scene/sculpting"]
+wayland = []
+x11 = []
+# WebKit capture/overlay backend for the legacy web UI modes.
+webkit = [
+    "dep:pentimento-webview",
+    "pentimento-webview/webkit",
+    "dep:rust-embed",
+    "dep:gtk",
+    "dep:painting",
+]
+wireframe = ["pentimento-scene/wireframe"]
+selection = ["pentimento-scene/selection"]
+mesh_painting = ["pentimento-scene/mesh_painting"]
+mesh_editing = ["pentimento-scene/mesh_editing"]
+atmosphere = ["pentimento-scene/atmosphere"]
+
+[[bin]]
+name = "pentimento"
+path = "../../crates/app/src/main.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cef", "dioxus", "egui"))'] }

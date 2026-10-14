@@ -2,6 +2,8 @@
 **/target/
 Cargo.lock
 !/Cargo.lock
+!/legacy/Cargo.lock
+!/vendor/sctk-adwaita/Cargo.lock
 
 # Node
 node_modules/
@@ -47,6 +49,7 @@ ui/public/wasm/
 
 # Test outputs
 /tmp/
+**/__pycache__/
 
 # Refactoring documentation
 **/CHANGES.md

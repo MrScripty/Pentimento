@@ -58,3 +58,7 @@ Local executor currently lacks GTK/WebKitGTK/ALSA/udev development packages and 
 - Existing [frontend ownership ADR](../../adr/ADR-001-active-frontends-and-contract-ownership.md)
 
 The task-created worktree is retained-protected while review/acceptance is open. Owner: runtime-upgrade task. Purpose: reproducible checks and draft review. Retirement: after the reviewed branch is integrated or explicitly abandoned, preserve its exact head on the remote or an archive ref before removing only this task's clean worktree.
+
+## Current dependency-repair acceptance slice
+
+Maintainer approved preserving discontinued frontends in a separate legacy workspace and continuing compatible dependency fixes after integrated candidate d1fc564 passed runtime/frontends but failed the strict audit. State: Verifying. The next accepted boundary requires exact-head codec/Wayland/legacy-consumer observations and every unchanged supported frontend/runtime/audit gate. [Repair report](reports/dependency-repair.md) owns detailed evidence and limits. Do not inherit d1fc564 runtime acceptance for modified dependency source or weaken the strict audit.

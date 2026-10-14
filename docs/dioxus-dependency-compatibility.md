@@ -22,6 +22,11 @@ for resolution and verification limits. This candidate's default/hot-reload
 compilation, strict warning checks and security audit must run on its exact head.
 The historical results below describe their old cohort only.
 
+The approved dependency repair isolates retained legacy manifests and backports
+maintained macro/title dependencies without changing these producer/consumer
+identities. Its own final exact-head audit/runtime gates are required; see
+[repair evidence](plans/browser-runtime-upgrade/reports/dependency-repair.md).
+
 ## Historical Bevy 0.18 candidate scope
 
 Keep `blitz-dom`, `blitz-paint`, `blitz-traits`, and `dioxus-native-dom`

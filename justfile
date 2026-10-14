@@ -1,74 +1,55 @@
-# Pentimento build automation
-
-# Default recipe
+# The launcher owns all supported frontend workflows.
 default: dev
 
-# Install all dependencies
 setup:
-    npm install
-    rustup target add x86_64-pc-windows-gnu
+    ./launcher.sh --install
 
-# Development mode (UI hot reload)
-dev:
-    #!/usr/bin/env bash
-    set -e
-    # Start Vite dev server in background
-    npm run dev &
-    VITE_PID=$!
-    trap "kill $VITE_PID 2>/dev/null" EXIT
-    sleep 2
-    # Run Bevy app in dev mode
-    PENTIMENTO_DEV=1 cargo run -p pentimento --features webkit
+dev frontend="cef":
+    ./launcher.sh --run --frontend {{frontend}}
 
-# Build UI only
 build-ui:
     npm run build
 
-# Build Rust only
-build-rust:
-    cargo build --release -p pentimento --features webkit
+build-rust frontend="cef":
+    ./launcher.sh --build-release --frontend {{frontend}}
 
-# Build everything for release
-build: build-ui build-rust
+build frontend="cef":
+    ./launcher.sh --build-release --frontend {{frontend}}
 
-# Build for Windows (cross-compilation)
-build-windows:
-    npm run build
-    cross build --release -p pentimento --features webkit --target x86_64-pc-windows-gnu
+run frontend="cef":
+    ./launcher.sh --run-release --frontend {{frontend}}
 
-# Run the release build
-run:
-    cargo run --release -p pentimento --features webkit
-
-# Run tests
 test:
-    cargo test --workspace
+    ./launcher.sh --test
 
-# Type check Svelte
 check-ui:
     npm run check
 
-# Check Rust
 check-rust:
-    cargo check --workspace
+    cargo check --locked --workspace
 
-# Check everything
 check: check-rust check-ui
 
-# Lint Rust
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --locked --workspace -- -D warnings
 
-# Format Rust code
 fmt:
-    cargo fmt --all
+    ./scripts/rustfmt-active.sh --write
 
-# Clean build artifacts
 clean:
     cargo clean
     rm -rf dist/
     rm -rf node_modules/
 
-# Install cross for Windows builds
-install-cross:
-    cargo install cross --git https://github.com/cross-rs/cross
+# Discontinued frontends require their explicit independent workspace.
+legacy-build: build-ui
+    cargo build --locked --manifest-path legacy/Cargo.toml -p pentimento-legacy --features webkit
+
+legacy-capture: build-ui
+    PENTIMENTO_COMPOSITE=capture cargo run --locked --manifest-path legacy/Cargo.toml -p pentimento-legacy --features webkit
+
+legacy-overlay: build-ui
+    PENTIMENTO_COMPOSITE=overlay cargo run --locked --manifest-path legacy/Cargo.toml -p pentimento-legacy --features webkit
+
+legacy-check:
+    cargo check --locked --manifest-path legacy/Cargo.toml --workspace

@@ -202,7 +202,7 @@ pub fn create_frontend(
 
         #[cfg(not(feature = "webkit"))]
         CompositeMode::Capture | CompositeMode::Overlay => Err(FrontendError::Backend(
-            "Capture/Overlay modes require the 'webkit' feature. Build with: cargo build --features webkit".into(),
+            "Capture/Overlay modes belong to the legacy workspace. Build with: cargo build --manifest-path legacy/Cargo.toml -p pentimento-legacy --features webkit".into(),
         )),
 
         #[cfg(feature = "cef")]
@@ -648,9 +648,9 @@ impl Plugin for RenderPlugin {
             #[cfg(not(feature = "webkit"))]
             CompositeMode::Capture | CompositeMode::Overlay => {
                 error!(
-                    "Capture/Overlay modes require the 'webkit' feature. Build with: cargo build --features webkit"
+                    "Capture/Overlay modes belong to the legacy workspace. Build with: cargo build --manifest-path legacy/Cargo.toml -p pentimento-legacy --features webkit"
                 );
-                panic!("Capture/Overlay modes not available - rebuild with --features webkit");
+                panic!("Capture/Overlay modes not available - use legacy/Cargo.toml");
             }
 
             #[cfg(feature = "cef")]

@@ -1,0 +1,19 @@
+[package]
+name = "dependency-regressions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Exercise rav1e's retained assembly-backed dispatch macros where NASM is available.
+asm = ["rav1e/asm"]
+
+[dev-dependencies]
+image = { workspace = true }
+pastey = "0.2"
+pulp = "=0.22.3"
+rav1e = { version = "=0.7.1", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"

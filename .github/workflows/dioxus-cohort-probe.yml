@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'Cargo.lock'
+      - 'vendor/**'
       - 'Cargo.toml'
       - 'crates/**/Cargo.toml'
       - 'launcher.sh'
@@ -223,7 +224,7 @@ jobs:
           # Admit only the source/edge-reviewed integrated candidate for scanning.
           # This hash does not assert security acceptance; the strict audit below
           # still fails on warnings and incomplete coverage. See the lock baseline.
-          test "$actual" = fd9a2b11b914b5cdb376ccd5b65c911d262ca4f90f2f013272769964acd88ca1
+          test "$actual" = 731218f189bd6c088b48aab080a7c64f7626c28bafbf19454603ecf5062a5847
           cp resolution/{source-sha.txt,run.txt,Cargo.lock,Cargo.lock.sha256} evidence/
           rustc -Vv > evidence/rustc.txt
           cargo -V > evidence/cargo.txt
