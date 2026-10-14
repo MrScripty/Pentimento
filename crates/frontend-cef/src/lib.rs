@@ -318,7 +318,9 @@ impl CompositeBackend for CefBackend {
                     y: y as c_int,
                     modifiers: 0,
                 };
-                host.send_mouse_wheel_event(Some(&mouse_event), delta_x as c_int, delta_y as c_int);
+                let (delta_x, delta_y) =
+                    pentimento_frontend_core::cef_mouse::wheel_deltas(delta_x, delta_y);
+                host.send_mouse_wheel_event(Some(&mouse_event), delta_x, delta_y);
             }
         }
     }

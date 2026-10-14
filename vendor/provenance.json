@@ -1,0 +1,182 @@
+[
+  {
+    "crate": "pulp",
+    "version": "0.22.3",
+    "archive_sha256": "046aa45b989642ec2e4717c8e72d677b13edd831a4d3b6cf37d9a3e54912496a",
+    "upstream_release_revision": "5eb07fd7b68edf0a5e19f71737d315f72a510295",
+    "backported_commit": "601de0c071ba32df3fd7ff33fc4218c9bd712aba",
+    "modified_files": [
+      "Cargo.toml",
+      "src/lib.rs"
+    ],
+    "excluded_registry_metadata": [
+      ".cargo-ok",
+      ".cargo_vcs_info.json",
+      "Cargo.lock",
+      "Cargo.toml.orig"
+    ]
+  },
+  {
+    "crate": "rav1e",
+    "version": "0.7.1",
+    "archive_sha256": "cd87ce80a7665b1cce111f8a16c1f3929f6547ce91ade6addf4ec86a8dda5ce9",
+    "upstream_release_revision": "a8d05d0c43826a465b60dbadd0ab7f1327d75371",
+    "backported_commit": "c247d53ae43dd1312dbd90117c45e4c0ee6b06ce",
+    "modified_files": [
+      "Cargo.toml",
+      "src/api/context.rs",
+      "src/asm/aarch64/dist/mod.rs",
+      "src/asm/aarch64/transform/inverse.rs",
+      "src/asm/shared/transform/inverse.rs",
+      "src/asm/x86/cdef.rs",
+      "src/asm/x86/dist/mod.rs",
+      "src/asm/x86/mc.rs",
+      "src/asm/x86/transform/inverse.rs",
+      "src/context/cdf_context.rs",
+      "src/cpu_features/aarch64.rs",
+      "src/cpu_features/x86.rs",
+      "src/encoder.rs",
+      "src/predict.rs",
+      "src/rate.rs",
+      "src/rdo.rs",
+      "src/scenechange/mod.rs",
+      "src/test_encode_decode/mod.rs",
+      "src/tiling/tile_restoration_state.rs",
+      "src/util/logexp.rs"
+    ],
+    "excluded_registry_metadata": [
+      ".cargo-ok",
+      ".cargo_vcs_info.json",
+      "Cargo.lock",
+      "Cargo.toml.orig"
+    ],
+    "additional_changes": "Mechanical Rust 1.99 numeric constant and elided-lifetime spelling updates; explicit valid upstream custom cfg lint declarations. No algorithm, value, runtime feature, or public API change."
+  },
+  {
+    "crate": "sctk-adwaita",
+    "version": "0.10.1",
+    "archive_sha256": "b6277f0217056f77f1d8f49f2950ac6c278c0d607c45f5ee99328d792ede24ec",
+    "archive_identity": "Official crates.io sctk-adwaita-0.10.1.crate; compared directly against the cached archive bytes, with SHA256 verified before comparison.",
+    "upstream_release_revision": "d5f343c45c04d4a026db57f76760819b7325db00",
+    "upstream_source": "https://github.com/PolyMeilex/sctk-adwaita",
+    "backport_source": {
+      "url": "https://github.com/PolyMeilex/sctk-adwaita/blob/master/src/title/skrifa_renderer.rs",
+      "git_blob_sha": "39bd772933fdade3a9b4866ea653b7a0c4c581de",
+      "retrieved_date": "2026-10-13",
+      "source_release": "Official sctk-adwaita 0.12.0 source; adapt renderer only, retain 0.10.1 APIs/SCTK 0.19/tiny-skia 0.11."
+    },
+    "added_files": [
+      "LICENSE-MPL-2.0",
+      "SOURCE_AVAILABILITY.md",
+      "THIRD_PARTY_NOTICES.md",
+      "examples/README.md",
+      "examples/wayland_title_smoke.rs",
+      "src/README.md",
+      "src/title/Cantarell-OFL.txt",
+      "src/title/README.md",
+      "src/title/skrifa_renderer.rs",
+      "tests/README.md",
+      "tests/fonts/Roboto-OFL.txt",
+      "tests/fonts/Roboto-Variable.ttf",
+      "tests/title-metrics-baseline.csv"
+    ],
+    "modified_files": [
+      "Cargo.lock",
+      "Cargo.toml",
+      "README.md",
+      "src/lib.rs",
+      "src/parts.rs",
+      "src/theme.rs",
+      "src/title.rs"
+    ],
+    "omitted_files": [
+      ".cargo_vcs_info.json",
+      ".github/workflows/changelog.yml",
+      ".github/workflows/rust.yml",
+      ".gitignore",
+      "Cargo.toml.orig",
+      "examples/window.rs",
+      "src/title/ab_glyph_renderer.rs"
+    ],
+    "unchanged_files": [
+      "CHANGELOG.md",
+      "LICENSE",
+      "src/buttons.rs",
+      "src/config.rs",
+      "src/pointer.rs",
+      "src/shadow.rs",
+      "src/title/Cantarell-Regular.ttf",
+      "src/title/config.rs",
+      "src/title/crossfont_renderer.rs",
+      "src/title/dumb.rs",
+      "src/title/font_preference.rs",
+      "src/wl_typed.rs"
+    ],
+    "excluded_registry_metadata": [
+      ".cargo_vcs_info.json",
+      "Cargo.toml.orig"
+    ],
+    "omission_reasons": {
+      ".cargo_vcs_info.json": "The upstream revision is retained explicitly here; registry source metadata does not describe the owned fork.",
+      "Cargo.toml.orig": "Its upstream source manifest was the basis of the fork manifest; the original unused declaration is superseded by the maintained dependency and corrected aggregate license.",
+      ".github/workflows/changelog.yml": "Upstream release automation is not used by the vendored dependency; root workflows own qualification/publication.",
+      ".github/workflows/rust.yml": "Upstream CI is not used by the vendored dependency; root workflows own locked regression and real Wayland qualification.",
+      ".gitignore": "Upstream development ignore rules are superseded by root rules; the reviewed standalone lock is intentionally retained.",
+      "examples/window.rs": "Adapted into examples/wayland_title_smoke.rs, preserving the official example API use and adding deterministic ClientOnly/title/resize/scale/close evidence.",
+      "src/title/ab_glyph_renderer.rs": "Superseded by the official maintained skrifa renderer; the historical ab_glyph feature only forwards to skrifa."
+    },
+    "additional_changes": "Delegate font parsing/metrics/variation/outline/hinting/kern to skrifa 0.44.0/read-fonts; preserve title control/whitespace/fallback/variable Bold behavior and legacy first-match horizontal non-variable kern semantics; retain actual ink with 1px guard; add title/API/header clipping regressions and deterministic real Wayland smoke. Six explicit lifetime spellings remove compiler warnings without API/type changes. Add verified MPL file notice/source availability for pre-existing snui-derived header geometry; geometry remains byte-identical.",
+    "owner": "Pentimento maintainers",
+    "retirement": "Revisit at next Winit decoration dependency upgrade and any skrifa/read-fonts advisory; remove patch with a released Winit-compatible maintained title backend only after direct and real Wayland gates pass.",
+    "aggregate_license": "MIT AND MPL-2.0 AND OFL-1.1",
+    "license_material": [
+      {
+        "license": "MIT",
+        "file": "LICENSE",
+        "sha256": "65fc947f4bac882a2cd104ef73c246b1b037059df9f2b3a58b7f77f0b9e56071",
+        "scope": "Unchanged upstream MIT contributions and separately located MIT modules; existing notices retained."
+      },
+      {
+        "license": "MPL-2.0",
+        "file": "LICENSE-MPL-2.0",
+        "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+        "scope": "Entire src/lib.rs source file containing acknowledged snui-derived rounded-header code and modifications to that file; unrelated app/crate files not relicensed.",
+        "authority": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+        "derivation_license": "https://gitlab.com/snakedye/snui/-/blob/742c61a42a500d3b10c7fb160d5437e9847af502/LICENSE"
+      },
+      {
+        "license": "OFL-1.1",
+        "file": "src/title/Cantarell-OFL.txt",
+        "sha256": "1c7bfbd2c5373f2143ef6b93a31019842b883bcb725d836a13d85b2c0c64c6c9",
+        "scope": "Unmodified bundled Cantarell font; original embedded copyright retained with complete standard OFL1.1 terms."
+      },
+      {
+        "license": "OFL-1.1",
+        "file": "tests/fonts/Roboto-OFL.txt",
+        "sha256": "061402327a96aadb0bfb694a960ed289ecd38d383e396243831ab81feb109c41",
+        "scope": "Official Google Fonts Roboto variable test fixture; original copyright/complete license retained."
+      }
+    ],
+    "font_material": [
+      {
+        "file": "src/title/Cantarell-Regular.ttf",
+        "sha256": "d15f25bcdaba2e25f54c32d4e29e68fedeb1b7a1d8fbc83f7c4475916e93b55f",
+        "source": "Unchanged official 0.10.1 release archive font, verified byte-for-byte."
+      },
+      {
+        "file": "tests/fonts/Roboto-Variable.ttf",
+        "sha256": "d7598e12c5dbef095ff8272cfc55da0250bd07fbdecbac8a530b9b277872a134",
+        "source": "https://github.com/google/fonts/tree/main/ofl/roboto",
+        "font_source_revision": "91d5d3e5b81efa04a77925cc609fdcdd7ee663d1",
+        "font_release": "3.015",
+        "retrieved_date": "2026-10-13"
+      }
+    ],
+    "standalone_manifest_sha256": "5097e37290679a4e2f260b74b5d57195e2208f49bff31265c3d4323db73afb3b",
+    "standalone_lock_sha256": "6c8dac661b2cbfca95f78c691cc3ae1905f1cf1ec2017ca7779cae493aaa0ec2",
+    "resolution": "Root Cargo.lock owns production; modified nested Cargo.lock owns --locked standalone tests/example, including unselected optional crossfont/platform packages. No audit suppression or old parser dependency retained.",
+    "qualification_document": "docs/wayland-title-font-qualification.md",
+    "file_license_notice": "vendor/sctk-adwaita/THIRD_PARTY_NOTICES.md",
+    "executable_source_availability": "vendor/sctk-adwaita/SOURCE_AVAILABILITY.md: provide exact modified MPL source/build identity plus accessible recipient instructions with executable distributions; validate actual artifact/access before claiming distribution compliance."
+  }
+]

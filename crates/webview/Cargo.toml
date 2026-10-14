@@ -1,20 +1,12 @@
 [package]
 name = "pentimento-webview"
+autoexamples = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["webkit"]
-webkit = [
-    "dep:wry",
-    "dep:gtk",
-    "dep:gdk",
-    "dep:gdkx11",
-    "dep:webkit2gtk",
-    "dep:cairo-rs",
-    "dep:gio",
-]
+default = []
 cef = ["dep:cef", "dep:urlencoding"]
 dioxus = ["dep:pentimento-dioxus-ui"]
 
@@ -22,7 +14,6 @@ dioxus = ["dep:pentimento-dioxus-ui"]
 pentimento-ipc = { path = "../ipc" }
 pentimento-frontend-core = { path = "../frontend-core" }
 
-wry = { workspace = true, optional = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -30,21 +21,16 @@ image = { workspace = true }
 thiserror = { workspace = true }
 raw-window-handle = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-gtk = { version = "0.18", optional = true }
-gdk = { version = "0.18", optional = true }
-gdkx11 = { version = "0.18", optional = true }
-webkit2gtk = { version = "2.0", features = ["v2_40"], optional = true }
-cairo-rs = { version = "0.18", features = ["png", "use_glib"], optional = true }
-gio = { version = "0.18", optional = true }
-
 # CEF (Chromium Embedded Framework) bindings - optional dependency for cef feature
-cef = { version = "143.7", optional = true }
+cef = { workspace = true, optional = true }
 urlencoding = { version = "2.1", optional = true }
 
 # Dioxus (native Rust UI) - optional dependency for dioxus feature
 pentimento-dioxus-ui = { path = "../dioxus-ui", optional = true }
 
-[[example]]
-name = "capture_test"
-required-features = ["webkit"]
+# Capture example and WebKit dependencies belong to legacy/webview.
+[package.metadata]
+legacy-manifest = "../../legacy/webview/Cargo.toml"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("webkit"))'] }

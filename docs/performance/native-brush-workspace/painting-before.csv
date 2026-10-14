@@ -1,0 +1,7 @@
+workload,operations,median_ms,p95_ms,checksum
+canvas_circle_128_dabs,128,13.826,14.033,391cddf3b77d8dad
+uv_ellipse_128_dabs,128,9.183,9.681,c267f1a4d84f9947
+canvas_idle_32_frames,32,50.795,51.686,0000000000003800
+canvas_small_stroke_32_frames,32,49.720,53.556,0000000000003800
+uv_normal_4_layers_16_composites,16,57.466,58.369,cf922d4652620924
+uv_masked_4_layers_16_composites,16,107.007,113.138,169853f1972c47dd

@@ -1,0 +1,5 @@
+sculpt_picking,baseline_cd85372,triangles=32768,rays=128,median_ms=38.974079,min_ms=37.964204,max_ms=54.302779,checksum=16448
+sculpt_picking,single_pass,triangles=32768,rays=128,median_ms=27.563626,min_ms=24.896009,max_ms=30.600124,checksum=16448
+layered_uv_upload,scenario=painted_background,atlas=1024x1024,layers=2,dirty_tiles=1,baseline_median_ms=98.552852,partial_median_ms=1.574247,checksum=524934585
+layered_uv_upload,scenario=sparse_last_pixel,atlas=1024x1024,layers=2,dirty_tiles=1,baseline_median_ms=97.613950,partial_median_ms=3.597607,checksum=372708396
+layered_uv_upload,scenario=erased_empty,atlas=1024x1024,layers=2,dirty_tiles=1,baseline_median_ms=95.110246,partial_median_ms=3.679441,checksum=372708159

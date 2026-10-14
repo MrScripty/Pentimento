@@ -417,3 +417,23 @@ fn rejected_duplicate_facet_weld_preserves_separately_indexed_sheets() {
     assert!(preserved.check_manifold().is_ok());
     assert_eq!(preserved.to_bevy_mesh().count_vertices(), 6);
 }
+
+#[test]
+fn allocation_free_triangle_query_matches_face_traversal_and_rejects_bad_cycles() {
+    let source = Sphere::new(1.).mesh().uv(16, 8);
+    let mut he = HalfEdgeMesh::from_bevy_mesh_welded(&source).unwrap();
+    for face in he.faces() {
+        assert_eq!(
+            he.get_triangle_vertices(face.id).unwrap().as_slice(),
+            he.get_face_vertices(face.id)
+        );
+    }
+    let first = he.faces[0].half_edge;
+    let saved = he.half_edges[first.0 as usize].clone();
+    he.half_edges[first.0 as usize].face = None;
+    assert!(he.get_triangle_vertices(FaceId(0)).is_none());
+    he.half_edges[first.0 as usize] = saved;
+    he.half_edges[first.0 as usize].next = first;
+    assert!(he.get_triangle_vertices(FaceId(0)).is_none());
+    assert!(he.get_triangle_vertices(FaceId(u32::MAX)).is_none());
+}

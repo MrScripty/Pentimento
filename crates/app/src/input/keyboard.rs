@@ -24,6 +24,17 @@ pub(super) fn translate_keyboard_events(
         alt_graph_keys.reset_all();
         return Vec::new();
     }
+    let mut pressed = keyboard_state_before_batch(events, final_pressed);
+    events
+        .iter()
+        .map(|event| translate_keyboard_event(event, &mut pressed, alt_graph_keys))
+        .collect()
+}
+
+pub(super) fn keyboard_state_before_batch(
+    events: &[KeyboardInput],
+    final_pressed: &ButtonInput<KeyCode>,
+) -> ButtonInput<KeyCode> {
     let mut pressed = final_pressed.clone();
     for event in events.iter().rev() {
         if event.state.is_pressed() {
@@ -34,35 +45,40 @@ pub(super) fn translate_keyboard_events(
             pressed.press(event.key_code);
         }
     }
-    events
-        .iter()
-        .map(|event| {
-            if event.state.is_pressed() {
-                pressed.press(event.key_code);
-                if event.logical_key == Key::AltGraph {
-                    alt_graph_keys.press(event.key_code);
-                }
-            } else {
-                pressed.release(event.key_code);
-                alt_graph_keys.release(event.key_code);
-            }
-            let mut modifiers = build_modifiers(&pressed);
-            modifiers.alt_graph = alt_graph_keys
-                .get_pressed()
-                .any(|code| pressed.pressed(*code));
-            KeyboardEvent {
-                key: bevy_keycode_to_web_key(event.key_code),
-                code: format!("{:?}", event.key_code),
-                text: event
-                    .state
-                    .is_pressed()
-                    .then(|| event.text.as_ref().map(ToString::to_string))
-                    .flatten(),
-                pressed: event.state.is_pressed(),
-                modifiers,
-            }
-        })
-        .collect()
+    pressed
+}
+
+/// Advance retained native state even for rejected keys. Focus transitions reset
+/// it explicitly, so an admitted prefix never depends on cleared final state.
+pub(super) fn translate_keyboard_event(
+    event: &KeyboardInput,
+    pressed: &mut ButtonInput<KeyCode>,
+    alt_graph_keys: &mut ButtonInput<KeyCode>,
+) -> KeyboardEvent {
+    if event.state.is_pressed() {
+        pressed.press(event.key_code);
+        if event.logical_key == Key::AltGraph {
+            alt_graph_keys.press(event.key_code);
+        }
+    } else {
+        pressed.release(event.key_code);
+        alt_graph_keys.release(event.key_code);
+    }
+    let mut modifiers = build_modifiers(pressed);
+    modifiers.alt_graph = alt_graph_keys
+        .get_pressed()
+        .any(|code| pressed.pressed(*code));
+    KeyboardEvent {
+        key: bevy_keycode_to_web_key(event.key_code),
+        code: format!("{:?}", event.key_code),
+        text: event
+            .state
+            .is_pressed()
+            .then(|| event.text.as_ref().map(ToString::to_string))
+            .flatten(),
+        pressed: event.state.is_pressed(),
+        modifiers,
+    }
 }
 
 /// Build the current modifier state from Bevy's ButtonInput

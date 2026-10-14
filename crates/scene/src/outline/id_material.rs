@@ -24,7 +24,7 @@ pub struct EntityIdMaterial {
 
 impl Material for EntityIdMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://pentimento_scene/outline/shaders/entity_id.wgsl".into()
+        "embedded://pentimento_scene/outline/shaders/entity_id.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -55,3 +55,38 @@ pub fn color_to_entity_index(color: Vec4) -> u32 {
 /// Component marking an entity for ID buffer rendering
 #[derive(Component)]
 pub struct RenderToIdBuffer;
+
+#[cfg(test)]
+mod id_encoding_tests {
+    use super::*;
+    use bevy::color::ColorToPacked;
+
+    #[test]
+    fn every_byte_channel_survives_srgb_write_storage_sample_and_decode() {
+        // Mirror the standard sRGB conversions used by the production shaders
+        // and attachment, including the actual 8-bit storage quantization.
+        // Channels are independent; cover all values in every position, with
+        // high neighboring channel values to catch truncated 24-bit identities.
+        for channel in 0..3 {
+            for value in 0..=255_u32 {
+                let shift = channel * 8;
+                let id = (0xFEDCBA & !(0xFF << shift)) | (value << shift);
+                let color = entity_to_color(Entity::from_raw_u32(id).unwrap());
+                let fragment = LinearRgba::from(Srgba::new(color.x, color.y, color.z, color.w));
+                let stored = Srgba::from(fragment).to_u8_array();
+                assert_eq!(stored, [id as u8, (id >> 8) as u8, (id >> 16) as u8, 255]);
+                let sampled = LinearRgba::from(Srgba::from_u8_array(stored));
+                let decoded = Srgba::from(sampled);
+                assert_eq!(
+                    color_to_entity_index(Vec4::new(
+                        decoded.red,
+                        decoded.green,
+                        decoded.blue,
+                        decoded.alpha
+                    )),
+                    id,
+                );
+            }
+        }
+    }
+}

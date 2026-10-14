@@ -2,6 +2,8 @@
 **/target/
 Cargo.lock
 !/Cargo.lock
+!/legacy/Cargo.lock
+!/vendor/sctk-adwaita/Cargo.lock
 
 # Node
 node_modules/
@@ -11,6 +13,9 @@ package-lock.json
 
 # Build output
 dist/
+# Retained codec Rust modules named dist are source, not build output.
+!vendor/rav1e-0.7.1/src/asm/**/dist/
+!vendor/rav1e-0.7.1/src/asm/**/dist/**
 /ui/dist/
 
 # IDE
@@ -47,6 +52,7 @@ ui/public/wasm/
 
 # Test outputs
 /tmp/
+**/__pycache__/
 
 # Refactoring documentation
 **/CHANGES.md

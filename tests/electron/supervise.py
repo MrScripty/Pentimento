@@ -119,4 +119,4 @@ if __name__ == '__main__':
     phase, *command = sys.argv[1:]
     if not command:
         raise SystemExit('usage: supervise.py PHASE COMMAND [ARGS...]')
-    raise SystemExit(supervise(command, phase, Path('electron-runtime-evidence')))
+    raise SystemExit(supervise(command, phase, Path(os.environ.get('PENTIMENTO_EVIDENCE_DIR', 'electron-runtime-evidence'))))

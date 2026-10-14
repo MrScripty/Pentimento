@@ -45,7 +45,7 @@ pub fn render_vello_to_texture(
 
     // Log dimensions on first render to help diagnose fuzzy/sharp alternation
     if !status.first_render_done {
-        let tex_size = gpu_image.size;
+        let tex_size = gpu_image.texture_descriptor.size;
         info!(
             "First Vello render: ui_state={}x{}, texture={}x{}",
             ui_state.width, ui_state.height, tex_size.width, tex_size.height
@@ -55,7 +55,7 @@ pub fn render_vello_to_texture(
     // Zero-copy: render directly to Bevy's texture!
     if let Err(e) = vello.renderer.render_to_texture(
         render_device.wgpu_device(),
-        render_queue.0.as_ref(),
+        &render_queue,
         &scene.scene,
         &gpu_image.texture_view,
         &RenderParams {

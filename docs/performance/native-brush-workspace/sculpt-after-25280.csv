@@ -1,0 +1,12 @@
+# faces=25280 vertices=13592 chunks=16
+workload,operations,median_ms,p95_ms,changed_vertices,position_checksum
+Push_first_dab,1,105.929,120.999,104,c31f0c0fc71cf15e
+Push_warm_dabs,8,165.955,178.375,104,c31f0c0fc71cf15e
+Push_stationary_no_dab,32,61.773,75.068,104,c31f0c0fc71cf15e
+Push_finish_history,1,15.288,17.065,104,c31f0c0fc71cf15e
+Push_spaced_batch,8,133.983,145.766,104,c31f0c0fc71cf15e
+Smooth_first_dab,1,110.451,121.194,112,4e262a9c5f33d1d2
+Smooth_warm_dabs,8,187.934,198.013,112,4e262a9c5f33d1d2
+Smooth_stationary_no_dab,32,62.737,66.845,112,4e262a9c5f33d1d2
+Smooth_finish_history,1,13.734,15.747,112,4e262a9c5f33d1d2
+Smooth_spaced_batch,8,144.963,146.617,112,4e262a9c5f33d1d2

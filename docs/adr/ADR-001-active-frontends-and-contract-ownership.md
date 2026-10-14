@@ -45,3 +45,25 @@ The previous project state had two gaps that kept the codebase drifting:
 - Another browser host replaces Electron or CEF as an active supported frontend.
 - The egui path reaches supported parity and should be promoted from
   experimental to active.
+
+## Retained legacy dependency boundary (2026-10-13)
+
+Discontinued WebKit capture/overlay and Tauri are preserved in an independent
+`legacy/Cargo.toml` workspace. The root app and webview manifests no longer
+register WebKit features or GTK/WebKit dependency edges, and Tauri is no longer
+a root workspace member. Explicit legacy manifests compile the retained app
+and webview source; standalone WebKit/overlay and Tauri manifests select that
+workspace. See [retained entry points](../../legacy/README.md).
+
+The boundary owns dependency resolution and historical entry points only.
+`crates/ipc` still owns the shared contract, and shared application/render/input
+source retains one owner. A supported frontend change does not require touching
+legacy manifests unless the shared source contract changes; a historical native
+dependency update changes only the legacy graph. Removing these separate
+manifests would force retained GTK/WebKit/Tauri dependencies back into the active
+resolver or remove the explicitly retained entry points. This is the reason for
+the extra build manifests; no duplicate application implementation is introduced.
+
+The root audit remains enabled and applies to the supported workspace lockfile.
+The separately tracked legacy lock retains its own advisories; this isolation
+does not clear those advisories or promote the discontinued frontends to support.

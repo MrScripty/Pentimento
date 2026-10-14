@@ -9,6 +9,7 @@
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
 use glam::{DVec2, DVec3};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SafetyError {
@@ -120,7 +121,7 @@ impl GeometryWitness {
 /// duplicating half-edge storage on every dab.
 #[derive(Debug, Clone)]
 pub(crate) struct Surface {
-    triangles: Vec<Triangle>,
+    triangles: Arc<Vec<Triangle>>,
 }
 
 impl Surface {
@@ -136,7 +137,9 @@ impl Surface {
         for chunk in chunks {
             Self::append_chunk(chunk, &mut triangles)?;
         }
-        Ok(Self { triangles })
+        Ok(Self {
+            triangles: Arc::new(triangles),
+        })
     }
 
     fn append_chunk(chunk: &MeshChunk, triangles: &mut Vec<Triangle>) -> Result<(), SafetyError> {
@@ -182,7 +185,9 @@ impl Surface {
     pub(crate) fn read_chunk(chunk: &MeshChunk) -> Result<Self, SafetyError> {
         let mut triangles = Vec::new();
         Self::append_chunk(chunk, &mut triangles)?;
-        Ok(Self { triangles })
+        Ok(Self {
+            triangles: Arc::new(triangles),
+        })
     }
 
     pub(crate) fn chunk(&self, id: ChunkId) -> Self {
@@ -192,14 +197,16 @@ impl Surface {
                 .iter()
                 .filter(|t| t.chunk == id)
                 .cloned()
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 
     pub(crate) fn replace_chunk_geometry(&mut self, id: ChunkId, replacement: Self) {
         debug_assert!(replacement.triangles.iter().all(|t| t.chunk == id));
-        self.triangles.retain(|t| t.chunk != id);
-        self.triangles.extend(replacement.triangles);
+        let triangles = Arc::make_mut(&mut self.triangles);
+        triangles.retain(|t| t.chunk != id);
+        triangles.extend(replacement.triangles.iter().cloned());
     }
 
     /// Refresh positions after a deformation-only stage. Topology cannot change
@@ -207,7 +214,7 @@ impl Surface {
     /// half-edge again. Global IDs still resolve any synchronized chunk copies.
     pub(crate) fn deformed(&self, mesh: &ChunkedMesh) -> Result<Self, SafetyError> {
         let mut triangles = Vec::with_capacity(self.triangles.len());
-        for t in &self.triangles {
+        for t in self.triangles.iter() {
             let chunk = mesh
                 .get_chunk(t.chunk)
                 .ok_or_else(|| SafetyError::Topology("missing chunk during deformation".into()))?;
@@ -230,7 +237,9 @@ impl Surface {
             }
             triangles.push(Triangle::new(t.ids, p, t.chunk)?);
         }
-        Ok(Self { triangles })
+        Ok(Self {
+            triangles: Arc::new(triangles),
+        })
     }
 
     /// Previously admitted, unchanged triangle pairs cannot become intersecting.
@@ -267,7 +276,7 @@ impl Surface {
             .collect();
         if topology_changed {
             let keys: HashSet<_> = self.triangles.iter().map(Triangle::key).collect();
-            for t in &before.triangles {
+            for t in before.triangles.iter() {
                 if !keys.contains(&t.key()) {
                     affected.extend(t.ids);
                 }
@@ -277,7 +286,7 @@ impl Surface {
             self.validate_incidence_for(Some(&affected))?;
         } else {
             let mut positions = HashMap::new();
-            for t in &self.triangles {
+            for t in self.triangles.iter() {
                 for i in 0..3 {
                     if !affected.contains(&t.ids[i]) {
                         continue;
@@ -330,7 +339,7 @@ impl Surface {
         let mut directed = HashSet::new();
         let mut facets = HashSet::new();
         let mut links: HashMap<u32, HashMap<u32, Vec<u32>>> = HashMap::new();
-        for t in &self.triangles {
+        for t in self.triangles.iter() {
             if affected.is_some_and(|vertices| t.ids.iter().all(|id| !vertices.contains(id))) {
                 continue;
             }
@@ -380,7 +389,7 @@ impl Surface {
             return Ok(());
         }
         let old: HashMap<_, _> = before.triangles.iter().map(|t| (t.key(), t)).collect();
-        for t in &self.triangles {
+        for t in self.triangles.iter() {
             let Some(previous) = old.get(&t.key()) else {
                 continue;
             };
@@ -406,8 +415,8 @@ impl Surface {
             return Err(SafetyError::Topology("deformation changed topology".into()));
         }
         let mut starts = Vec::with_capacity(self.triangles.len());
-        let mut swept = self.triangles.clone();
-        for (t, previous) in self.triangles.iter().zip(&before.triangles) {
+        let mut swept = self.triangles.as_ref().clone();
+        for (t, previous) in self.triangles.iter().zip(before.triangles.iter()) {
             if t.ids != previous.ids || t.chunk != previous.chunk {
                 return Err(SafetyError::Topology("deformation changed topology".into()));
             }
@@ -573,10 +582,12 @@ impl Bvh {
         match self {
             Self::Leaf { faces, .. } => {
                 for &j in faces {
-                    if j <= i {
+                    let b = &all[j];
+                    // Only moving faces issue queries. An earlier stationary
+                    // face has not checked this pair; earlier moving faces have.
+                    if j == i || (j < i && b.p != starts[j]) {
                         continue;
                     }
-                    let b = &all[j];
                     if a.ids.iter().any(|id| b.ids.contains(id))
                         || !overlaps(a.min, a.max, b.min, b.max)
                     {
@@ -809,6 +820,28 @@ mod tests {
         Triangle::new(ids, p.map(DVec3::from), ChunkId(0)).unwrap()
     }
     #[test]
+    fn cloned_surface_keeps_its_admitted_geometry_after_candidate_replacement() {
+        let original_triangle = tri([0, 1, 2], [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]);
+        let admitted = Surface {
+            triangles: Arc::new(vec![original_triangle.clone()]),
+        };
+        let mut candidate = admitted.clone();
+        assert!(Arc::ptr_eq(&candidate.triangles, &admitted.triangles));
+        let replacement = Surface {
+            triangles: Arc::new(vec![tri(
+                [0, 1, 2],
+                [[0., 0., 0.2], [1., 0., 0.], [0., 1., 0.]],
+            )]),
+        };
+        candidate.replace_chunk_geometry(ChunkId(0), replacement);
+        assert!(!Arc::ptr_eq(&candidate.triangles, &admitted.triangles));
+        assert_eq!(admitted.triangles.as_slice(), &[original_triangle]);
+        assert_ne!(candidate.triangles, admitted.triangles);
+        admitted.validate().unwrap();
+        candidate.validate().unwrap();
+    }
+
+    #[test]
     fn geometric_contact_is_not_manifoldness() {
         let base = tri([0, 1, 2], [[0., 0., 0.], [2., 0., 0.], [0., 2., 0.]]);
         for p in [
@@ -891,6 +924,44 @@ mod tests {
                 &mut 0
             ),
             Err(SafetyError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn swept_moving_pairs_are_checked_once_and_stationary_pairs_keep_the_work_cap() {
+        // Disjoint coplanar triangles with overlapping AABBs. Their common
+        // translation has a separating axis, so one pair consumes one proof.
+        let triangles = [
+            tri([0, 1, 2], [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+            tri([3, 4, 5], [[1., 1., 0.], [0.6, 1., 0.], [1., 0.6, 0.]]),
+        ];
+        let starts = triangles.each_ref().map(|triangle| triangle.p);
+        let swept = triangles.map(|triangle| {
+            let mut moving = Triangle::new(
+                triangle.ids,
+                triangle.p.map(|point| point + DVec3::Z * 0.1),
+                triangle.chunk,
+            )
+            .unwrap();
+            moving.min = moving.min.min(triangle.min);
+            moving.max = moving.max.max(triangle.max);
+            moving
+        });
+        let bvh = Bvh::build(&swept, &mut [0, 1]);
+        let mut remaining = 1;
+        for index in 0..2 {
+            bvh.motion_candidates(index, &swept[index], &swept, &starts, &mut remaining)
+                .unwrap();
+        }
+        assert_eq!(remaining, 0, "moving pair must be checked exactly once");
+
+        let mut one_moving = swept;
+        one_moving[0] = tri([0, 1, 2], starts[0].map(|point| point.to_array()));
+        let bvh = Bvh::build(&one_moving, &mut [0, 1]);
+        assert_eq!(
+            bvh.motion_candidates(1, &one_moving[1], &one_moving, &starts, &mut 0),
+            Err(SafetyError::WorkLimit),
+            "an earlier stationary pair must not pass an exhausted proof budget"
         );
     }
 }

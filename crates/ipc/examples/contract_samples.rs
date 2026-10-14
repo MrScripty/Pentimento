@@ -38,7 +38,21 @@ fn main() {
             },
         ],
         bevy_to_ui: vec![
+            BevyToUi::DepthViewState {
+                available: false,
+                enabled: false,
+                reason: Some("OpenGL/WebGL depth view is unavailable".into()),
+            },
+            BevyToUi::DepthViewState {
+                available: true,
+                enabled: true,
+                reason: None,
+            },
+            BevyToUi::DepthViewRejected {
+                reason: "OpenGL/WebGL depth view is unavailable".into(),
+            },
             BevyToUi::ProjectStateChanged {
+                generation: "9007199254740993".into(),
                 path: Some("/tmp/example.pentimento.json".into()),
                 available: true,
                 active: false,
@@ -49,14 +63,6 @@ fn main() {
                 operation: "Save".into(),
                 success: true,
                 message: "Saved".into(),
-            },
-            BevyToUi::DepthViewState {
-                available: false,
-                enabled: false,
-                reason: Some("WebGL depth read unsupported".into()),
-            },
-            BevyToUi::DepthViewRejected {
-                reason: "WebGL depth read unsupported".into(),
             },
             BevyToUi::Initialize {
                 scene_info: SceneInfo {
@@ -148,6 +154,10 @@ fn main() {
                         layers: vec![UvLayerInfo {
                             id: 3,
                             name: "Detail".into(),
+                            blend_mode: pentimento_ipc::UvLayerBlendMode::Overlay,
+                            has_mask: true,
+                            mask_enabled: true,
+                            paint_target: pentimento_ipc::UvLayerPaintTarget::Mask,
                             visible: true,
                             opacity: 0.5,
                             locked: false,
@@ -207,6 +217,30 @@ fn main() {
                 command: UvLayerCommand::Enable,
             }),
             UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::BlendMode {
+                    layer_id: 3,
+                    mode: pentimento_ipc::UvLayerBlendMode::Multiply,
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::AddMask { layer_id: 3 },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::RemoveMask { layer_id: 3 },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::MaskEnabled {
+                    layer_id: 3,
+                    enabled: false,
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
+                command: UvLayerCommand::PaintTarget {
+                    layer_id: 3,
+                    target: pentimento_ipc::UvLayerPaintTarget::Mask,
+                },
+            }),
+            UiToBevy::PaintCommand(PaintCommand::UvLayers {
                 command: UvLayerCommand::Create {
                     name: "Detail".into(),
                 },
@@ -227,6 +261,10 @@ fn main() {
                 command: UvLayerCommand::Redo,
             }),
             UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::GetState),
+            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::New {
+                expected_generation: "9007199254740993".into(),
+                confirm_discard: true,
+            }),
             UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Save {
                 path: "/tmp/example.pentimento.json".into(),
             }),

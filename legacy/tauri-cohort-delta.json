@@ -1,0 +1,2540 @@
+{
+  "before_packages": 950,
+  "after_packages": 915,
+  "removed": [
+    [
+      "alloc-no-stdlib",
+      "3.0.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "alloc-stdlib",
+      "0.3.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "brotli",
+      "9.0.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "brotli-decompressor",
+      "6.0.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cargo_toml",
+      "1.0.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cfb",
+      "0.14.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "convert_case",
+      "0.4.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cssparser",
+      "0.29.6",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cssparser",
+      "0.37.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cssparser-macros",
+      "0.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "ctor",
+      "1.0.13",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "derive_more",
+      "0.99.20",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "dirs",
+      "7.0.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "dom_query",
+      "0.28.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "futf",
+      "0.1.5",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "fxhash",
+      "0.2.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "getrandom",
+      "0.1.16",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "html5ever",
+      "0.29.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "html5ever",
+      "0.39.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "infer",
+      "0.22.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "json-patch",
+      "4.2.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "jsonptr",
+      "0.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "kuchikiki",
+      "0.8.8-speedreader",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "mac",
+      "0.1.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "markup5ever",
+      "0.14.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "markup5ever",
+      "0.39.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "match_token",
+      "0.1.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "matches",
+      "0.1.10",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "muda",
+      "0.17.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "nodrop",
+      "0.1.14",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "objc2-core-video",
+      "0.3.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "objc2-javascript-core",
+      "0.3.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "objc2-security",
+      "0.3.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf",
+      "0.10.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf",
+      "0.11.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf",
+      "0.8.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_codegen",
+      "0.11.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_codegen",
+      "0.8.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_generator",
+      "0.10.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_generator",
+      "0.11.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_generator",
+      "0.8.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_macros",
+      "0.10.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_shared",
+      "0.10.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_shared",
+      "0.11.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "phf_shared",
+      "0.8.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "proc-macro-hack",
+      "0.5.20+deprecated",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "rand",
+      "0.7.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "rand_chacha",
+      "0.2.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "rand_core",
+      "0.5.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "rand_hc",
+      "0.2.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "rand_pcg",
+      "0.2.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "reqwest",
+      "0.12.28",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "ryu",
+      "1.0.23",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "selectors",
+      "0.24.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "selectors",
+      "0.38.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "serde_urlencoded",
+      "0.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "servo_arc",
+      "0.2.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "siphasher",
+      "0.3.11",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "string_cache",
+      "0.8.9",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "string_cache_codegen",
+      "0.5.4",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tao",
+      "0.34.8",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri",
+      "2.9.5",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-build",
+      "2.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-codegen",
+      "2.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-macros",
+      "2.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-plugin",
+      "2.7.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-runtime",
+      "2.12.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-runtime-wry",
+      "2.9.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-utils",
+      "2.10.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tendril",
+      "0.4.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tray-icon",
+      "0.21.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "urlpattern",
+      "0.6.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "utf-8",
+      "0.7.6",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "wasi",
+      "0.9.0+wasi-snapshot-preview1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "wasm-streams",
+      "0.4.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "webkit2gtk",
+      "2.0.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "webkit2gtk-sys",
+      "2.0.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "webview2-com",
+      "0.39.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "webview2-com-sys",
+      "0.39.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "wry",
+      "0.53.5",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ]
+  ],
+  "added": [
+    [
+      "alloc-no-stdlib",
+      "2.0.4",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "alloc-stdlib",
+      "0.2.4",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "brotli",
+      "8.0.4",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "brotli-decompressor",
+      "5.0.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cargo_toml",
+      "0.22.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cfb",
+      "0.7.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "cssparser",
+      "0.36.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "ctor",
+      "0.8.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "ctor-proc-macro",
+      "0.0.7",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "dom_query",
+      "0.27.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "dtor",
+      "0.3.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "dtor-proc-macro",
+      "0.0.6",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "html5ever",
+      "0.38.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "infer",
+      "0.19.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "json-patch",
+      "3.0.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "jsonptr",
+      "0.6.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "markup5ever",
+      "0.38.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "muda",
+      "0.19.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "objc2-core-location",
+      "0.3.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "objc2-user-notifications",
+      "0.3.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "reqwest",
+      "0.13.5",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "selectors",
+      "0.36.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tao",
+      "0.35.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri",
+      "2.11.6",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-build",
+      "2.6.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-codegen",
+      "2.6.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-macros",
+      "2.6.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-plugin",
+      "2.6.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-runtime",
+      "2.11.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-runtime-wry",
+      "2.11.4",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tauri-utils",
+      "2.9.3",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "toml",
+      "0.9.12+spec-1.1.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "toml_datetime",
+      "0.7.5+spec-1.1.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "tray-icon",
+      "0.24.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "unic-char-property",
+      "0.9.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "unic-char-range",
+      "0.9.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "unic-common",
+      "0.9.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "unic-ucd-ident",
+      "0.9.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "unic-ucd-version",
+      "0.9.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "urlpattern",
+      "0.3.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "wasm-streams",
+      "0.5.0",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "webkit2gtk",
+      "2.0.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "webkit2gtk-sys",
+      "2.0.2",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "winnow",
+      "0.7.15",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ],
+    [
+      "wry",
+      "0.55.1",
+      "registry+https://github.com/rust-lang/crates.io-index"
+    ]
+  ],
+  "changed": [
+    {
+      "package": [
+        "bevy_animation",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_animation_macros",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_color",
+        "bevy_curve",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_time",
+        "bevy_transform",
+        "bevy_utils",
+        "bitvec",
+        "blake3",
+        "derive_more 2.1.1",
+        "downcast-rs 2.0.2",
+        "either",
+        "petgraph",
+        "ron",
+        "serde",
+        "smallvec",
+        "thiserror 2.0.21",
+        "thread_local",
+        "tracing",
+        "uuid"
+      ],
+      "after": [
+        "bevy_animation_macros",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_color",
+        "bevy_curve",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_time",
+        "bevy_transform",
+        "bevy_utils",
+        "bitvec",
+        "blake3",
+        "derive_more",
+        "downcast-rs 2.0.2",
+        "either",
+        "petgraph",
+        "ron",
+        "serde",
+        "smallvec",
+        "thiserror 2.0.21",
+        "thread_local",
+        "tracing",
+        "uuid"
+      ]
+    },
+    {
+      "package": [
+        "bevy_asset",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "async-broadcast",
+        "async-channel",
+        "async-fs",
+        "async-io",
+        "async-lock",
+        "atomicow",
+        "bevy_android",
+        "bevy_app",
+        "bevy_asset_macros",
+        "bevy_diagnostic",
+        "bevy_ecs",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_tasks",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "blake3",
+        "crossbeam-channel",
+        "derive_more 2.1.1",
+        "disqualified",
+        "downcast-rs 2.0.2",
+        "either",
+        "futures-io",
+        "futures-lite",
+        "futures-util",
+        "js-sys",
+        "ron",
+        "serde",
+        "stackfuture",
+        "thiserror 2.0.21",
+        "tracing",
+        "uuid",
+        "wasm-bindgen",
+        "wasm-bindgen-futures",
+        "web-sys"
+      ],
+      "after": [
+        "async-broadcast",
+        "async-channel",
+        "async-fs",
+        "async-io",
+        "async-lock",
+        "atomicow",
+        "bevy_android",
+        "bevy_app",
+        "bevy_asset_macros",
+        "bevy_diagnostic",
+        "bevy_ecs",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_tasks",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "blake3",
+        "crossbeam-channel",
+        "derive_more",
+        "disqualified",
+        "downcast-rs 2.0.2",
+        "either",
+        "futures-io",
+        "futures-lite",
+        "futures-util",
+        "js-sys",
+        "ron",
+        "serde",
+        "stackfuture",
+        "thiserror 2.0.21",
+        "tracing",
+        "uuid",
+        "wasm-bindgen",
+        "wasm-bindgen-futures",
+        "web-sys"
+      ]
+    },
+    {
+      "package": [
+        "bevy_camera",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_color",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_image",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_reflect",
+        "bevy_shape",
+        "bevy_transform",
+        "bevy_utils",
+        "bevy_window",
+        "derive_more 2.1.1",
+        "downcast-rs 2.0.2",
+        "serde",
+        "smallvec",
+        "thiserror 2.0.21",
+        "wgpu-types"
+      ],
+      "after": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_color",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_image",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_reflect",
+        "bevy_shape",
+        "bevy_transform",
+        "bevy_utils",
+        "bevy_window",
+        "derive_more",
+        "downcast-rs 2.0.2",
+        "serde",
+        "smallvec",
+        "thiserror 2.0.21",
+        "wgpu-types"
+      ]
+    },
+    {
+      "package": [
+        "bevy_color",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_curve",
+        "bevy_math",
+        "bevy_reflect",
+        "bytemuck",
+        "derive_more 2.1.1",
+        "encase",
+        "serde",
+        "thiserror 2.0.21",
+        "wgpu-types"
+      ],
+      "after": [
+        "bevy_curve",
+        "bevy_math",
+        "bevy_reflect",
+        "bytemuck",
+        "derive_more",
+        "encase",
+        "serde",
+        "thiserror 2.0.21",
+        "wgpu-types"
+      ]
+    },
+    {
+      "package": [
+        "bevy_ecs",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "arrayvec",
+        "bevy_ecs_macros",
+        "bevy_platform",
+        "bevy_ptr",
+        "bevy_reflect",
+        "bevy_tasks",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "bumpalo",
+        "concurrent-queue",
+        "derive_more 2.1.1",
+        "fixedbitset",
+        "indexmap 2.14.2",
+        "log",
+        "nonmax",
+        "serde",
+        "slotmap",
+        "smallvec",
+        "thiserror 2.0.21",
+        "variadics_please"
+      ],
+      "after": [
+        "arrayvec",
+        "bevy_ecs_macros",
+        "bevy_platform",
+        "bevy_ptr",
+        "bevy_reflect",
+        "bevy_tasks",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "bumpalo",
+        "concurrent-queue",
+        "derive_more",
+        "fixedbitset",
+        "indexmap 2.14.2",
+        "log",
+        "nonmax",
+        "serde",
+        "slotmap",
+        "smallvec",
+        "thiserror 2.0.21",
+        "variadics_please"
+      ]
+    },
+    {
+      "package": [
+        "bevy_input",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_app",
+        "bevy_ecs",
+        "bevy_math",
+        "bevy_platform",
+        "bevy_reflect",
+        "derive_more 2.1.1",
+        "log",
+        "smol_str",
+        "thiserror 2.0.21"
+      ],
+      "after": [
+        "bevy_app",
+        "bevy_ecs",
+        "bevy_math",
+        "bevy_platform",
+        "bevy_reflect",
+        "derive_more",
+        "log",
+        "smol_str",
+        "thiserror 2.0.21"
+      ]
+    },
+    {
+      "package": [
+        "bevy_math",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "approx",
+        "bevy_reflect",
+        "derive_more 2.1.1",
+        "glam",
+        "libm",
+        "rand 0.10.3",
+        "serde",
+        "thiserror 2.0.21",
+        "variadics_please"
+      ],
+      "after": [
+        "approx",
+        "bevy_reflect",
+        "derive_more",
+        "glam",
+        "libm",
+        "rand 0.10.3",
+        "serde",
+        "thiserror 2.0.21",
+        "variadics_please"
+      ]
+    },
+    {
+      "package": [
+        "bevy_mesh",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_encase_derive",
+        "bevy_math",
+        "bevy_mikktspace",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_shape",
+        "bevy_transform",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more 2.1.1",
+        "encase",
+        "glam",
+        "half",
+        "hexasphere",
+        "serde",
+        "thiserror 2.0.21",
+        "tracing",
+        "wgpu-types"
+      ],
+      "after": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_encase_derive",
+        "bevy_math",
+        "bevy_mikktspace",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_shape",
+        "bevy_transform",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more",
+        "encase",
+        "glam",
+        "half",
+        "hexasphere",
+        "serde",
+        "thiserror 2.0.21",
+        "tracing",
+        "wgpu-types"
+      ]
+    },
+    {
+      "package": [
+        "bevy_pbr",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "arrayvec",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_core_pipeline",
+        "bevy_derive",
+        "bevy_diagnostic",
+        "bevy_ecs",
+        "bevy_extract",
+        "bevy_gltf",
+        "bevy_image",
+        "bevy_light",
+        "bevy_log",
+        "bevy_material",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render",
+        "bevy_shader",
+        "bevy_shape",
+        "bevy_tasks",
+        "bevy_transform",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more 2.1.1",
+        "fixedbitset",
+        "indexmap 2.14.2",
+        "nonmax",
+        "offset-allocator",
+        "smallvec",
+        "static_assertions",
+        "thiserror 2.0.21",
+        "tracing",
+        "wgpu-types"
+      ],
+      "after": [
+        "arrayvec",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_core_pipeline",
+        "bevy_derive",
+        "bevy_diagnostic",
+        "bevy_ecs",
+        "bevy_extract",
+        "bevy_gltf",
+        "bevy_image",
+        "bevy_light",
+        "bevy_log",
+        "bevy_material",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render",
+        "bevy_shader",
+        "bevy_shape",
+        "bevy_tasks",
+        "bevy_transform",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more",
+        "fixedbitset",
+        "indexmap 2.14.2",
+        "nonmax",
+        "offset-allocator",
+        "smallvec",
+        "static_assertions",
+        "thiserror 2.0.21",
+        "tracing",
+        "wgpu-types"
+      ]
+    },
+    {
+      "package": [
+        "bevy_reflect",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "assert_type_match",
+        "bevy_platform",
+        "bevy_ptr",
+        "bevy_reflect_derive",
+        "bevy_utils",
+        "derive_more 2.1.1",
+        "disqualified",
+        "downcast-rs 2.0.2",
+        "erased-serde",
+        "foldhash 0.2.0",
+        "glam",
+        "indexmap 2.14.2",
+        "inventory",
+        "petgraph",
+        "serde",
+        "smallvec",
+        "smol_str",
+        "thiserror 2.0.21",
+        "uuid",
+        "variadics_please",
+        "wgpu-types"
+      ],
+      "after": [
+        "assert_type_match",
+        "bevy_platform",
+        "bevy_ptr",
+        "bevy_reflect_derive",
+        "bevy_utils",
+        "derive_more",
+        "disqualified",
+        "downcast-rs 2.0.2",
+        "erased-serde",
+        "foldhash 0.2.0",
+        "glam",
+        "indexmap 2.14.2",
+        "inventory",
+        "petgraph",
+        "serde",
+        "smallvec",
+        "smol_str",
+        "thiserror 2.0.21",
+        "uuid",
+        "variadics_please",
+        "wgpu-types"
+      ]
+    },
+    {
+      "package": [
+        "bevy_render",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "async-channel",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_derive",
+        "bevy_diagnostic",
+        "bevy_ecs",
+        "bevy_encase_derive",
+        "bevy_extract",
+        "bevy_extract_macros",
+        "bevy_image",
+        "bevy_log",
+        "bevy_material",
+        "bevy_material_macros",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render_macros",
+        "bevy_shader",
+        "bevy_shape",
+        "bevy_tasks",
+        "bevy_time",
+        "bevy_transform",
+        "bevy_utils",
+        "bevy_window",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more 2.1.1",
+        "downcast-rs 2.0.2",
+        "encase",
+        "glam",
+        "image",
+        "indexmap 2.14.2",
+        "itertools 0.14.0",
+        "js-sys",
+        "nonmax",
+        "offset-allocator",
+        "send_wrapper",
+        "smallvec",
+        "static_assertions",
+        "thiserror 2.0.21",
+        "tracing",
+        "variadics_please",
+        "wasm-bindgen",
+        "weak-table",
+        "web-sys",
+        "wgpu",
+        "wgpu-types"
+      ],
+      "after": [
+        "async-channel",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_derive",
+        "bevy_diagnostic",
+        "bevy_ecs",
+        "bevy_encase_derive",
+        "bevy_extract",
+        "bevy_extract_macros",
+        "bevy_image",
+        "bevy_log",
+        "bevy_material",
+        "bevy_material_macros",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render_macros",
+        "bevy_shader",
+        "bevy_shape",
+        "bevy_tasks",
+        "bevy_time",
+        "bevy_transform",
+        "bevy_utils",
+        "bevy_window",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more",
+        "downcast-rs 2.0.2",
+        "encase",
+        "glam",
+        "image",
+        "indexmap 2.14.2",
+        "itertools 0.14.0",
+        "js-sys",
+        "nonmax",
+        "offset-allocator",
+        "send_wrapper",
+        "smallvec",
+        "static_assertions",
+        "thiserror 2.0.21",
+        "tracing",
+        "variadics_please",
+        "wasm-bindgen",
+        "weak-table",
+        "web-sys",
+        "wgpu",
+        "wgpu-types"
+      ]
+    },
+    {
+      "package": [
+        "bevy_shape",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "arrayvec",
+        "bevy_math",
+        "bevy_reflect",
+        "derive_more 2.1.1",
+        "rand 0.10.3",
+        "rand_distr",
+        "serde",
+        "thiserror 2.0.21"
+      ],
+      "after": [
+        "arrayvec",
+        "bevy_math",
+        "bevy_reflect",
+        "derive_more",
+        "rand 0.10.3",
+        "rand_distr",
+        "serde",
+        "thiserror 2.0.21"
+      ]
+    },
+    {
+      "package": [
+        "bevy_sprite_render",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_core_pipeline",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_extract",
+        "bevy_image",
+        "bevy_material",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render",
+        "bevy_shader",
+        "bevy_shape",
+        "bevy_sprite",
+        "bevy_text",
+        "bevy_transform",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more 2.1.1",
+        "fixedbitset",
+        "nonmax",
+        "smallvec",
+        "static_assertions",
+        "tracing"
+      ],
+      "after": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_core_pipeline",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_extract",
+        "bevy_image",
+        "bevy_material",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render",
+        "bevy_shader",
+        "bevy_shape",
+        "bevy_sprite",
+        "bevy_text",
+        "bevy_transform",
+        "bevy_utils",
+        "bitflags 2.13.2",
+        "bytemuck",
+        "derive_more",
+        "fixedbitset",
+        "nonmax",
+        "smallvec",
+        "static_assertions",
+        "tracing"
+      ]
+    },
+    {
+      "package": [
+        "bevy_tasks",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "async-channel",
+        "async-executor",
+        "async-task",
+        "atomic-waker",
+        "bevy_platform",
+        "concurrent-queue",
+        "crossbeam-queue",
+        "derive_more 2.1.1",
+        "futures-lite",
+        "heapless",
+        "web-task"
+      ],
+      "after": [
+        "async-channel",
+        "async-executor",
+        "async-task",
+        "atomic-waker",
+        "bevy_platform",
+        "concurrent-queue",
+        "crossbeam-queue",
+        "derive_more",
+        "futures-lite",
+        "heapless",
+        "web-task"
+      ]
+    },
+    {
+      "package": [
+        "bevy_transform",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_app",
+        "bevy_ecs",
+        "bevy_math",
+        "bevy_reflect",
+        "bevy_tasks",
+        "bevy_utils",
+        "derive_more 2.1.1",
+        "serde",
+        "thiserror 2.0.21"
+      ],
+      "after": [
+        "bevy_app",
+        "bevy_ecs",
+        "bevy_math",
+        "bevy_reflect",
+        "bevy_tasks",
+        "bevy_utils",
+        "derive_more",
+        "serde",
+        "thiserror 2.0.21"
+      ]
+    },
+    {
+      "package": [
+        "bevy_ui",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "accesskit",
+        "bevy_a11y",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_image",
+        "bevy_input",
+        "bevy_input_focus",
+        "bevy_log",
+        "bevy_math",
+        "bevy_picking",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_sprite",
+        "bevy_text",
+        "bevy_time",
+        "bevy_transform",
+        "bevy_utils",
+        "bevy_window",
+        "derive_more 2.1.1",
+        "parley",
+        "smallvec",
+        "swash",
+        "taffy",
+        "thiserror 2.0.21",
+        "tracing",
+        "uuid"
+      ],
+      "after": [
+        "accesskit",
+        "bevy_a11y",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_image",
+        "bevy_input",
+        "bevy_input_focus",
+        "bevy_log",
+        "bevy_math",
+        "bevy_picking",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_sprite",
+        "bevy_text",
+        "bevy_time",
+        "bevy_transform",
+        "bevy_utils",
+        "bevy_window",
+        "derive_more",
+        "parley",
+        "smallvec",
+        "swash",
+        "taffy",
+        "thiserror 2.0.21",
+        "tracing",
+        "uuid"
+      ]
+    },
+    {
+      "package": [
+        "bevy_ui_render",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_a11y",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_core_pipeline",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_extract",
+        "bevy_image",
+        "bevy_input_focus",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render",
+        "bevy_shader",
+        "bevy_sprite",
+        "bevy_sprite_render",
+        "bevy_text",
+        "bevy_transform",
+        "bevy_ui",
+        "bevy_utils",
+        "bytemuck",
+        "derive_more 2.1.1",
+        "indexmap 2.14.2",
+        "smallvec",
+        "tracing"
+      ],
+      "after": [
+        "bevy_a11y",
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_color",
+        "bevy_core_pipeline",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_extract",
+        "bevy_image",
+        "bevy_input_focus",
+        "bevy_math",
+        "bevy_mesh",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_render",
+        "bevy_shader",
+        "bevy_sprite",
+        "bevy_sprite_render",
+        "bevy_text",
+        "bevy_transform",
+        "bevy_ui",
+        "bevy_utils",
+        "bytemuck",
+        "derive_more",
+        "indexmap 2.14.2",
+        "smallvec",
+        "tracing"
+      ]
+    },
+    {
+      "package": [
+        "bevy_world_serialization",
+        "0.20.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_transform",
+        "bevy_utils",
+        "derive_more 2.1.1",
+        "ron",
+        "serde",
+        "thiserror 2.0.21",
+        "uuid"
+      ],
+      "after": [
+        "bevy_app",
+        "bevy_asset",
+        "bevy_camera",
+        "bevy_derive",
+        "bevy_ecs",
+        "bevy_platform",
+        "bevy_reflect",
+        "bevy_transform",
+        "bevy_utils",
+        "derive_more",
+        "ron",
+        "serde",
+        "thiserror 2.0.21",
+        "uuid"
+      ]
+    },
+    {
+      "package": [
+        "derive_more-impl",
+        "2.1.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "convert_case 0.10.0",
+        "proc-macro2",
+        "quote",
+        "rustc_version",
+        "syn 2.0.119",
+        "unicode-xid"
+      ],
+      "after": [
+        "convert_case",
+        "proc-macro2",
+        "quote",
+        "rustc_version",
+        "syn 2.0.119",
+        "unicode-xid"
+      ]
+    },
+    {
+      "package": [
+        "getrandom",
+        "0.2.17",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "cfg-if",
+        "libc",
+        "wasi 0.11.1+wasi-snapshot-preview1"
+      ],
+      "after": [
+        "cfg-if",
+        "libc",
+        "wasi"
+      ]
+    },
+    {
+      "package": [
+        "mio",
+        "1.2.4",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "libc",
+        "wasi 0.11.1+wasi-snapshot-preview1",
+        "windows-sys 0.61.2"
+      ],
+      "after": [
+        "libc",
+        "wasi",
+        "windows-sys 0.61.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-app-kit",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "block2 0.6.2",
+        "libc",
+        "objc2 0.6.5",
+        "objc2-cloud-kit 0.3.2",
+        "objc2-core-data 0.3.2",
+        "objc2-core-foundation",
+        "objc2-core-graphics",
+        "objc2-core-image 0.3.2",
+        "objc2-core-text",
+        "objc2-core-video",
+        "objc2-foundation 0.3.2",
+        "objc2-quartz-core 0.3.2"
+      ],
+      "after": [
+        "bitflags 2.13.2",
+        "block2 0.6.2",
+        "objc2 0.6.5",
+        "objc2-core-foundation",
+        "objc2-core-graphics",
+        "objc2-foundation 0.3.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-cloud-kit",
+        "0.2.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "block2 0.5.1",
+        "objc2 0.5.3",
+        "objc2-core-location",
+        "objc2-foundation 0.2.2"
+      ],
+      "after": [
+        "bitflags 2.13.2",
+        "block2 0.5.1",
+        "objc2 0.5.3",
+        "objc2-core-location 0.2.2",
+        "objc2-foundation 0.2.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-core-data",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "objc2 0.6.5",
+        "objc2-foundation 0.3.2"
+      ],
+      "after": [
+        "objc2 0.6.5",
+        "objc2-foundation 0.3.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-ui-kit",
+        "0.2.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "block2 0.5.1",
+        "objc2 0.5.3",
+        "objc2-cloud-kit 0.2.2",
+        "objc2-core-data 0.2.2",
+        "objc2-core-image 0.2.2",
+        "objc2-core-location",
+        "objc2-foundation 0.2.2",
+        "objc2-link-presentation",
+        "objc2-quartz-core 0.2.2",
+        "objc2-symbols",
+        "objc2-uniform-type-identifiers",
+        "objc2-user-notifications"
+      ],
+      "after": [
+        "bitflags 2.13.2",
+        "block2 0.5.1",
+        "objc2 0.5.3",
+        "objc2-cloud-kit 0.2.2",
+        "objc2-core-data 0.2.2",
+        "objc2-core-image 0.2.2",
+        "objc2-core-location 0.2.2",
+        "objc2-foundation 0.2.2",
+        "objc2-link-presentation",
+        "objc2-quartz-core 0.2.2",
+        "objc2-symbols",
+        "objc2-uniform-type-identifiers",
+        "objc2-user-notifications 0.2.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-ui-kit",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "objc2 0.6.5",
+        "objc2-core-foundation",
+        "objc2-foundation 0.3.2"
+      ],
+      "after": [
+        "bitflags 2.13.2",
+        "block2 0.6.2",
+        "objc2 0.6.5",
+        "objc2-cloud-kit 0.3.2",
+        "objc2-core-data 0.3.2",
+        "objc2-core-foundation",
+        "objc2-core-graphics",
+        "objc2-core-image 0.3.2",
+        "objc2-core-location 0.3.2",
+        "objc2-core-text",
+        "objc2-foundation 0.3.2",
+        "objc2-quartz-core 0.3.2",
+        "objc2-user-notifications 0.3.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-user-notifications",
+        "0.2.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "block2 0.5.1",
+        "objc2 0.5.3",
+        "objc2-core-location",
+        "objc2-foundation 0.2.2"
+      ],
+      "after": [
+        "bitflags 2.13.2",
+        "block2 0.5.1",
+        "objc2 0.5.3",
+        "objc2-core-location 0.2.2",
+        "objc2-foundation 0.2.2"
+      ]
+    },
+    {
+      "package": [
+        "objc2-web-kit",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "bitflags 2.13.2",
+        "block2 0.6.2",
+        "objc2 0.6.5",
+        "objc2-app-kit 0.3.2",
+        "objc2-core-foundation",
+        "objc2-foundation 0.3.2",
+        "objc2-javascript-core",
+        "objc2-security"
+      ],
+      "after": [
+        "bitflags 2.13.2",
+        "block2 0.6.2",
+        "objc2 0.6.5",
+        "objc2-app-kit 0.3.2",
+        "objc2-core-foundation",
+        "objc2-foundation 0.3.2"
+      ]
+    },
+    {
+      "package": [
+        "pentimento-tauri",
+        "0.1.0",
+        "local"
+      ],
+      "before": [
+        "pentimento-ipc",
+        "serde",
+        "serde_json",
+        "tauri",
+        "tauri-build",
+        "tauri-plugin-shell",
+        "tracing"
+      ],
+      "after": [
+        "pentimento-ipc",
+        "serde",
+        "serde_json",
+        "tauri",
+        "tauri-build",
+        "tauri-codegen",
+        "tauri-macros",
+        "tauri-plugin",
+        "tauri-plugin-shell",
+        "tauri-runtime",
+        "tauri-runtime-wry",
+        "tauri-utils",
+        "tracing"
+      ]
+    },
+    {
+      "package": [
+        "phf",
+        "0.13.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "phf_macros 0.13.1",
+        "phf_shared 0.13.1",
+        "serde"
+      ],
+      "after": [
+        "phf_macros",
+        "phf_shared",
+        "serde"
+      ]
+    },
+    {
+      "package": [
+        "phf_codegen",
+        "0.13.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "phf_generator 0.13.1",
+        "phf_shared 0.13.1"
+      ],
+      "after": [
+        "phf_generator",
+        "phf_shared"
+      ]
+    },
+    {
+      "package": [
+        "phf_generator",
+        "0.13.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "fastrand",
+        "phf_shared 0.13.1"
+      ],
+      "after": [
+        "fastrand",
+        "phf_shared"
+      ]
+    },
+    {
+      "package": [
+        "phf_macros",
+        "0.13.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "phf_generator 0.13.1",
+        "phf_shared 0.13.1",
+        "proc-macro2",
+        "quote",
+        "syn 2.0.119"
+      ],
+      "after": [
+        "phf_generator",
+        "phf_shared",
+        "proc-macro2",
+        "quote",
+        "syn 2.0.119"
+      ]
+    },
+    {
+      "package": [
+        "phf_shared",
+        "0.13.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "siphasher 1.0.4"
+      ],
+      "after": [
+        "siphasher"
+      ]
+    },
+    {
+      "package": [
+        "rand",
+        "0.8.8",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "libc",
+        "rand_chacha 0.3.1",
+        "rand_core 0.6.4"
+      ],
+      "after": [
+        "libc",
+        "rand_chacha",
+        "rand_core 0.6.4"
+      ]
+    },
+    {
+      "package": [
+        "rav1e",
+        "0.7.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "arbitrary",
+        "arg_enum_proc_macro",
+        "arrayvec",
+        "av1-grain",
+        "bitstream-io",
+        "built",
+        "cfg-if",
+        "interpolate_name",
+        "itertools 0.12.1",
+        "libc",
+        "libfuzzer-sys",
+        "log",
+        "maybe-rayon",
+        "new_debug_unreachable",
+        "noop_proc_macro",
+        "num-derive",
+        "num-traits",
+        "once_cell",
+        "paste",
+        "profiling",
+        "rand 0.8.8",
+        "rand_chacha 0.3.1",
+        "simd_helpers",
+        "system-deps",
+        "thiserror 1.0.69",
+        "v_frame",
+        "wasm-bindgen"
+      ],
+      "after": [
+        "arbitrary",
+        "arg_enum_proc_macro",
+        "arrayvec",
+        "av1-grain",
+        "bitstream-io",
+        "built",
+        "cfg-if",
+        "interpolate_name",
+        "itertools 0.12.1",
+        "libc",
+        "libfuzzer-sys",
+        "log",
+        "maybe-rayon",
+        "new_debug_unreachable",
+        "noop_proc_macro",
+        "num-derive",
+        "num-traits",
+        "once_cell",
+        "paste",
+        "profiling",
+        "rand 0.8.8",
+        "rand_chacha",
+        "simd_helpers",
+        "system-deps",
+        "thiserror 1.0.69",
+        "v_frame",
+        "wasm-bindgen"
+      ]
+    },
+    {
+      "package": [
+        "string_cache",
+        "0.9.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "new_debug_unreachable",
+        "parking_lot",
+        "phf_shared 0.13.1",
+        "precomputed-hash"
+      ],
+      "after": [
+        "new_debug_unreachable",
+        "parking_lot",
+        "phf_shared",
+        "precomputed-hash"
+      ]
+    },
+    {
+      "package": [
+        "string_cache_codegen",
+        "0.6.1",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "phf_generator 0.13.1",
+        "phf_shared 0.13.1",
+        "proc-macro2",
+        "quote"
+      ],
+      "after": [
+        "phf_generator",
+        "phf_shared",
+        "proc-macro2",
+        "quote"
+      ]
+    },
+    {
+      "package": [
+        "syn",
+        "1.0.109",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "proc-macro2",
+        "quote",
+        "unicode-ident"
+      ],
+      "after": [
+        "proc-macro2",
+        "unicode-ident"
+      ]
+    },
+    {
+      "package": [
+        "web_atoms",
+        "0.2.6",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "phf 0.13.1",
+        "phf_codegen 0.13.1",
+        "string_cache 0.9.0",
+        "string_cache_codegen 0.6.1"
+      ],
+      "after": [
+        "phf",
+        "phf_codegen",
+        "string_cache",
+        "string_cache_codegen"
+      ]
+    },
+    {
+      "package": [
+        "webview2-com",
+        "0.38.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "webview2-com-macros",
+        "webview2-com-sys 0.38.2",
+        "windows 0.61.3",
+        "windows-core 0.61.2",
+        "windows-implement",
+        "windows-interface"
+      ],
+      "after": [
+        "webview2-com-macros",
+        "webview2-com-sys",
+        "windows 0.61.3",
+        "windows-core 0.61.2",
+        "windows-implement",
+        "windows-interface"
+      ]
+    },
+    {
+      "package": [
+        "wesl",
+        "0.6.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "annotate-snippets",
+        "anstream",
+        "derive_more 2.1.1",
+        "glob",
+        "half",
+        "itertools 0.15.0",
+        "num-traits",
+        "serde",
+        "thiserror 2.0.21",
+        "toml 1.1.7+spec-1.1.0",
+        "wesl-core",
+        "wesl-macros",
+        "wgsl-parse",
+        "wgsl-types"
+      ],
+      "after": [
+        "annotate-snippets",
+        "anstream",
+        "derive_more",
+        "glob",
+        "half",
+        "itertools 0.15.0",
+        "num-traits",
+        "serde",
+        "thiserror 2.0.21",
+        "toml 1.1.7+spec-1.1.0",
+        "wesl-core",
+        "wesl-macros",
+        "wgsl-parse",
+        "wgsl-types"
+      ]
+    },
+    {
+      "package": [
+        "wgsl-parse",
+        "0.6.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "before": [
+        "annotate-snippets",
+        "derive_more 2.1.1",
+        "itertools 0.15.0",
+        "lalrpop-util",
+        "lexical",
+        "logos",
+        "thiserror 2.0.21",
+        "wgsl-types"
+      ],
+      "after": [
+        "annotate-snippets",
+        "derive_more",
+        "itertools 0.15.0",
+        "lalrpop-util",
+        "lexical",
+        "logos",
+        "thiserror 2.0.21",
+        "wgsl-types"
+      ]
+    }
+  ],
+  "meaningful_edge_changes": [
+    {
+      "package": [
+        "objc2-app-kit",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed_edges": [
+        [
+          "libc",
+          "0.2.190",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-cloud-kit",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-data",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-image",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-text",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-video",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-quartz-core",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": []
+    },
+    {
+      "package": [
+        "objc2-core-data",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed_edges": [
+        [
+          "bitflags",
+          "2.13.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": []
+    },
+    {
+      "package": [
+        "objc2-ui-kit",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed_edges": [],
+      "added_edges": [
+        [
+          "block2",
+          "0.6.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-cloud-kit",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-data",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-graphics",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-image",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-location",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-core-text",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-quartz-core",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-user-notifications",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ]
+    },
+    {
+      "package": [
+        "objc2-web-kit",
+        "0.3.2",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed_edges": [
+        [
+          "objc2-javascript-core",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "objc2-security",
+          "0.3.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": []
+    },
+    {
+      "package": [
+        "pentimento-frontend-overlay",
+        "0.1.0",
+        "local"
+      ],
+      "removed_edges": [
+        [
+          "webkit2gtk",
+          "2.0.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "wry",
+          "0.53.5",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": [
+        [
+          "webkit2gtk",
+          "2.0.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "wry",
+          "0.55.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ]
+    },
+    {
+      "package": [
+        "pentimento-frontend-webkit",
+        "0.1.0",
+        "local"
+      ],
+      "removed_edges": [
+        [
+          "webkit2gtk",
+          "2.0.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "wry",
+          "0.53.5",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": [
+        [
+          "webkit2gtk",
+          "2.0.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "wry",
+          "0.55.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ]
+    },
+    {
+      "package": [
+        "pentimento-tauri",
+        "0.1.0",
+        "local"
+      ],
+      "removed_edges": [
+        [
+          "tauri",
+          "2.9.5",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-build",
+          "2.7.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": [
+        [
+          "tauri",
+          "2.11.6",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-build",
+          "2.6.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-codegen",
+          "2.6.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-macros",
+          "2.6.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-plugin",
+          "2.6.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-runtime",
+          "2.11.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-runtime-wry",
+          "2.11.4",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-utils",
+          "2.9.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ]
+    },
+    {
+      "package": [
+        "pentimento-webview-legacy",
+        "0.1.0",
+        "local"
+      ],
+      "removed_edges": [
+        [
+          "webkit2gtk",
+          "2.0.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "wry",
+          "0.53.5",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": [
+        [
+          "webkit2gtk",
+          "2.0.2",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "wry",
+          "0.55.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ]
+    },
+    {
+      "package": [
+        "syn",
+        "1.0.109",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed_edges": [
+        [
+          "quote",
+          "1.0.47",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": []
+    },
+    {
+      "package": [
+        "tauri-plugin-shell",
+        "2.3.4",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed_edges": [
+        [
+          "tauri",
+          "2.9.5",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-plugin",
+          "2.7.1",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ],
+      "added_edges": [
+        [
+          "tauri",
+          "2.11.6",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ],
+        [
+          "tauri-plugin",
+          "2.6.3",
+          "registry+https://github.com/rust-lang/crates.io-index"
+        ]
+      ]
+    }
+  ],
+  "baseline_lock_sha256": "178469630815465be974d6dd0c80a17d73ddf4c04834d7f5e39e1895df7adbcf",
+  "baseline_lock_git_blob": "d0435afb03fc4bfbc2c46639642e5a46adac21f6",
+  "updated_lock_sha256": "ccbc877518c1d039265c16e1ae99c7832e58a40b6c83cc274efd699d1e68f418",
+  "operation": "Focused precise tauri 2.11.6 then tauri-macros 2.6.3 updates under the official patched host/runtime/build/macro helper cohort constraints",
+  "unchanged_package_checksum_changes": []
+}

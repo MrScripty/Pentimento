@@ -44,7 +44,7 @@ fn handle_click_selection(
     mut commands: Commands,
     key_input: Res<ButtonInput<KeyCode>>,
     mut selection: ResMut<SelectionState>,
-    mut click_events: MessageReader<Pointer<Click>>,
+    mut click_events: MessageReader<PointerClick>,
     selected_query: Query<(Entity, &Selectable), With<Selected>>,
     all_selectable: Query<(Entity, &Selectable)>,
     paint_mode: Res<PaintMode>,
@@ -132,7 +132,7 @@ mod tests {
                 mode: pentimento_ipc::EditMode::Sculpt,
                 target_entity: None,
             })
-            .add_message::<Pointer<Click>>()
+            .add_message::<PointerClick>()
             .add_systems(Update, handle_click_selection);
         let selected = app
             .world_mut()
@@ -151,21 +151,22 @@ mod tests {
         app.world_mut()
             .resource_mut::<crate::EditModeState>()
             .target_entity = Some(selected);
-        let click = Pointer {
+        let click = PointerClick {
             entity: empty,
-            pointer_id: PointerId::Mouse,
-            pointer_location: Location {
-                target: NormalizedRenderTarget::None {
-                    width: 100,
-                    height: 100,
+            pointer: Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::None {
+                        width: 100,
+                        height: 100,
+                    },
+                    position: Vec2::splat(10.0),
                 },
-                position: Vec2::splat(10.0),
-            },
-            event: Click {
-                button: PointerButton::Primary,
-                hit: HitData::new(empty, 1.0, None, None),
-                duration: std::time::Duration::from_millis(50),
-            },
+            ),
+            button: PointerButton::Primary,
+            hit: HitData::new(empty, 1.0, None, None),
+            duration: std::time::Duration::from_millis(50),
+            count: 1,
         };
         app.world_mut().write_message(click.clone());
         app.update();

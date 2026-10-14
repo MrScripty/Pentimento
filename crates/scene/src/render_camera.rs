@@ -78,7 +78,7 @@ impl RenderCamera {
 
     /// Build the projection matrix for this render camera.
     pub fn projection_matrix(&self) -> Mat4 {
-        Mat4::perspective_rh(self.fov, self.aspect_ratio(), self.near, self.far)
+        bevy::math::proj::perspective(self.fov, self.aspect_ratio(), self.near, self.far)
     }
 
     /// Build the view-projection matrix given the camera's world transform.
@@ -143,3 +143,41 @@ fn handle_render_camera_selection(
 /// Stub for non-selection builds
 #[cfg(not(feature = "selection"))]
 fn handle_render_camera_selection() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projection_preserves_right_handed_zero_to_one_depth() {
+        for camera in [
+            RenderCamera::default(),
+            RenderCamera::with_resolution(800, 1200),
+            RenderCamera {
+                fov: 0.75,
+                near: 0.5,
+                far: 250.0,
+                ..Default::default()
+            },
+        ] {
+            // The previous Mat4 constructor's formula, without relying on its
+            // deprecated API. The supported constructor may regroup arithmetic.
+            let (sin_fov, cos_fov) = (0.5 * camera.fov).sin_cos();
+            let h = cos_fov / sin_fov;
+            let r = camera.far / (camera.near - camera.far);
+            let previous = Mat4::from_cols(
+                Vec4::new(h / camera.aspect_ratio(), 0.0, 0.0, 0.0),
+                Vec4::new(0.0, h, 0.0, 0.0),
+                Vec4::new(0.0, 0.0, r, -1.0),
+                Vec4::new(0.0, 0.0, r * camera.near, 0.0),
+            );
+            let projection = camera.projection_matrix();
+            assert!(projection.abs_diff_eq(previous, 1.0e-6));
+            let near = projection.project_point3(Vec3::new(0.0, 0.0, -camera.near));
+            let far = projection.project_point3(Vec3::new(0.0, 0.0, -camera.far));
+            assert!(near.abs_diff_eq(Vec3::ZERO, 1.0e-6));
+            assert!(far.abs_diff_eq(Vec3::Z, 1.0e-6));
+            assert!(projection.project_point3(Vec3::new(0.0, 0.1, -1.0)).y > 0.0);
+        }
+    }
+}

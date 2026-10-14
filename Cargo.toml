@@ -13,8 +13,10 @@ members = [
     "crates/egui-ui",
     "crates/painting",
     "crates/sculpting",
-    "src-tauri",
+    "crates/dependency-regressions",
 ]
+
+exclude = ["legacy", "crates/frontend-webkit", "crates/frontend-overlay", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,16 +26,18 @@ repository = "https://github.com/puma/pentimento"
 
 [workspace.dependencies]
 # Core
-bevy = { version = "0.18", default-features = false }
-glam = "0.30"
+bevy = { version = "=0.20.0", default-features = false }
+glam = "=0.33.12"
 tokio = { version = "1.44", features = ["sync", "rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 thiserror = "2.0"
 tracing = "0.1"
 
-# Webview
-wry = "0.53"
+# CEF host and subprocess helper share one exact binding/runtime release.
+cef = "=154.5.0"
+
+# Native window handles
 raw-window-handle = "0.6"
 
 # Image handling
@@ -54,9 +58,11 @@ dioxus = "0.7"
 dioxus-native = "0.7"
 
 # Vello (GPU-accelerated 2D renderer used by Blitz)
-# Version 0.7.0 uses wgpu 27 which is compatible with Bevy 0.18
-vello = "0.7"
-bevy_egui = "0.39.1"
+# Vello must share Bevy 0.20's wgpu 30 device with the Dioxus adapter.
+vello = "=0.11.0"
+bevy_egui = "=0.43.0-rc.1"
+# Presentation widgets share the plugin's egui version without pulling its renderer.
+egui = "=0.36.2"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
@@ -65,3 +71,9 @@ unsafe_code = "warn"
 lto = true
 codegen-units = 1
 strip = true
+
+# API-compatible maintained backports; provenance and tests live with each fork.
+[patch.crates-io]
+pulp = { path = "vendor/pulp-0.22.3" }
+rav1e = { path = "vendor/rav1e-0.7.1" }
+sctk-adwaita = { path = "vendor/sctk-adwaita" }

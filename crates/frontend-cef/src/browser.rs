@@ -287,7 +287,10 @@ pub fn ensure_cef_initialized() -> Result<(), FrontendError> {
         }
 
         // Validate CEF API version (like OSR example does)
-        let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+        if api_hash(sys::CEF_API_VERSION_LAST, 0).is_null() {
+            tracing::error!("CEF runtime does not support the compiled API version");
+            return false;
+        }
 
         // Create Args from command line (important for proper CEF setup)
         let args = Args::new();

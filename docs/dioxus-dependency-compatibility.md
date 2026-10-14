@@ -3,7 +3,31 @@
 For the generated lock, hosted checks and unresolved security findings, see
 [the committed lock baseline](cargo-lock-baseline.md).
 
-## Candidate scope
+## Current Bevy 0.20 candidate
+
+The integrated runtime stack pins all four Blitz crates to
+`74fe1abf090732524c86d96e6cdb6f95d8f8d6dc`. Default and hot-reload locked metadata
+resolve registry Dioxus core, asset-resolver and devtools 0.7.10. The former
+independent Dioxus `main` dependencies are no longer selected.
+
+The active crossing is AnyRender 0.14.0 → anyrender_vello 0.15.0 → Vello 0.11.0
+→ wgpu 30.0.1, sharing Bevy-render 0.20.0's wgpu identity. Direct Peniko 0.6.1
+and Kurbo 0.13.1 match the drawing adapter. Blitz and the caller's layout types
+share git Taffy `2d936b7701f64b0fe95e50f1bfdcfc65a9f88f6f`. Separate registry
+Taffy 0.14.0 and registry/git Parley entries are reviewed at their actual edges;
+matching a version string does not make their sources identical.
+
+See [current integration evidence](plans/browser-runtime-upgrade/reports/main-integration.md)
+for resolution and verification limits. This candidate's default/hot-reload
+compilation, strict warning checks and security audit must run on its exact head.
+The historical results below describe their old cohort only.
+
+The approved dependency repair isolates retained legacy manifests and backports
+maintained macro/title dependencies without changing these producer/consumer
+identities. Its own final exact-head audit/runtime gates are required; see
+[repair evidence](plans/browser-runtime-upgrade/reports/dependency-repair.md).
+
+## Historical Bevy 0.18 candidate scope
 
 Keep `blitz-dom`, `blitz-paint`, `blitz-traits`, and `dioxus-native-dom`
 on the same exact Blitz revision, `f83b2bc049aae41275b248e8709586a0b267591e`.

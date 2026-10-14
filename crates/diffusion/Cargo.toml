@@ -18,11 +18,5 @@ tracing = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 
-# Local GPU inference (optional)
-candle-core = { workspace = true, optional = true }
-candle-nn = { workspace = true, optional = true }
-candle-transformers = { workspace = true, optional = true }
-
 [features]
 default = []
-local = ["candle-core", "candle-nn", "candle-transformers"]

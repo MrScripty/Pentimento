@@ -75,6 +75,7 @@ fn update_ambient_occlusion(
                 .insert(ScreenSpaceAmbientOcclusion {
                     quality_level: quality,
                     constant_object_thickness: settings.constant_object_thickness,
+                    ..default()
                 });
 
             info!(

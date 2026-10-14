@@ -1,0 +1,49 @@
+[package]
+name = "pentimento-webview-legacy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["webkit"]
+webkit = [
+    "dep:wry",
+    "dep:gtk",
+    "dep:gdk",
+    "dep:gdkx11",
+    "dep:webkit2gtk",
+    "dep:cairo-rs",
+    "dep:gio",
+]
+
+[dependencies]
+pentimento-ipc = { path = "../../crates/ipc" }
+pentimento-frontend-core = { path = "../../crates/frontend-core" }
+
+wry = { workspace = true, optional = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+image = { workspace = true }
+thiserror = { workspace = true }
+raw-window-handle = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }
+gdk = { version = "0.18", optional = true }
+gdkx11 = { version = "0.18", optional = true }
+webkit2gtk = { version = "2.0", features = ["v2_40"], optional = true }
+cairo-rs = { version = "0.18", features = ["png", "use_glib"], optional = true }
+gio = { version = "0.18", optional = true }
+
+[[example]]
+name = "capture_test"
+path = "../../crates/webview/examples/capture_test.rs"
+required-features = ["webkit"]
+
+[lib]
+name = "pentimento_webview"
+path = "../../crates/webview/src/lib.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cef", "dioxus"))'] }

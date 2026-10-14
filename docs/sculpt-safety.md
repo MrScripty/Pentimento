@@ -6,6 +6,7 @@ The `SculptingPipeline` admits a complete surface before its first edit, checks 
 - Triangle positions must be finite and non-degenerate. Duplicate facets, coplanar overlap, and triangle contacts outside an actual shared vertex/edge are rejected. Shared IDs permit the exact topological boundary, not a tolerance-sized overlap region.
 - A BVH queries changed triangles against the entire candidate surface, including unmodified, distant chunks. Unchanged pairs reuse a previously admitted result. Complete incident links are rechecked around all vertices touched by topology changes.
 - Deformations cannot flatten or reverse a face. A conservative swept-volume test also rejects non-adjacent faces that cross between accepted endpoints. This is not a general continuous collision detector: adjacent-face trajectories and topology-change trajectories are not continuously certified. Every returned/renderable dab and completed stroke is checked. Internal candidates remain unobservable until their transaction is admitted.
+- Swept queries include stationary faces regardless of earlier/later face or chunk ordering. Moving/moving pairs are checked once; work exhaustion retains the same fail-closed rejection policy.
 - The geometric predicates use f64 arithmetic on stored f32 positions, a local length-relative contact tolerance of 1e-7 plus a small coordinate-roundoff allowance, and an area degeneracy threshold of 1e-10 times squared edge length. This is conservative floating-point validation, not exact-arithmetic certification.
 
 ## Failure behavior
@@ -23,6 +24,8 @@ Adaptive compaction refreshes both directions of boundary references. Synchroniz
 Adaptive work is limited to 1–4 topology edits per dab, scaled by total face count. Further refinement continues on later dabs. Discrete checks cap candidate-pair work; swept checks cap subdivisions and reject unresolved close approaches. Exhaustion is a rejection, never a successful partial check. An entire-stroke snapshot and exact admission/geometry snapshots add memory proportional to mesh size.
 
 Tests cover overlapping/opposing strokes, multiple chunks, UV seams, 128-valence open boundaries, actual refinement/coarsening, inverted faces, disconnected sheets, thin adjacent overlaps, initial invalid geometry, rollback/replay, flip-only updates and external edits. Existing import/UV/topology regressions remain applicable.
+
+The swept-order regressions keep both triangle endpoints geometrically valid and vary face/chunk order while driving one disconnected sheet through another. Repeated two-dab strokes admit the first dab and reject the crossing second dab, restoring the entire stroke baseline with no replay/history entry and preserving a pending exact Undo/Redo branch.
 
 Run correctness checks:
 

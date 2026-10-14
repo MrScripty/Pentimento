@@ -10,7 +10,7 @@ try{
  await page.goto(process.env.PENTIMENTO_UI_URL??'http://127.0.0.1:5187');await page.waitForFunction(()=>window.commands.some(m=>m.type==='RequestBrushState'));
  const receive=m=>page.evaluate(m=>window.__PENTIMENTO_RECEIVE__(JSON.stringify(m)),m);
  const last=()=>page.evaluate(()=>window.commands.filter(m=>m.type==='ProjectCommand').at(-1)?.data);
- let project={path:null,available:true,active:false,blocked:false,notice:null};const state=()=>receive({type:'ProjectStateChanged',data:project});
+ let project={generation:"0",path:null,available:true,active:false,blocked:false,notice:null};const state=()=>receive({type:'ProjectStateChanged',data:project});
  const file=()=>page.getByRole('button',{name:'File',exact:true}).click();
  await file();assert.equal(await page.getByRole('menuitem',{name:'Save',exact:true}).isDisabled(),true,'no claimed file capability before native state');await state();
  await page.getByRole('menuitem',{name:'Save',exact:true}).click();await page.getByRole('dialog',{name:'Save project'}).waitFor();
@@ -31,6 +31,22 @@ try{
  await page.getByRole('button',{name:'Open',exact:true}).click();assert.deepEqual(await last(),{Open:{path}});await page.keyboard.press('Tab');assert.equal(await page.getByRole('dialog').evaluate(el=>el===document.activeElement),true);
  await receive({type:'EditModeChanged',data:{mode:'None'}});await receive({type:'ProjectionModeChanged',data:{live_projection:false}});await receive({type:'ProjectOperationFinished',data:{operation:'Open',success:true,message:'Project opened. Live projection is paused; undo history starts fresh.'}});
  assert.equal(await page.getByRole('dialog').count(),0);assert.equal(await page.getByLabel('Sculpt controls',{exact:true}).count(),0);await page.getByRole('status').filter({hasText:'Live projection is paused'}).waitFor();
+ // New requires a deliberate modal confirmation; Cancel sends no destructive command.
+ project={...project,generation:'9007199254740993'};await state();await file();await page.getByRole('menuitem',{name:'New Project'}).click();
+ await page.getByRole('dialog',{name:'New project'}).waitFor();assert.equal(await page.getByLabel('Absolute local file path').count(),0);
+ assert.equal(await page.getByRole('button',{name:'Cancel',exact:true}).evaluate(el=>el===document.activeElement),true);
+ const beforeCancel=await page.evaluate(()=>window.commands.filter(m=>m.type==='ProjectCommand'&&m.data.New).length);
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(await page.getByRole('dialog').count(),0);
+ assert.equal(await page.evaluate(()=>window.commands.filter(m=>m.type==='ProjectCommand'&&m.data.New).length),beforeCancel);
+ await file();await page.getByRole('menuitem',{name:'New Project'}).click();await page.getByRole('dialog',{name:'New project'}).waitFor();
+ project={...project,generation:'9007199254740994'};await state();
+ await page.getByRole('button',{name:'Discard and create new'}).click();assert.deepEqual(await last(),{New:{expected_generation:'9007199254740993',confirm_discard:true}},'later state cannot silently retarget confirmation');
+ await receive({type:'ProjectOperationFinished',data:{operation:'New',success:false,message:'The document changed while confirmation was open.'}});assert.equal(await page.getByRole('dialog').count(),1);
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();await file();await page.getByRole('menuitem',{name:'New Project'}).click();await page.getByRole('button',{name:'Discard and create new'}).click();
+ assert.deepEqual(await last(),{New:{expected_generation:'9007199254740994',confirm_discard:true}});
+ project={...project,generation:'9007199254740995',path:null,blocked:false,notice:'New empty project. Save As to choose a file. Undo history starts fresh.'};await state();await receive({type:'ProjectOperationFinished',data:{operation:'New',success:true,message:project.notice}});
+ assert.equal(await page.getByRole('dialog').count(),0);await file();await page.getByRole('menuitem',{name:'Save As...'}).click();assert.equal(await page.getByLabel('Absolute local file path').inputValue(),'');await page.getByLabel('Absolute local file path').fill('/tmp/ui-new-receipt.pentimento.json');await page.getByRole('button',{name:'Save',exact:true}).click();
+ assert.deepEqual(await last(),{Save:{path:'/tmp/ui-new-receipt.pentimento.json'}});await receive({type:'ProjectOperationFinished',data:{operation:'Save',success:true,message:'Project saved.'}});
  if(process.env.PENTIMENTO_PROJECT_UI_EVIDENCE){await mkdir(process.env.PENTIMENTO_PROJECT_UI_EVIDENCE,{recursive:true});await file();await page.getByRole('menuitem',{name:'Open...'}).click();await page.screenshot({path:`${process.env.PENTIMENTO_PROJECT_UI_EVIDENCE}/project-open-dialog.jpg`,type:'jpeg',quality:85});}
- assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',checks:['native-capability-gating','save-path-IPC','accepted-save-path-reuse','failed-save-keeps-dialog','active-stroke-controls-disabled','modal-Tab-Escape-focus-restoration','pending-modal-focus','open-IPC-and-authoritative-mode-reset','honest-paused-live-and-fresh-history-notice'],native_cef_acceptance:false,filesystem_qualification:'separate Rust owned-file tests'}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',checks:['native-capability-gating','save-path-IPC','accepted-save-path-reuse','failed-save-keeps-dialog','active-stroke-controls-disabled','modal-Tab-Escape-focus-restoration','pending-modal-focus','open-IPC-and-authoritative-mode-reset','new-confirmation-Cancel-sends-no-command','new-frozen-exact-generation-token','failed-New-keeps-confirmation','save-as-after-New','honest-paused-live-and-fresh-history-notice'],native_cef_acceptance:false,filesystem_qualification:'separate Rust owned-file tests'}));
 }finally{await browser.close();}

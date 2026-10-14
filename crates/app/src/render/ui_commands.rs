@@ -15,12 +15,14 @@ pub(crate) fn dispatch_ui_commands(
     commands: impl IntoIterator<Item = UiToBevy>,
 ) {
     let mut canvas_events = Vec::new();
-    let mut outbound_layer_messages = Vec::new();
 
     for command in commands {
         if matches!(
             &command,
-            UiToBevy::ProjectCommand(pentimento_ipc::ProjectCommand::Save { .. })
+            UiToBevy::ProjectCommand(
+                pentimento_ipc::ProjectCommand::Save { .. }
+                    | pentimento_ipc::ProjectCommand::New { .. }
+            )
         ) {
             if let Some(mut messages) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
                 for event in canvas_events.drain(..) {
@@ -68,13 +70,19 @@ pub(crate) fn dispatch_ui_commands(
                     .get_resource::<DepthViewCapability>()
                     .cloned()
                     .unwrap_or_default();
+                let mut replies = Vec::new();
                 if let Some(mut settings) = world.get_resource_mut::<DepthViewSettings>() {
                     if let UiToBevy::SetDepthView { enabled } = command {
                         if let Some(rejection) = capability.set_enabled(&mut settings, enabled) {
-                            outbound_layer_messages.push(rejection);
+                            replies.push(rejection);
                         }
                     }
-                    outbound_layer_messages.push(capability.state_message(&settings));
+                    replies.push(capability.state_message(&settings));
+                }
+                if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
+                    for reply in replies {
+                        outbound.send(reply);
+                    }
                 }
             }
             UiToBevy::MeshEditCommand(command) => handle_mesh_edit_command(world, command),
@@ -99,13 +107,6 @@ pub(crate) fn dispatch_ui_commands(
         if let Some(mut messages) = world.get_resource_mut::<Messages<CanvasPlaneEvent>>() {
             for event in canvas_events {
                 messages.write(event);
-            }
-        }
-    }
-    if !outbound_layer_messages.is_empty() {
-        if let Some(mut outbound) = world.get_resource_mut::<OutboundUiMessages>() {
-            for message in outbound_layer_messages {
-                outbound.send(message);
             }
         }
     }
@@ -189,7 +190,7 @@ fn handle_material_command(world: &mut World, command: MaterialCommand) {
         return;
     };
     #[cfg(feature = "selection")]
-    let Some(material) = materials.get_mut(&material_handle) else {
+    let Some(mut material) = materials.get_mut(&material_handle) else {
         return;
     };
 
@@ -504,6 +505,97 @@ mod project_command_tests {
         assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished{operation,success:true,..} if operation=="Open")));
         std::fs::remove_dir_all(directory).unwrap();
     }
+    fn new_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<pentimento_scene::PaintingResource>();
+        world.init_resource::<pentimento_scene::OutboundUiMessages>();
+        world.init_resource::<Messages<CanvasPlaneEvent>>();
+        world.init_resource::<Messages<AddObjectEvent>>();
+        world
+    }
+    fn new_command() -> UiToBevy {
+        UiToBevy::ProjectCommand(ProjectCommand::New {
+            expected_generation: "0".into(),
+            confirm_discard: true,
+        })
+    }
+    #[test]
+    fn new_refuses_each_unapplied_native_prefix_including_locally_buffered_canvas() {
+        for prefix in [
+            UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                width: Some(2),
+                height: Some(2),
+            }),
+            UiToBevy::AddObject(pentimento_ipc::AddObjectRequest {
+                primitive_type: pentimento_ipc::PrimitiveType::Cube,
+                position: None,
+                name: None,
+            }),
+        ] {
+            let mut world = new_world();
+            dispatch_ui_commands(&mut world, [prefix, new_command()]);
+            assert_eq!(pentimento_scene::project_generation(&world), 0);
+            assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectOperationFinished {operation,success:false,..} if operation=="New")));
+            assert!(
+                !world.resource::<Messages<CanvasPlaneEvent>>().is_empty()
+                    || !world.resource::<Messages<AddObjectEvent>>().is_empty()
+            );
+        }
+    }
+    #[test]
+    fn successful_new_drops_old_batch_suffix_and_subsequent_save_as_works() {
+        let mut world = new_world();
+        let directory =
+            std::env::temp_dir().join(format!("pentimento-native-new-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let old = directory
+            .join("old.pentimento.json")
+            .to_string_lossy()
+            .into_owned();
+        let fresh = directory
+            .join("fresh.pentimento.json")
+            .to_string_lossy()
+            .into_owned();
+        dispatch_ui_commands(
+            &mut world,
+            [UiToBevy::ProjectCommand(ProjectCommand::Save {
+                path: old.clone(),
+            })],
+        );
+        let bytes = std::fs::read(&old).unwrap();
+        dispatch_ui_commands(
+            &mut world,
+            [
+                new_command(),
+                UiToBevy::AddPaintCanvas(pentimento_ipc::AddPaintCanvasRequest {
+                    width: Some(4),
+                    height: Some(4),
+                }),
+                UiToBevy::ProjectCommand(ProjectCommand::Save { path: old.clone() }),
+                UiToBevy::AddObject(pentimento_ipc::AddObjectRequest {
+                    primitive_type: pentimento_ipc::PrimitiveType::Cube,
+                    position: None,
+                    name: None,
+                }),
+            ],
+        );
+        assert_eq!(pentimento_scene::project_generation(&world), 1);
+        assert!(world.resource::<Messages<CanvasPlaneEvent>>().is_empty());
+        assert!(world.resource::<Messages<AddObjectEvent>>().is_empty());
+        assert_eq!(std::fs::read(&old).unwrap(), bytes);
+        assert!(world.resource::<pentimento_scene::OutboundUiMessages>().messages.iter().any(|m|matches!(m,pentimento_ipc::BevyToUi::ProjectStateChanged {path:None,generation,..} if generation=="1")));
+        dispatch_ui_commands(
+            &mut world,
+            [UiToBevy::ProjectCommand(ProjectCommand::Save {
+                path: fresh.clone(),
+            })],
+        );
+        assert!(std::path::Path::new(&fresh).is_file());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -511,34 +603,73 @@ mod depth_command_tests {
     use super::*;
     use pentimento_ipc::BevyToUi;
 
-    #[test]
-    fn native_depth_query_and_rejected_toggle_emit_authoritative_replies() {
+    fn world(capability: Option<DepthViewCapability>) -> World {
         let mut world = World::new();
         world.init_resource::<DepthViewSettings>();
-        world.init_resource::<DepthViewCapability>();
         world.init_resource::<OutboundUiMessages>();
-        dispatch_ui_commands(
-            &mut world,
-            [
-                UiToBevy::GetDepthViewState,
-                UiToBevy::SetDepthView { enabled: true },
-            ],
-        );
-        assert!(!world.resource::<DepthViewSettings>().enabled);
-        let messages = &world.resource::<OutboundUiMessages>().messages;
+        if let Some(capability) = capability {
+            world.insert_resource(capability);
+        }
+        world
+    }
+
+    fn drain(world: &mut World) -> Vec<BevyToUi> {
+        world.resource_mut::<OutboundUiMessages>().drain()
+    }
+
+    #[test]
+    fn depth_query_and_supported_toggles_return_authoritative_state() {
+        let mut world = world(Some(DepthViewCapability {
+            unavailable_reason: None,
+        }));
+        dispatch_ui_commands(&mut world, [UiToBevy::GetDepthViewState]);
         assert!(matches!(
-            messages.as_slice(),
+            drain(&mut world).as_slice(),
+            [BevyToUi::DepthViewState {
+                available: true,
+                enabled: false,
+                reason: None
+            }]
+        ));
+        for enabled in [true, true, false, false] {
+            dispatch_ui_commands(&mut world, [UiToBevy::SetDepthView { enabled }]);
+            assert_eq!(world.resource::<DepthViewSettings>().enabled, enabled);
+            assert!(
+                matches!(drain(&mut world).as_slice(), [BevyToUi::DepthViewState { available: true, enabled: actual, reason: None }] if *actual == enabled)
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_depth_rejects_enable_and_disable_without_mutating_settings() {
+        let mut world = world(Some(DepthViewCapability {
+            unavailable_reason: Some("GL unsupported".into()),
+        }));
+        // A stale setting must neither display as enabled nor be mutated on rejection.
+        world.resource_mut::<DepthViewSettings>().enabled = true;
+        for enabled in [true, false] {
+            dispatch_ui_commands(&mut world, [UiToBevy::SetDepthView { enabled }]);
+            assert!(world.resource::<DepthViewSettings>().enabled);
+            assert!(matches!(drain(&mut world).as_slice(), [
+                BevyToUi::DepthViewRejected { reason },
+                BevyToUi::DepthViewState { available: false, enabled: false, reason: Some(state_reason) },
+            ] if reason == "GL unsupported" && reason == state_reason));
+        }
+    }
+
+    #[test]
+    fn missing_depth_capability_fails_closed_in_native_dispatcher() {
+        let mut world = world(None);
+        dispatch_ui_commands(&mut world, [UiToBevy::SetDepthView { enabled: true }]);
+        assert!(!world.resource::<DepthViewSettings>().enabled);
+        assert!(matches!(
+            drain(&mut world).as_slice(),
             [
-                BevyToUi::DepthViewState {
-                    available: false,
-                    enabled: false,
-                    ..
-                },
                 BevyToUi::DepthViewRejected { .. },
                 BevyToUi::DepthViewState {
                     available: false,
                     enabled: false,
-                    ..
+                    reason: Some(_)
                 },
             ]
         ));

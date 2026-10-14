@@ -36,12 +36,6 @@ function assertBevyToUiMessage(message) {
   assert.equal(typeof message.type, 'string');
 
   switch (message.type) {
-    case 'ProjectStateChanged':
-      for(const field of ['available','active','blocked'])assert.equal(typeof message.data[field],'boolean');
-      assert.ok(message.data.path===null||typeof message.data.path==='string');
-      assert.ok(message.data.notice===null||typeof message.data.notice==='string');return;
-    case 'ProjectOperationFinished':
-      assert.match(message.data.operation,/^(Save|Open)$/);assert.equal(typeof message.data.success,'boolean');assert.equal(typeof message.data.message,'string');return;
     case 'DepthViewState':
       assert.equal(typeof message.data.available, 'boolean');
       assert.equal(typeof message.data.enabled, 'boolean');
@@ -50,6 +44,13 @@ function assertBevyToUiMessage(message) {
     case 'DepthViewRejected':
       assert.equal(typeof message.data.reason, 'string');
       return;
+    case 'ProjectStateChanged':
+      assert.match(message.data.generation,/^(0|[1-9][0-9]*)$/);
+      for(const field of ['available','active','blocked'])assert.equal(typeof message.data[field],'boolean');
+      assert.ok(message.data.path===null||typeof message.data.path==='string');
+      assert.ok(message.data.notice===null||typeof message.data.notice==='string');return;
+    case 'ProjectOperationFinished':
+      assert.match(message.data.operation,/^(Save|Open|New)$/);assert.equal(typeof message.data.success,'boolean');assert.equal(typeof message.data.message,'string');return;
     case 'Initialize':
       assert.ok(message.data);
       assert.ok(Array.isArray(message.data.scene_info.objects));
@@ -136,6 +137,7 @@ function assertUiToBevyMessage(message) {
   switch (message.type) {
     case 'ProjectCommand':
       if(message.data==='GetState')return;
+      if(message.data.New){assert.equal(typeof message.data.New.confirm_discard,'boolean');assert.match(message.data.New.expected_generation,/^(0|[1-9][0-9]*)$/);return;}
       assert.equal(typeof (message.data.Save??message.data.Open)?.path,'string');return;
     case 'AddObject':
       assert.equal(typeof message.data.primitive_type, 'string');
@@ -265,6 +267,8 @@ test('native keyboard samples preserve physical keys, native text, and additive 
   const state=samples.bevy_to_ui.find(m=>m.type==='PaintBrushStateChanged').data.target.uv_layers;
   assert.equal(state.receiver,12);assert.equal(state.enabled,true);assert.equal(state.layers[0].is_active,true);
   assert.equal(state.layers[0].locked,false);assert.equal(state.layers[0].opacity,0.5);
+  assert.equal(state.layers[0].blend_mode,'Overlay');
+  assert.ok(commands.some(c=>c.BlendMode?.layer_id===3 && c.BlendMode.mode==='Multiply'));
   assert.equal(state.can_undo,true);assert.equal(state.can_redo,false);assert.equal(state.conflicted,false);
  });
 
@@ -273,4 +277,14 @@ test('native keyboard samples preserve physical keys, native text, and additive 
    assert.ok(commands.includes('CancelStroke'));assert.ok(commands.includes('CancelUvProjection'));
    const state=samples.bevy_to_ui.find(m=>m.type==='PaintBrushStateChanged').data.target.uv_layers;
    assert.equal(state.projection_preview,false);
+ });
+
+ test('mask protocol exposes canonical state and explicit channel operations',()=>{
+   const samples=loadSamples();
+   const state=samples.bevy_to_ui.find(m=>m.type==='PaintBrushStateChanged').data.target.uv_layers.layers[0];
+   assert.equal(state.has_mask,true);assert.equal(state.mask_enabled,true);assert.equal(state.paint_target,'Mask');
+   const commands=samples.ui_to_bevy.filter(m=>m.type==='PaintCommand' && m.data?.UvLayers).map(m=>m.data.UvLayers.command);
+   assert.ok(commands.some(c=>c.AddMask?.layer_id===3));assert.ok(commands.some(c=>c.RemoveMask?.layer_id===3));
+   assert.ok(commands.some(c=>c.MaskEnabled?.layer_id===3 && c.MaskEnabled.enabled===false));
+   assert.ok(commands.some(c=>c.PaintTarget?.layer_id===3 && c.PaintTarget.target==='Mask'));
  });

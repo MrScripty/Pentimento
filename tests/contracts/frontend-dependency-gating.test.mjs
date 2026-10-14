@@ -6,6 +6,8 @@ const read = (path) => fs.readFileSync(new URL(`../../${path}`, import.meta.url)
 
 const appManifest = read('crates/app/Cargo.toml');
 const webviewManifest = read('crates/webview/Cargo.toml');
+const legacyAppManifest = read('legacy/app/Cargo.toml');
+const legacyWebviewManifest = read('legacy/webview/Cargo.toml');
 
 const featureSectionOf = (manifest) =>
     manifest.match(/^\[features\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1];
@@ -49,15 +51,12 @@ test('app webview integration is optional so egui builds skip it', () => {
         /^rust-embed\s*=\s*\{[^}]*optional\s*=\s*true/m,
         'rust-embed (embedded web UI) must be optional',
     );
-    assert.match(
-        appManifest,
-        /^gtk\s*=\s*\{[^}]*optional\s*=\s*true/m,
-        'gtk must be optional',
-    );
+    assert.doesNotMatch(appManifest, /^gtk\s*=/m, 'GTK belongs only to the legacy workspace');
 });
 
-test('app webkit feature owns the capture/overlay backend', () => {
-    const section = featureSectionOf(appManifest);
+test('legacy app webkit feature owns the retained capture/overlay backend', () => {
+    assert.doesNotMatch(featureSectionOf(appManifest), /^webkit\s*=/m);
+    const section = featureSectionOf(legacyAppManifest);
     const decl = featureDecl(section, 'webkit');
     assert.match(decl, /"dep:pentimento-webview"/);
     assert.match(decl, /"pentimento-webview\/webkit"/);
@@ -108,23 +107,24 @@ test('app keeps test-only serialization support out of the main graph', () => {
     assert.doesNotMatch(mainSection, /^serde_json\s*=/m);
 });
 
-test('webview webkit stack is optional behind the webkit feature', () => {
+test('legacy webview webkit stack remains optional behind the webkit feature', () => {
     for (const name of ['wry', 'gtk', 'gdk', 'gdkx11', 'webkit2gtk', 'cairo-rs', 'gio']) {
         const escaped = name.replace(/-/g, '\\-');
         assert.match(
-            webviewManifest,
+            legacyWebviewManifest,
             new RegExp(`^${escaped}\\s*=\\s*\\{[^}]*optional\\s*=\\s*true`, 'm'),
             `${name} must be optional`,
         );
     }
-    const decl = featureDecl(featureSectionOf(webviewManifest), 'webkit');
+    const decl = featureDecl(featureSectionOf(legacyWebviewManifest), 'webkit');
     for (const name of ['wry', 'gtk', 'gdk', 'gdkx11', 'webkit2gtk', 'cairo-rs', 'gio']) {
         assert.ok(decl.includes(`"dep:${name}"`), `webkit must enable dep:${name}`);
     }
 });
 
-test('webview keeps webkit as its default for capture/overlay callers', () => {
-    const decl = featureDecl(featureSectionOf(webviewManifest), 'default');
+test('only legacy webview defaults to webkit for capture/overlay callers', () => {
+    assert.equal(featureDecl(featureSectionOf(webviewManifest), 'default').trim(), '');
+    const decl = featureDecl(featureSectionOf(legacyWebviewManifest), 'default');
     assert.match(decl, /"webkit"/);
 });
 
@@ -136,9 +136,11 @@ test('webview drops directly unused dependencies', () => {
     assert.doesNotMatch(webviewManifest, /windows\s*=\s*\{[^}]*0\.58/);
 });
 
-test('webview capture example requires the webkit feature', () => {
-    assert.match(webviewManifest, /\[\[example\]\]\s*\nname\s*=\s*"capture_test"/);
-    assert.match(webviewManifest, /required-features\s*=\s*\["webkit"\]/);
+test('legacy capture example requires the webkit feature and keeps its source entrypoint', () => {
+    assert.match(legacyWebviewManifest, /\[\[example\]\]\s*\nname\s*=\s*"capture_test"/);
+    assert.match(legacyWebviewManifest, /required-features\s*=\s*\["webkit"\]/);
+    assert.match(legacyWebviewManifest, /path\s*=\s*"\.\.\/\.\.\/crates\/webview\/examples\/capture_test.rs"/);
+    assert.match(webviewManifest, /^autoexamples\s*=\s*false/m);
 });
 
 test('native webview backends compile only with webkit', () => {
@@ -149,6 +151,20 @@ test('native webview backends compile only with webkit', () => {
     assertCfgGated(lib, 'crates/webview/src/lib.rs', 'pub struct OverlayWebview', ['webkit']);
 });
 
+test('webview channel and capture trait imports follow their backend owners', () => {
+    const lib = read('crates/webview/src/lib.rs');
+    assertCfgGated(lib, 'crates/webview/src/lib.rs',
+        'use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};', ['webkit', 'cef']);
+    assertCfgGated(lib, 'crates/webview/src/lib.rs', 'use tokio::sync::mpsc;', ['webkit', 'cef']);
+    for (const declaration of [
+        'use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};',
+        'use std::sync::Arc;',
+        'use std::sync::atomic::{AtomicBool, Ordering};',
+    ]) {
+        assertCfgGated(lib, 'crates/webview/src/lib.rs', declaration, ['webkit', 'cef', 'dioxus']);
+    }
+});
+
 test('app web UI modules compile only for web-backed frontends', () => {
     const main = read('crates/app/src/main.rs');
     assertCfgGated(main, 'crates/app/src/main.rs', 'mod embedded_ui;', ['webkit', 'cef']);
@@ -157,4 +173,31 @@ test('app web UI modules compile only for web-backed frontends', () => {
     const render = read('crates/app/src/render/mod.rs');
     assertCfgGated(render, 'crates/app/src/render/mod.rs', 'OffscreenWebview::new', ['webkit']);
     assertCfgGated(render, 'crates/app/src/render/mod.rs', 'OverlayWebview::new', ['webkit']);
+});
+
+
+test('active manifests have no retained WebKit or Tauri dependency edges', () => {
+    for (const manifest of [appManifest, webviewManifest]) {
+        for (const name of ['gtk', 'gdk', 'gdkx11', 'webkit2gtk', 'cairo-rs', 'gio', 'wry', 'tauri']) {
+            assert.doesNotMatch(manifest, new RegExp(`^${name}\\s*=`, 'm'));
+        }
+        assert.doesNotMatch(featureSectionOf(manifest), /^webkit\s*=/m);
+    }
+});
+
+test('retained manifests explicitly belong to the isolated legacy workspace', () => {
+    const root = read('Cargo.toml');
+    const members = root.match(/^members\s*=\s*\[([^\]]*)\]/m)?.[1];
+    assert.ok(members);
+    assert.doesNotMatch(members, /src-tauri|frontend-webkit|frontend-overlay|legacy/);
+    const legacy = read('legacy/Cargo.toml');
+    for (const path of ['../src-tauri', '../crates/frontend-webkit', '../crates/frontend-overlay', 'app', 'webview']) {
+        assert.ok(legacy.includes(`"${path}"`));
+    }
+    for (const path of ['crates/frontend-webkit', 'crates/frontend-overlay']) {
+        assert.match(read(`${path}/Cargo.toml`), /^workspace\s*=\s*"\.\.\/\.\.\/legacy"/m);
+    }
+    assert.match(read('src-tauri/Cargo.toml'), /^workspace\s*=\s*"\.\.\/legacy"/m);
+    assert.match(legacyAppManifest, /path\s*=\s*"\.\.\/\.\.\/crates\/app\/src\/main.rs"/);
+    assert.match(legacyWebviewManifest, /path\s*=\s*"\.\.\/\.\.\/crates\/webview\/src\/lib.rs"/);
 });

@@ -12,6 +12,7 @@ use pentimento_dioxus_ui::Scene;
 /// UI state that gets extracted to the render world each frame.
 /// This contains viewport dimensions needed for Vello rendering.
 #[derive(Resource, Clone, ExtractResource, Default)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct DioxusUiState {
     pub width: u32,
     pub height: u32,
@@ -25,6 +26,7 @@ pub struct DioxusRenderTarget {
 
 /// Extractable version that just carries the AssetId.
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct DioxusRenderTargetId(pub AssetId<Image>);
 
 /// Marker component for the UI overlay node.
@@ -34,6 +36,7 @@ pub struct DioxusUiOverlay;
 /// Pre-built Vello scene for the current frame.
 /// Built in main world, extracted to render world.
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct VelloSceneBuffer {
     pub scene: Scene,
 }

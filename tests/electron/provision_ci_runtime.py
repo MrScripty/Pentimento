@@ -18,11 +18,11 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = '44.5.1'
+VERSION = '44.7.1'
 ARCHIVE_NAME = f'electron-v{VERSION}-linux-x64.zip'
 RELEASE_URL = f'https://github.com/electron/electron/releases/download/v{VERSION}'
 # Official SHASUMS256.txt and the locked npm package's checksums.json agree.
-ARCHIVE_SHA256 = '5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5'
+ARCHIVE_SHA256 = 'fd4349ce666251f66acba2c88064ae6d65d5c61c0a44e68dd028d7c7f30eaa47'
 DESTINATION = Path(f'/usr/lib/pentimento-ci/electron-{VERSION}')
 MAX_ARCHIVE = 300 * 1024 * 1024
 MAX_UNPACKED = 1024 * 1024 * 1024
@@ -33,11 +33,19 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def digest_stream(stream):
+    # Ubuntu 22.04's system Python is 3.10; file_digest requires Python 3.11.
+    checksum = hashlib.sha256()
+    while chunk := stream.read(1024 * 1024):
+        checksum.update(chunk)
+    return checksum.hexdigest()
+
+
 def digest_file(path):
     # O_NOFOLLOW rejects a last-component symlink, including a replacement race.
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
         require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), f'Not a regular file: {path}')
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        return digest_stream(stream)
 
 
 def release_checksum(text):
@@ -90,7 +98,7 @@ def archive_manifest(archive, expected_digest=ARCHIVE_SHA256):
                 directories.add(name)
             elif name != 'electron.d.ts':  # npm's official installer moves this outside dist.
                 with source.open(item) as stream:
-                    checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
+                    checksum = digest_stream(stream)
                 files[name] = {'sha256': checksum, 'size': item.file_size,
                                'mode': 0o755 if mode & 0o111 else 0o644}
         require({'electron', 'chrome-sandbox', 'version'} <= files.keys(),
@@ -190,12 +198,15 @@ def install_runtime(manifest, run=subprocess.run):
 
 
 def check_lock(project):
+    manifest = json.loads((project / 'src-electron/package.json').read_text())
     lock = json.loads((project / 'src-electron/package-lock.json').read_text())
     package = project / 'src-electron/node_modules/electron'
-    require(lock['packages']['node_modules/electron']['version'] == VERSION and
+    require(manifest['devDependencies']['electron'] == VERSION and
+            lock['packages']['']['devDependencies']['electron'] == VERSION and
+            lock['packages']['node_modules/electron']['version'] == VERSION and
             json.loads((package / 'package.json').read_text())['version'] == VERSION,
             'Electron package does not match reviewed lock/version')
-    require(json.loads((package / 'checksums.json').read_text())[ARCHIVE_NAME] == ARCHIVE_SHA256,
+    require(json.loads((package / 'checksums.json').read_text()).get(ARCHIVE_NAME) == ARCHIVE_SHA256,
             'Locked npm checksum differs from official release pin')
     return package / 'dist'
 
@@ -212,8 +223,8 @@ def main():
                 os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted',
                 'Privileged provisioning is restricted to ephemeral GitHub-hosted runners')
         release = Path('/etc/os-release').read_text()
-        require('ID=ubuntu\n' in release and 'VERSION_ID="24.04"\n' in release,
-                'Reviewed Ubuntu 24.04 environment only')
+        require('ID=ubuntu\n' in release and 'VERSION_ID="22.04"\n' in release,
+                'Reviewed Ubuntu 22.04 environment only')
     project = Path(__file__).absolute().parents[2]
     installed = check_lock(project)
     source_parents(installed, os.getuid())

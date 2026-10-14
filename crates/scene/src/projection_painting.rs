@@ -6,8 +6,8 @@
 use bevy::asset::{AssetEventSystems, RenderAssetUsages};
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::ecs::system::SystemParam;
+use bevy::mesh::UvChannel;
 use bevy::mesh::{Indices, VertexAttributeValues};
-use bevy::pbr::UvChannel;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     Extent3d, Face, PrimitiveTopology, TextureDimension, TextureFormat,
@@ -485,6 +485,7 @@ struct UvApplyAdmission {
     source: Entity,
     receiver: Entity,
     layer: u32,
+    paint_target: painting::uv_layers::UvPaintTarget,
     mesh_tick: bevy::ecs::change_detection::Tick,
     context: ProjectionContext,
     geometry: Vec<MeshStamp>,
@@ -633,6 +634,13 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         .ok_or("Enable UV layers")?
         .document()
         .active_layer;
+    let paint_target = world
+        .resource::<crate::MeshPaintingResource>()
+        .uv_layers(id)
+        .unwrap()
+        .active()
+        .meta
+        .paint_target;
     let source = world
         .resource::<ActiveCanvasPlane>()
         .entity
@@ -697,6 +705,7 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         if pin.source != source
             || pin.receiver != receiver
             || pin.layer != layer
+            || pin.paint_target != paint_target
             || pin.mesh_tick != mesh_tick
             || pin.context != context
             || pin.geometry != geometry
@@ -712,6 +721,7 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         if previous.source != source
             || previous.receiver != receiver
             || previous.layer != layer
+            || previous.paint_target != paint_target
             || previous.mesh_tick != mesh_tick
             || previous.context != context
             || previous.geometry != geometry
@@ -741,6 +751,7 @@ pub(crate) fn admit_uv_apply(world: &mut World) -> Result<(), String> {
         source,
         receiver,
         layer,
+        paint_target,
         mesh_tick,
         context,
         geometry,
@@ -1597,6 +1608,15 @@ fn live_projection_system(
                             .unwrap()
                             .document()
                             .active_layer
+                    || a.paint_target
+                        != shared
+                            .as_ref()
+                            .unwrap()
+                            .uv_layers(id)
+                            .unwrap()
+                            .active()
+                            .meta
+                            .paint_target
                     || a.mesh_tick != meshes.last_changed()
                     || a.context != context
                     || a.geometry != geometry
@@ -1845,7 +1865,7 @@ fn upload_projection_textures(
                     ]);
                 }
             }
-            if let Some(image) = images.get_mut(&texture)
+            if let Some(mut image) = images.get_mut(&texture)
                 && let Some(bytes) = &mut image.data
             {
                 let row_bytes = (region.size.0 * 4) as usize;
@@ -1869,7 +1889,7 @@ fn upload_projection_textures(
             // Replacing Image data can replace its GPU texture view. A material
             // added directly to Assets has to rebuild its texture bind group,
             // otherwise the renderer may keep sampling the previous GPU image.
-            if let Some(material) = materials.get_mut(&*painted) {
+            if let Some(mut material) = materials.get_mut(&*painted) {
                 material.base_color_texture = Some(texture.clone());
             }
             handle.0 = painted.clone();
@@ -2522,7 +2542,7 @@ pub(crate) mod tests {
         let mesh = app.world().get::<Mesh3d>(target).unwrap().0.clone();
         {
             let mut assets = app.world_mut().resource_mut::<Assets<Mesh>>();
-            let mesh = assets.get_mut(&mesh).unwrap();
+            let mut mesh = assets.get_mut(&mesh).unwrap();
             let VertexAttributeValues::Float32x3(positions) =
                 mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).unwrap()
             else {

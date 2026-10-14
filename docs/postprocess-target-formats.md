@@ -1,51 +1,52 @@
 # Post-process destination formats
 
 The outline and depth fullscreen passes specialize their render pipelines using
-`ViewTarget::main_texture_format()`, not a platform/HDR feature guess. Bevy 0.18.1
-creates both ping-pong textures in that format and exposes them through
-`post_process_write()`. The output is resolved (sample count 1), even when the
-camera's source depth is multisampled.
+`ViewTarget::main_texture_format()`, not a platform or HDR-feature guess. Bevy
+0.20 creates both ping-pong textures in that format and exposes them through
+`post_process_write()`. The post-process destination is single-sample even when
+the camera's input depth is multisampled.
 
-Each pass owns its own `SpecializedRenderPipelines` cache. The selected pipeline
-ID and exact format are components on the render-view entity. A node checks the
-component's format and pipeline readiness before calling `post_process_write()`;
-a skipped or compiling pass must not flip the ping-pong target. Preparation runs
-in `PrepareBindGroups`, after view targets and prepass resources are prepared.
+Each pass owns a `SpecializedRenderPipelines` cache. Pipeline ID and exact format
+belong to the render-view entity. Its render system checks the prepared format
+and pipeline readiness before calling `post_process_write()`; a skipped or
+compiling pass cannot flip the ping-pong target. Preparation runs in
+`RenderSystems::PrepareBindGroups`, after view targets and prepass resources
+exist. GPU resource recovery clears device-bound preparation.
 
-Depth's sampled texture is also prepared on the corresponding view entity,
-replacing the previous first-camera global resource. Preparation clears stale
-depth data when settings or prepass data are unavailable. Scene depth bounds and
-outline ID-buffer ownership remain the application's existing main-camera model;
-this change does not introduce general independent multi-camera scene settings.
+Depth's sampled texture is prepared on its corresponding view entity rather
+than selected from the first camera. Missing or disabled prepass data clears
+stale preparation. Depth settings/bounds and the outline ID buffer remain the
+application's existing main-camera model; this does not introduce independent
+multi-camera scene state.
 
-Graph ordering, bind layouts, shader math, outline settings and HDR behavior are
-unchanged. Depth input remains `texture_depth_multisampled_2d` with a multisampled
-bind layout. Supporting single-sample depth is a separate change requiring input
-selection, shader behavior and capability validation. This repair does not
-advertise that support or enable depth on WebGL/OpenGL.
+The Bevy 0.20 render schedule retains tonemapping → depth → outline ordering.
+Supported native depth still uses the existing multisampled texture-load shader.
+It is only queued when enabled, and never constructed on the unsupported GL
+backend. See [depth capability](depth-view-capability.md) for admission and UI
+behavior. Single-sample or browser depth rendering is not implemented here.
 
-## Verification
+The outline ID camera is a data pass: it uses an sRGB attachment with explicit
+shader write/sample compensation, no tone mapping, no dithering, and no MSAA.
+This avoids unsupported alternate texture views without merging 24-bit entity
+identities. The roundtrip invariant and original failure evidence are in
+[WebGL rendering](plans/browser-runtime-upgrade/reports/webgl-rendering.md).
 
-CPU Rust regression tests use the production descriptor builders for RGBA SDR,
-BGRA SDR and HDR, assert single-sample/no-blend output, enforce the exact-format
-specialization key type, and check per-entity format association and rejection
-of stale choices. They do not construct GPU pipelines or emulate engine caches.
+## Verification and lineage
 
-Run on a build-capable executor:
+Format specialization and its four CPU tests are adapted from repository commit
+`534d31d` to current Bevy 0.20 APIs. The tests use production descriptor builders
+for RGBA SDR, BGRA SDR and HDR, assert single-sample/no-blend output, enforce the
+exact-format specialization key, and check per-view association and stale-key
+rejection. They do not construct GPU pipelines.
 
 ```sh
 cargo test --locked -p pentimento-scene --features selection target_format_tests
-node --test tests/contracts/postprocess-target-format-source.test.mjs tests/contracts/depth-capability-source.test.mjs
+cargo test --locked -p pentimento-scene --features selection id_encoding_tests
 ```
 
-Required separate runtime qualification:
-
-- Normal-sandbox hosted SDR composition must render through edge detection with
-  no target-format validation error, produce genuine scene pixels, and pass the
-  existing interaction/recovery probes.
-- Native GPU SDR/HDR coverage must render outlines and enabled depth, preserving
-  scene/depth/outline/gizmo ordering and the existing supported depth input.
-- Mixed-format views and SDR/HDR target changes must not reuse a wrong-format
-  pipeline; a pending pipeline must skip without swapping the view target.
-
-A structural/CPU pass is not a claim of native GPU or actual rendering coverage.
+The runtime-upgrade checks require visible production WebGL scene pixels and
+selection outlines, plus repeated native Vulkan depth toggling and restoration
+using that application's default view format. They do not exercise every SDR/HDR
+format or a live target-format transition. Broader qualification of those cases
+remains pending. CPU descriptor coverage of multiple formats must not be
+represented as passing GPU acceptance for that entire matrix.

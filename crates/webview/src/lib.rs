@@ -1,10 +1,13 @@
 //! Webview management for Pentimento
 //!
 //! Provides platform-specific implementations for webview compositing:
-//! - Capture mode: Renders webview offscreen and captures framebuffer for texture upload
-//! - Overlay mode: Creates transparent child window that composites via desktop compositor
+//! - Retained legacy capture mode: Renders WebKit offscreen for texture upload
+//! - Retained legacy overlay mode: Composites via a transparent child window
 //! - CEF mode: Uses Chromium Embedded Framework for offscreen rendering (requires `cef` feature)
 //! - Dioxus mode: Native Rust UI with Dioxus (requires `dioxus` feature)
+//!
+//! WebKit sources are enabled only by `legacy/webview/Cargo.toml`. The active
+//! crate has no WebKit feature or GTK dependency and defaults to no backend.
 
 mod error;
 
@@ -16,7 +19,7 @@ mod platform_linux_cef;
 mod platform_linux_dioxus;
 #[cfg(all(target_os = "linux", feature = "webkit"))]
 mod platform_linux_overlay;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "webkit"))]
 mod platform_windows;
 
 pub use error::WebviewError;
@@ -28,14 +31,19 @@ pub use platform_linux_dioxus::LinuxDioxusRenderer;
 #[cfg(all(target_os = "linux", feature = "webkit"))]
 pub use platform_linux_overlay::LinuxOverlayWebview;
 
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use pentimento_frontend_core::{CaptureResult, CompositeBackend, FrontendError};
+#[cfg(any(feature = "webkit", feature = "cef", feature = "dioxus"))]
 use pentimento_ipc::{BevyToUi, KeyboardEvent, MouseEvent, UiToBevy};
+#[cfg(any(feature = "webkit", feature = "cef", feature = "dioxus"))]
 use std::sync::Arc;
+#[cfg(any(feature = "webkit", feature = "cef", feature = "dioxus"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(feature = "webkit", feature = "cef"))]
 use tokio::sync::mpsc;
 
 /// Offscreen webview that can be captured as a texture
-#[cfg(any(target_os = "windows", feature = "webkit"))]
+#[cfg(feature = "webkit")]
 pub struct OffscreenWebview {
     #[cfg(all(target_os = "linux", feature = "webkit"))]
     inner: platform_linux::LinuxWebview,
@@ -50,7 +58,7 @@ pub struct OffscreenWebview {
     from_ui_rx: mpsc::UnboundedReceiver<UiToBevy>,
 }
 
-#[cfg(any(target_os = "windows", feature = "webkit"))]
+#[cfg(feature = "webkit")]
 impl OffscreenWebview {
     /// Create a new offscreen webview with the given HTML content
     pub fn new(html_content: &str, size: (u32, u32)) -> Result<Self, WebviewError> {
@@ -513,7 +521,7 @@ impl DioxusWebview {
 // CompositeBackend trait implementations
 // ============================================================================
 
-#[cfg(any(target_os = "windows", feature = "webkit"))]
+#[cfg(feature = "webkit")]
 impl CompositeBackend for OffscreenWebview {
     fn poll(&mut self) {
         self.poll();

@@ -27,7 +27,7 @@ mod setup;
 use bevy::prelude::*;
 use bevy::render::extract_resource::ExtractResourcePlugin;
 use bevy::render::renderer::RenderDevice;
-use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use pentimento_dioxus_ui::SharedVelloRenderer;
 
 use super::ui_blend_material::UiBlendMaterialPlugin;
@@ -79,27 +79,25 @@ impl Plugin for DioxusRenderPlugin {
             return;
         };
 
+        render_app.add_systems(RenderStartup, initialize_vello_renderer);
         render_app.init_resource::<VelloRenderStatus>().add_systems(
             Render,
             render_vello_to_texture.in_set(RenderSystems::Render),
         );
     }
+}
 
-    fn finish(&self, app: &mut App) {
-        // Initialize Vello renderer AFTER RenderDevice is available
-        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
-            return;
-        };
-
-        let render_device = render_app.world().resource::<RenderDevice>();
-        match SharedVelloRenderer::new(render_device.wgpu_device()) {
-            Ok(renderer) => {
-                render_app.insert_resource(RenderWorldVelloRenderer { renderer });
-                info!("Vello renderer initialized in render world (zero-copy mode)");
-            }
-            Err(e) => {
-                error!("Failed to create Vello renderer in render world: {}", e);
-            }
+/// Recreate the renderer when Bevy acquires a render device, including recovery.
+fn initialize_vello_renderer(mut commands: Commands, render_device: Res<RenderDevice>) {
+    match SharedVelloRenderer::new(render_device.wgpu_device()) {
+        Ok(renderer) => {
+            commands.insert_resource(RenderWorldVelloRenderer { renderer });
+            commands.insert_resource(VelloRenderStatus::default());
+            info!("Vello renderer initialized in render world (zero-copy mode)");
+        }
+        Err(e) => {
+            commands.remove_resource::<RenderWorldVelloRenderer>();
+            error!("Failed to create Vello renderer in render world: {}", e);
         }
     }
 }

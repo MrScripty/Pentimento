@@ -38,7 +38,8 @@ Keep backend selection in `lib.rs` and isolate each platform/host combination in
 
 ## Dependencies
 **Internal:** `crates/app`, `crates/ipc`, `crates/dioxus-ui`  
-**External:** CEF, WebKitGTK, wry
+**External (active):** CEF
+**Retained legacy only:** WebKitGTK and wry, selected by `legacy/webview/Cargo.toml`.
 
 ## Related ADRs
 - `ADR-001` active frontends and contract ownership.
@@ -57,3 +58,12 @@ let webview = pentimento_webview::CefWebview::new(size, html)?;
 - This directory produces framebuffer buffers and event callbacks for the Bevy app, not persisted artifacts.
 - Pixel format and event semantics are backend-specific but must remain consistent at the public API boundary.
 - Any public shape change requires coordinated updates in `crates/app`.
+
+## Retained Workspace Boundary
+
+The root manifest has no WebKit feature or GTK dependency. The explicit
+`legacy/webview/Cargo.toml` manifest enables the retained WebKit capture and
+overlay source in this directory and owns the original capture example.
+Source remains shared to avoid a second implementation; dependency resolution
+and historical entry points are isolated. See `legacy/README.md` for commands
+and the native-system prerequisites. The Linux CEF and Dioxus APIs are unchanged.

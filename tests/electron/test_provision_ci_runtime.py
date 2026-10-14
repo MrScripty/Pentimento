@@ -1,6 +1,8 @@
 """Offline safety regressions; no sudo, setuid, or system-directory mutations are executed."""
 import hashlib
 import importlib.util
+import io
+import json
 import os
 from pathlib import Path
 import stat
@@ -40,6 +42,20 @@ class ProvisionTests(unittest.TestCase):
                 archive.writestr(item, data)
             if extra:
                 archive.writestr(*extra)
+
+    def test_streaming_hash_does_not_require_python_311_file_digest(self):
+        data = b'official-runtime-byte' * 100_000
+        class BoundedStream(io.BytesIO):
+            def read(self, size=-1):
+                self.assert_read_size(size)
+                return super().read(size)
+            @staticmethod
+            def assert_read_size(size):
+                if size != 1024 * 1024:
+                    raise AssertionError('stream hashing must use bounded reads')
+        with patch.object(provision.hashlib, 'file_digest', None, create=True):
+            self.assertEqual(provision.digest_stream(BoundedStream(data)), hashlib.sha256(data).hexdigest())
+            self.assertEqual(provision.digest_file(self.archive), hashlib.sha256(self.archive.read_bytes()).hexdigest())
 
     def test_complete_tree_matches_and_requires_every_official_file(self):
         receipt = provision.verify_tree(self.source, self.manifest, os.getuid())
@@ -175,6 +191,48 @@ class ProvisionTests(unittest.TestCase):
         link.symlink_to(self.archive)
         with self.assertRaises(OSError):
             provision.archive_manifest(link, provision.digest_file(self.archive))
+
+    def test_reviewed_runtime_pin_matches_manifest_lock_and_workflow(self):
+        project = Path(__file__).resolve().parents[2]
+        manifest = json.loads((project / 'src-electron/package.json').read_text())
+        lock = json.loads((project / 'src-electron/package-lock.json').read_text())
+        self.assertEqual(manifest['devDependencies']['electron'], provision.VERSION)
+        self.assertEqual(lock['packages']['']['devDependencies']['electron'], provision.VERSION)
+        self.assertEqual(lock['packages']['node_modules/electron']['version'], provision.VERSION)
+        workflow = (project / '.github/workflows/electron-runtime.yml').read_text()
+        self.assertIn('runs-on: ubuntu-22.04', workflow)
+        self.assertIn(f'PENTIMENTO_CI_ELECTRON: {provision.DESTINATION}/electron', workflow)
+
+    def test_lock_validation_rejects_manifest_lock_package_or_checksum_drift(self):
+        package = self.root / 'src-electron/node_modules/electron'
+        package.mkdir(parents=True)
+        manifest = {'devDependencies': {'electron': provision.VERSION}}
+        lock = {'packages': {'': {'devDependencies': {'electron': provision.VERSION}},
+                            'node_modules/electron': {'version': provision.VERSION}}}
+        installed = {'version': provision.VERSION}
+        checksums = {provision.ARCHIVE_NAME: provision.ARCHIVE_SHA256}
+        values = {'src-electron/package.json': manifest, 'src-electron/package-lock.json': lock,
+                  'src-electron/node_modules/electron/package.json': installed,
+                  'src-electron/node_modules/electron/checksums.json': checksums}
+        for file, value in values.items():
+            (self.root / file).write_text(json.dumps(value))
+        self.assertEqual(provision.check_lock(self.root), package / 'dist')
+        for file in values:
+            original = (self.root / file).read_text()
+            (self.root / file).write_text(original.replace(provision.VERSION, '0.0.0')
+                                           .replace(provision.ARCHIVE_SHA256, '0' * 64))
+            with self.subTest(file=file), self.assertRaises(ValueError):
+                provision.check_lock(self.root)
+            (self.root / file).write_text(original)
+
+    def test_main_refuses_unreviewed_hosted_ubuntu_before_downloading(self):
+        with patch('sys.argv', ['provision', '--evidence', str(self.root / 'receipt.json')]), \
+                patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted'}), \
+                patch.object(Path, 'read_text', return_value='ID=ubuntu\nVERSION_ID="24.04"\n'), \
+                patch.object(provision, 'download') as download:
+            with self.assertRaisesRegex(ValueError, 'Reviewed Ubuntu 22.04'):
+                provision.main()
+            download.assert_not_called()
 
     def test_main_refuses_local_or_self_hosted_privileged_execution_before_io(self):
         with patch('sys.argv', ['provision', '--evidence', str(self.root / 'receipt.json')]), \

@@ -12,8 +12,11 @@
 use crate::brush::{BrushInput, BrushPreset, DabResult, SculptBrushEngine};
 use crate::budget::VertexBudget;
 use crate::chunking::{ChunkId, ChunkedMesh, MeshChunk};
-use crate::deformation::{DabInfo, apply_autosmooth, apply_deformation};
-use crate::gpu::{DirtyVertices, update_normals_after_deformation};
+use crate::deformation::{DabInfo, SmoothingPass, apply_chunked_smoothing, apply_deformation};
+use crate::gpu::{
+    DirtyVertices, recalculate_face_normals_for_dirty, recalculate_normals_for_dirty,
+    update_normals_after_deformation,
+};
 use crate::history::{HistoryError, HistorySnapshot, HistoryStatus, RecordOutcome, SculptHistory};
 use crate::safety::{GeometryWitness, SafetyError, Surface};
 use crate::spatial::{Aabb as SpatialAabb, VertexOctree};
@@ -21,12 +24,16 @@ use crate::tessellation::{
     ScreenSpaceConfig, TessellationStats, tessellate_at_brush_budget_checked,
     tessellate_at_brush_checked,
 };
-use crate::types::{ChunkConfig, SculptStrokePacket, TessellationConfig, TessellationMode};
+use crate::types::{
+    ChunkConfig, DeformationType, SculptStrokePacket, TessellationConfig, TessellationMode,
+};
 use glam::Vec3;
 use painting::half_edge::VertexId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::{debug, error, trace};
+#[cfg(debug_assertions)]
+use tracing::error;
+use tracing::{debug, trace};
 
 /// Result of processing a single dab through the pipeline.
 #[derive(Debug, Default)]
@@ -130,6 +137,8 @@ impl SculptSnapshot {
 struct ActiveStrokeState {
     mesh_id: u32,
     checkpoint: Option<ChunkedMesh>,
+    /// Admission of the immutable rollback endpoint, never updated by dabs.
+    checkpoint_witness: Option<Arc<GeometryWitness>>,
     admitted_surface: Option<Surface>,
     admitted_witness: Option<Arc<GeometryWitness>>,
     budget_checkpoint: Option<VertexBudget>,
@@ -147,6 +156,7 @@ impl Default for ActiveStrokeState {
         Self {
             mesh_id: 0,
             checkpoint: None,
+            checkpoint_witness: None,
             admitted_surface: None,
             admitted_witness: None,
             budget_checkpoint: None,
@@ -256,6 +266,7 @@ impl SculptingPipeline {
         self.active_stroke_state = Some(ActiveStrokeState {
             mesh_id,
             checkpoint: None,
+            checkpoint_witness: None,
             admitted_surface: None,
             admitted_witness: None,
             budget_checkpoint: None,
@@ -323,7 +334,10 @@ impl SculptingPipeline {
                 (surface, Arc::new(GeometryWitness::capture(chunked_mesh)))
             };
             let state = self.active_stroke_state.as_mut().unwrap();
-            state.checkpoint = Some(chunked_mesh.clone());
+            // The detached baseline was captured above for history comparison;
+            // transfer it into rollback instead of cloning the complete mesh twice.
+            state.checkpoint = Some(baseline.mesh);
+            state.checkpoint_witness = Some(witness.clone());
             state.admitted_surface = Some(surface);
             state.admitted_witness = Some(witness);
             state.budget_checkpoint = Some(self.budget.clone());
@@ -334,6 +348,7 @@ impl SculptingPipeline {
         // Generate dabs from brush input
         debug!("process_input: generating dabs");
         let dabs = self.brush_engine.update_stroke(input);
+        let processed_dabs = !dabs.is_empty();
         debug!("process_input: generated {} dabs", dabs.len());
 
         // Get stroke state info for direction calculation (copy what we need)
@@ -377,6 +392,21 @@ impl SculptingPipeline {
         // Track the last emitted dab, not a sub-spacing input that emitted none.
         if let Some(state) = &mut self.active_stroke_state {
             state.last_dab_position = previous_dab;
+            if processed_dabs {
+                // All dabs above held one exclusive mesh borrow. Capture the
+                // next externally observable boundary once, rather than cloning
+                // the entire topology witness after every interpolated dab.
+                let witness = Arc::new(GeometryWitness::capture(chunked_mesh));
+                self.last_admitted_surface = Some((
+                    state.mesh_id,
+                    state
+                        .admitted_surface
+                        .clone()
+                        .expect("accepted dab surface"),
+                    witness.clone(),
+                ));
+                state.admitted_witness = Some(witness);
+            }
         }
 
         result
@@ -419,10 +449,27 @@ impl SculptingPipeline {
                 if let Some(before) = &state.checkpoint {
                     let before = SculptSnapshot::capture(state.mesh_id, before);
                     let after = SculptSnapshot::capture(state.mesh_id, chunked_mesh);
-                    match self
-                        .history
-                        .record_accepted(before, after, SculptSnapshot::validate)
-                    {
+                    // Both endpoints were geometrically admitted already. Reuse
+                    // that proof only after exact geometry/map equality, while
+                    // still validating all snapshot-owned identities/counters.
+                    // Rebalanced or externally changed snapshots fall back to the
+                    // full guard. Undo/Redo always revalidate afresh in prepare().
+                    let witnesses = [
+                        state.checkpoint_witness.as_deref(),
+                        state.admitted_witness.as_deref(),
+                    ];
+                    match self.history.record_accepted(before, after, |snapshot| {
+                        snapshot.mesh.validate_snapshot_identity()?;
+                        if witnesses
+                            .iter()
+                            .flatten()
+                            .any(|witness| witness.matches(&snapshot.mesh))
+                        {
+                            Ok(())
+                        } else {
+                            Surface::read(&snapshot.mesh)?.validate()
+                        }
+                    }) {
                         Ok(RecordOutcome::NoChange) => {
                             self.brush_engine.cancel_stroke();
                         }
@@ -868,14 +915,30 @@ impl SculptingPipeline {
             self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
         }
 
-        let before_deformation = match candidate_surface.deformed(chunked_mesh) {
-            Ok(surface) => surface,
-            Err(error) => return self.reject_stroke(chunked_mesh, error),
+        let before_deformation = if result.chunks_affected.is_empty() {
+            candidate_surface
+        } else {
+            match candidate_surface.deformed(chunked_mesh) {
+                Ok(surface) => surface,
+                Err(error) => return self.reject_stroke(chunked_mesh, error),
+            }
         };
 
         // ===== PASS 2: DEFORM all affected chunks =====
         // Now deformation operates on the refined mesh, including any new vertices
         // created by splitting pass-through edges.
+        let dab_info = DabInfo {
+            position: brush_center,
+            radius: brush_radius,
+            strength: dab.strength,
+            normal: dab.normal,
+            hardness: self.brush_engine.preset.hardness,
+        };
+        let falloff = self.brush_engine.preset.falloff;
+        let deformation_type = self.brush_engine.preset.deformation_type;
+        let autosmooth = self.brush_engine.preset.autosmooth;
+        let mut smoothing_vertices = HashMap::new();
+        let mut modified_vertices = HashMap::<ChunkId, HashSet<VertexId>>::new();
         for &chunk_id in &affected_chunk_ids {
             trace!("apply_dab_internal: deforming chunk {:?}", chunk_id);
             let chunk = match chunked_mesh.get_chunk_mut(chunk_id) {
@@ -898,42 +961,37 @@ impl SculptingPipeline {
                 continue;
             }
 
-            // Create dab info for deformation
-            let dab_info = DabInfo {
-                position: brush_center,
-                radius: brush_radius,
-                strength: dab.strength,
-                normal: dab.normal,
-                hardness: self.brush_engine.preset.hardness,
-            };
-
-            // Apply deformation
-            let falloff = self.brush_engine.preset.falloff;
-            let deformation_type = self.brush_engine.preset.deformation_type;
-
-            let _displacements = apply_deformation(
-                &mut chunk.mesh,
-                &affected_vertices,
-                &dab_info,
-                deformation_type,
-                falloff,
-                Some(stroke_direction),
-                Some(stroke_delta),
-            );
-
-            // Auto-smooth to dampen high-frequency dab ripples
-            let autosmooth = self.brush_engine.preset.autosmooth;
-            if autosmooth > 0.0 && !affected_vertices.is_empty() {
-                apply_autosmooth(
+            // Smooth requires a complete one-ring spanning all chunk copies.
+            // Other primary tools retain their existing local deformation.
+            let mut modified = HashSet::new();
+            if deformation_type != DeformationType::Smooth {
+                let displacements = apply_deformation(
                     &mut chunk.mesh,
                     &affected_vertices,
                     &dab_info,
+                    deformation_type,
                     falloff,
-                    autosmooth,
+                    Some(stroke_direction),
+                    Some(stroke_delta),
                 );
+                modified.extend(displacements.into_iter().filter_map(|(vertex, before)| {
+                    (chunk.mesh.vertex(vertex).unwrap().position != before).then_some(vertex)
+                }));
             }
 
-            result.vertices_modified += affected_vertices.len();
+            if deformation_type == DeformationType::Smooth || autosmooth > 0.0 {
+                smoothing_vertices.insert(chunk_id, affected_vertices.clone());
+            }
+
+            // Query membership alone is not a deformation. Refreshing normals
+            // on an untouched sphere would create a false commit and clear redo.
+            if modified.is_empty() {
+                continue;
+            }
+            modified_vertices
+                .entry(chunk_id)
+                .or_default()
+                .extend(&modified);
             if !result.chunks_affected.contains(&chunk_id) {
                 result.chunks_affected.push(chunk_id);
             }
@@ -942,14 +1000,47 @@ impl SculptingPipeline {
             chunk.mark_dirty();
 
             // Update normals for affected region
-            let dirty = DirtyVertices {
-                modified: affected_vertices.into_iter().collect(),
-            };
-            update_normals_after_deformation(chunk, &dirty);
+            Self::update_changed_normals(chunk, modified);
 
             // Invalidate octree (positions changed)
             self.chunk_octrees.remove(&chunk_id);
         }
+
+        // Autosmooth reads a coherent snapshot of the primary deformation,
+        // including shared vertices changed by neighboring chunks.
+        if autosmooth > 0.0 && deformation_type != DeformationType::Smooth {
+            self.sync_boundary_vertices(chunked_mesh, &result.chunks_affected);
+        }
+        let mut smoothing_passes = Vec::with_capacity(2);
+        if deformation_type == DeformationType::Smooth {
+            smoothing_passes.push(SmoothingPass::Smooth);
+        }
+        if autosmooth > 0.0 {
+            smoothing_passes.push(SmoothingPass::Autosmooth(autosmooth));
+        }
+        for pass in smoothing_passes {
+            let changed = apply_chunked_smoothing(
+                chunked_mesh,
+                &smoothing_vertices,
+                &dab_info,
+                falloff,
+                pass,
+            );
+            for (chunk_id, vertices) in changed {
+                modified_vertices
+                    .entry(chunk_id)
+                    .or_default()
+                    .extend(&vertices);
+                let chunk = chunked_mesh.get_chunk_mut(chunk_id).unwrap();
+                chunk.mark_dirty();
+                Self::update_changed_normals(chunk, vertices.into_iter().collect());
+                if !result.chunks_affected.contains(&chunk_id) {
+                    result.chunks_affected.push(chunk_id);
+                }
+                self.chunk_octrees.remove(&chunk_id);
+            }
+        }
+        result.vertices_modified = modified_vertices.values().map(HashSet::len).sum();
 
         // Write back the updated vertex ID counter to the chunked mesh
         chunked_mesh.next_original_vertex_id = next_original_vertex_id;
@@ -968,11 +1059,7 @@ impl SculptingPipeline {
         match validation {
             Ok(surface) => {
                 if let Some(state) = &mut self.active_stroke_state {
-                    let witness = Arc::new(GeometryWitness::capture(chunked_mesh));
-                    self.last_admitted_surface =
-                        Some((state.mesh_id, surface.clone(), witness.clone()));
                     state.admitted_surface = Some(surface);
-                    state.admitted_witness = Some(witness);
                 }
             }
             Err(error) => return self.reject_stroke(chunked_mesh, error),
@@ -1003,6 +1090,25 @@ impl SculptingPipeline {
         self.chunk_octrees.insert(chunk_id, octree);
     }
 
+    /// A changed face changes the normal of every incident vertex, including
+    /// vertices outside the brush query and vertices with zero displacement.
+    fn update_changed_normals(chunk: &mut MeshChunk, modified: HashSet<VertexId>) {
+        let changed = DirtyVertices { modified };
+        recalculate_face_normals_for_dirty(chunk, &changed);
+        let mut normal_vertices = changed.modified.clone();
+        for &vertex in &changed.modified {
+            for face in chunk.mesh.get_vertex_faces(vertex) {
+                normal_vertices.extend(chunk.mesh.get_face_vertices(face));
+            }
+        }
+        recalculate_normals_for_dirty(
+            chunk,
+            &DirtyVertices {
+                modified: normal_vertices,
+            },
+        );
+    }
+
     /// Sync boundary vertices between affected chunks.
     fn sync_boundary_vertices(
         &mut self,
@@ -1010,6 +1116,9 @@ impl SculptingPipeline {
         affected_chunks: &[ChunkId],
     ) {
         // For each affected chunk, sync all boundary vertices
+        if affected_chunks.is_empty() {
+            return;
+        }
         for &chunk_id in affected_chunks {
             let boundary_updates: Vec<(VertexId, Vec3)> = {
                 let chunk = match chunked_mesh.get_chunk(chunk_id) {
@@ -1687,6 +1796,38 @@ mod native_history_tests {
                 .unwrap()
                 .contains("cannot be undone")
         );
+    }
+
+    #[test]
+    fn cached_geometry_proof_does_not_admit_changed_snapshot_counters() {
+        let (mut mesh, mut pipeline) = fixture();
+        pipeline.config.tessellation_enabled = false;
+        let before = mesh.clone();
+        pipeline.begin_stroke(7, input(0.));
+        assert!(
+            pipeline
+                .process_input(input(0.), &mut mesh)
+                .rejected
+                .is_none()
+        );
+        mesh.next_original_vertex_id = 0;
+        // Counters are deliberately outside the geometry witness. Fresh history
+        // identity validation must still reject this exact-geometry endpoint.
+        assert!(
+            pipeline
+                .active_stroke_state
+                .as_ref()
+                .unwrap()
+                .admitted_witness
+                .as_ref()
+                .unwrap()
+                .matches(&mesh)
+        );
+        let end = pipeline.end_stroke(&mut mesh);
+        assert!(end.rejected.is_some());
+        assert!(end.packets.is_empty());
+        assert!(mesh.same_authoritative_state(&before));
+        assert_eq!(pipeline.history_status().undo_strokes, 0);
     }
 
     #[test]

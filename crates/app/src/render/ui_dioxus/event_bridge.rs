@@ -138,6 +138,7 @@ impl DioxusRendererResource {
                     },
                     buttons: self.buttons_pressed,
                     mods: BlitzModifiers::empty(),
+                    element: Default::default(),
                 })
             }
         };
@@ -300,6 +301,9 @@ impl DioxusRendererResource {
             buttons,
             mods: BlitzModifiers::empty(),
             details: PointerDetails::default(),
+            element: Default::default(),
+            // This bridge emits mouse events; Blitz tracks non-mouse contacts here.
+            active_pointers: Default::default(),
         }
     }
 }

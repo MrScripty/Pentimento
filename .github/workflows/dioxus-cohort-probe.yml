@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'Cargo.lock'
+      - 'vendor/**'
       - 'Cargo.toml'
       - 'crates/**/Cargo.toml'
       - 'launcher.sh'
@@ -220,8 +221,10 @@ jobs:
           test "$(cat resolution/run.txt)" = "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT"
           actual=$(sha256sum resolution/Cargo.lock | cut -d ' ' -f 1)
           test "$actual" = "$EXPECTED_LOCK_SHA256"
-          # Security review is for the exact already-reviewed cohort, not a fresh drift.
-          test "$actual" = 98f1accafe28379d9c7395877af426cc05bb89e2419378a0408293819e93be2f
+          # Admit only the source/edge-reviewed integrated candidate for scanning.
+          # This hash does not assert security acceptance; the strict audit below
+          # still fails on warnings and incomplete coverage. See the lock baseline.
+          test "$actual" = 731218f189bd6c088b48aab080a7c64f7626c28bafbf19454603ecf5062a5847
           cp resolution/{source-sha.txt,run.txt,Cargo.lock,Cargo.lock.sha256} evidence/
           rustc -Vv > evidence/rustc.txt
           cargo -V > evidence/cargo.txt

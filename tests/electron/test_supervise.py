@@ -23,8 +23,9 @@ class SupervisorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory, 'fixture.py')
             fixture.write_text(source)
+            env = {**os.environ, 'PENTIMENTO_EVIDENCE_DIR': str(Path(directory, 'electron-runtime-evidence'))}
             result = subprocess.run([sys.executable, str(HERE / 'supervise.py'), 'fixture',
-                                     sys.executable, str(fixture)], cwd=directory, timeout=20)
+                                     sys.executable, str(fixture)], cwd=directory, env=env, timeout=20)
             report = json.loads(Path(directory, 'electron-runtime-evidence/fixture-processes.json').read_text())
             return result.returncode, report
 
