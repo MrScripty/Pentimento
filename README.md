@@ -76,7 +76,7 @@ cargo install wasm-bindgen-cli
 Node.js 22.12.0+ is required for the Svelte and Electron tooling.
 
 The browser runtimes are pinned to CEF 154.0.34 (Rust bindings 154.5.0) and
-Electron 44.7.0, verified latest stable on 2026-10-13. `./launcher.sh --install`
+Electron 44.7.1, verified latest published stable on 2026-10-14. `./launcher.sh --install`
 explicitly downloads Electron after `npm ci`. CEF's locked build provisions its
 matching distribution, helper, and resources; `./scripts/setup-cef.sh` can build
 that helper separately. Do not reuse an older `CEF_PATH` distribution. The

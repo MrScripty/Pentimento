@@ -19,7 +19,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
       PYTHONDONTWRITEBYTECODE: '1'
-      PENTIMENTO_CI_ELECTRON: /usr/lib/pentimento-ci/electron-44.7.0/electron
+      PENTIMENTO_CI_ELECTRON: /usr/lib/pentimento-ci/electron-44.7.1/electron
     steps:
       - name: Prepare runner-local evidence path
         run: echo "PENTIMENTO_EVIDENCE_DIR=$RUNNER_TEMP/electron-runtime-evidence" >> "$GITHUB_ENV"

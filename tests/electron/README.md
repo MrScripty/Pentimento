@@ -44,7 +44,7 @@ verification status are recorded in
   successful shutdown. Forced cleanup is failure, never success.
 - `sandbox-observer.cjs` owns that additional preload and removes only its own
   script and IPC listener on shutdown or failure.
-- `provision_ci_runtime.py` verifies the official 44.7.0 archive SHA256 against
+- `provision_ci_runtime.py` verifies the official 44.7.1 archive SHA256 against
   the reviewed pin, release checksum record, locked npm package, and complete
   installed runtime tree. On ephemeral GitHub-hosted Ubuntu 22.04 runners only,
   it copies verified bytes into root-owned non-writable `/usr/lib/pentimento-ci`,

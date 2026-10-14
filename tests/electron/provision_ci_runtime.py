@@ -18,11 +18,11 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = '44.7.0'
+VERSION = '44.7.1'
 ARCHIVE_NAME = f'electron-v{VERSION}-linux-x64.zip'
 RELEASE_URL = f'https://github.com/electron/electron/releases/download/v{VERSION}'
 # Official SHASUMS256.txt and the locked npm package's checksums.json agree.
-ARCHIVE_SHA256 = '3ae7d5bdad61c664486c6ab61361dd084d064c8c08af8d13a687096e18ce555a'
+ARCHIVE_SHA256 = 'fd4349ce666251f66acba2c88064ae6d65d5c61c0a44e68dd028d7c7f30eaa47'
 DESTINATION = Path(f'/usr/lib/pentimento-ci/electron-{VERSION}')
 MAX_ARCHIVE = 300 * 1024 * 1024
 MAX_UNPACKED = 1024 * 1024 * 1024

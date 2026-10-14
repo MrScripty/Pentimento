@@ -43,8 +43,8 @@ explicitly runs the installed `install-electron` command during bootstrap.
 **Internal:** `crates/app-wasm`, root `dist/ui` output, `launcher.sh`  
 **External:** Electron, TypeScript
 
-The Electron runtime is pinned to **44.7.0** (Chromium **152.0.7977.130**,
-Node.js **24.21.0**), the latest stable release checked on 2026-10-13.
+The Electron runtime is pinned to **44.7.1** (Chromium **152.0.7977.149**,
+Node.js **24.21.0**), the latest published stable release checked on 2026-10-14.
 The host Node.js used for npm tooling must be **22.12.0 or newer**.
 
 Electron 42 and later no longer download the runtime during npm installation.
@@ -62,9 +62,9 @@ API removals do not require replacing those calls. Production loading resolves
 the repository's `dist/ui/index.html` from compiled `src-electron/dist/main.js`.
 The preload remains a sandbox-compatible CommonJS module exposing only a boolean.
 
-Sources: [44.7.0 release](https://releases.electronjs.org/release/v44.7.0),
+Sources: [44.7.1 release](https://releases.electronjs.org/release/v44.7.1),
 [breaking changes](https://www.electronjs.org/docs/latest/breaking-changes), and
-[`electron` npm metadata](https://www.npmjs.com/package/electron/v/44.7.0).
+[`electron` npm metadata](https://www.npmjs.com/package/electron/v/44.7.1).
 
 ## Related ADRs
 - `ADR-001` active frontends and contract ownership.

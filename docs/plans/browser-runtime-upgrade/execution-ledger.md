@@ -1,5 +1,14 @@
 # Execution ledger
 
+## Fresh stable runtime follow-up (2026-10-14)
+
+Pre-merge official release checks found newly published stable Electron 44.7.1.
+CEF 154.0.34/bindings 154.5.0 remain highest published stable. The focused shell
+lock/protected runtime digest update preserves ordinary sandboxing, preload
+isolation and observed process-family shutdown requirements. Local supporting
+tests pass; final-head hosted rendering/security evidence is still required.
+See the dated release-selection report; historical 44.7.0 evidence remains intact.
+
 ## 2026-10-13: discovery and migration
 
 Inspected PR #27 and created a separate worktree at its exact head. Found CEF 143.7 declarations, stale independent CEF 144 setup archive, and Electron ^38.0.0 (locked 38.8.6). Verified official current stable CEF154 and Electron44 metadata. Bevy is exactly 0.20.0 and is retained.
