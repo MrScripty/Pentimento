@@ -4,6 +4,10 @@ Paint, project and sculpt in one 3D workspace. Pentimento brings layered 2D canv
 
 The editor includes canvas brushes, projection painting, mesh-editing and sculpting tools, lighting controls and local project Save/Open. It is development software; the [project-format guide](docs/project-format-v1.md) explains what a saved document preserves and which features are still limited.
 
+![Pentimento native CEF editor showing projection painting on its test scene](docs/images/native-projection-20261014.jpg)
+
+*Actual native CEF qualification capture, 2026-10-14, showing the projection-paint workflow in a test scene. [Source and capture details](docs/images/README.md).*
+
 ## Run on Linux
 
 Linux x86_64 is the supported platform. Install Rust stable, Node.js 22.12+ and the [Linux build prerequisites](docs/getting-started.md), then:
